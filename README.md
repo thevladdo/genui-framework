@@ -2,10 +2,11 @@
 
 # GenUI Framework
 
-**Generative User Interfaces for Intelligent Web Applications**
+**Generative User Interfaces for Intelligent Web Applications**<br />
 _A full-stack framework for building AI-powered, profile-aware, dynamically generated UI components_
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![TypeScript](https://img.shields.io/badge/typescript-5.0+-blue.svg)](https://www.typescriptlang.org/) [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![React 18+](https://img.shields.io/badge/react-18+-61dafb.svg)](https://react.dev/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![TypeScript](https://img.shields.io/badge/typescript-5.0+-blue.svg)](https://www.typescriptlang.org/) [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![React 18+](https://img.shields.io/badge/react-18+-61dafb.svg)](https://react.dev/) 
+[![DOI](https://zenodo.org/badge/1133794652.svg)](https://doi.org/10.5281/zenodo.18237228)
 
 <div align="center">
   <br />
@@ -908,7 +909,7 @@ genui-framework/
 
 ## 🍕 Powered by datapizza-ai
 
-GenUI's backend agent system is built on top of **[datapizza-ai](https://github.com/datapizza-labs/datapizza-ai)**
+GenUI's backend agent system is built on top of **[datapizza-ai](https://github.com/datapizza-labs/datapizza-ai)**<br />
 A Python framework for building reliable Gen AI solutions without overhead.
 
 ### Why datapizza-ai?
