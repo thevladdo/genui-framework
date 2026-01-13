@@ -1,0 +1,61 @@
+{
+  "name": "genui-framework",
+  "version": "1.0.0",
+  "description": "React framework for Generative User Interfaces - Dynamic UI generation based on user intent",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.esm.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rollup -c",
+    "dev": "rollup -c -w",
+    "test": "jest",
+    "lint": "eslint src --ext .ts,.tsx",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^25.0.7",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-typescript": "^11.1.5",
+    "@types/react": "^18.2.45",
+    "@types/react-dom": "^18.2.18",
+    "rollup": "^4.9.1",
+    "rollup-plugin-dts": "^6.1.0",
+    "rollup-plugin-peer-deps-external": "^2.2.4",
+    "rollup-plugin-postcss": "^4.0.2",
+    "tslib": "^2.8.1",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "framer-motion": "^12.23.26",
+    "idb": "^8.0.0",
+    "react-markdown": "^10.1.0",
+    "recharts": "^2.10.3"
+  },
+  "keywords": [
+    "react",
+    "genui",
+    "generative-ui",
+    "ai",
+    "dynamic-interface",
+    "personalization"
+  ],
+  "author": "GenUI Framework",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/thevladdo/genui-framework#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thevladdo/genui-framework"
+  },
+  "bugs": {
+    "url": "https://github.com/thevladdo/genui-framework/issues"
+  }
+}
