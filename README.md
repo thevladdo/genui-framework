@@ -5,7 +5,7 @@
 **Generative User Interfaces for Intelligent Web Applications**<br />
 _A full-stack framework for building AI-powered, profile-aware, dynamically generated UI components_
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![TypeScript](https://img.shields.io/badge/typescript-5.0+-blue.svg)](https://www.typescriptlang.org/) [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![React 18+](https://img.shields.io/badge/react-18+-61dafb.svg)](https://react.dev/) 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![TypeScript](https://img.shields.io/badge/typescript-5.0+-blue.svg)](https://www.typescriptlang.org/) [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![React 18+](https://img.shields.io/badge/react-18+-61dafb.svg)](https://react.dev/)
 [![DOI](https://zenodo.org/badge/1133794652.svg)](https://doi.org/10.5281/zenodo.18237228)
 
 <div align="center">
@@ -14,7 +14,7 @@ _A full-stack framework for building AI-powered, profile-aware, dynamically gene
   <br /><br /><br />
 </div>
 
-[Overview](#-overview) • [Usage Guide](#-usage-guide) • [Components](#-components) • [Hooks](#-hooks) • [Theming](#-theming) • [API Reference](#-backend-api-reference) • [Architecture](#️-architecture) 
+[Overview](#-overview) • [Quick Start](#-quick-start) • [Components](#-components) • [Custom Components](#-custom-components--your-design-system-as-llm-vocabulary) • [Theming](#-theming) • [Segment Cache](#-segment-cache--llm-as-an-offline-ranker) • [Guarantees](#️-output-guarantees) • [Auth & Profiles](#-auth-server-side-profiles--audit) • [Streaming](#️-streaming--ssr-safety) • [Uplift](#-measuring-uplift--impressions-clicks--holdout) • [API Reference](#-backend-api-reference) • [Architecture](#️-architecture)
 
 </div>
 
@@ -40,24 +40,29 @@ GenUI System is a comprehensive framework for building **Generative User Interfa
 
 ### 🎨 **Frontend Framework**
 
-- **GenUIZone**: Declarative zones with 22+ configurable props
+- **GenUIZone**: Declarative zones with 25+ configurable props
+- **Custom Components**: register _your_ design system — the LLM generates it ([guide](#-custom-components--your-design-system-as-llm-vocabulary))
 - **Premium Components**: Glassmorphism bento grids, 8 button variants, charts, styled text
-- **Behavior Tracking**: Automatic monitoring of clicks, scrolls, hovers, navigation
-- **Profile Persistence**: IndexedDB-based local storage with sync
+- **Progressive Render**: components stream in as the model generates them (SSE)
+- **Behavior Tracking & Events**: clicks, scrolls, impressions — uplift measured automatically
 - **Theme System**: CSS-variable based customization
-- **Pinned Content**: Guarantee certain content always displays
+- **Pinned Content**: guaranteed display, enforced server-side
+- **SSR-Safe**: importable in Next.js / Remix / Astro without crashes
 
 </td>
 <td width="50%" valign="top">
 
 ### 🧠 **Backend Intelligence**
 
-- **Multi-Agent Architecture**: ResponseAgent, ZoneAgent, ProfileAgent, BehaveAgent
+- **Segment Cache**: the LLM runs once per user _segment_, not per request — orders of magnitude cheaper ([how](#-segment-cache--llm-as-an-offline-ranker))
+- **Output Guarantees**: schema validation + URL whitelist — the system guarantees, not the prompt ([how](#️-output-guarantees))
+- **Auth & Multi-tenancy**: API keys, per-tenant isolation, rate limiting
+- **Server-Side Profiles**: source of truth with GDPR erasure; IndexedDB is just a cache
+- **Holdout & Uplift**: control group + z-test significance — prove personalization works
+- **Audit Log**: what was shown to whom, append-only
+- **Provider-Agnostic LLM**: OpenAI, Anthropic, Gemini, any OpenAI-compatible API — by configuration
 - **RAG Integration**: Qdrant vector store with semantic search
-- **Profile Learning**: Automatic preference extraction from conversations
-- **Contextual Prompting**: Developer-controlled prompt engineering
-- **Flexible LLM Support**: OpenAI, Anthropic, any OpenAI-compatible API
-- **Debug Metadata**: Confidence scores, reasoning, profile factors
+- **Observability**: OpenTelemetry tracing on renders and LLM calls
 
 </td>
 </tr>
@@ -69,69 +74,127 @@ GenUI System is a comprehensive framework for building **Generative User Interfa
 
 ## 🚀 Quick Start
 
-### Installation
+Five steps from zero to a personalized zone on your page. **Prerequisites:** Python 3.10+, Node 18+, Docker (for Qdrant/Redis), and an OpenAI API key (or Anthropic/Gemini — see step 3).
 
-**Frontend (React)**
-
-> ⚠️ The npm package is not yet published. Install locally:
+### Step 1 — Clone and start the infrastructure
 
 ```bash
-# Clone the repository
-git clone https://github.com/vladdo/genui-framework.git
-cd genui-framework/frontend
+git clone https://github.com/thevladdo/genui-framework.git
+cd genui-framework/backend
 
-# Install dependencies and build
-npm install
-npm run build
-
-# Link locally for use in other projects
-npm link
-
-# In your project directory:
-npm link genui-framework
+# Starts Qdrant (vector store for RAG) and Redis (render cache + profiles).
+# Both are optional — without them the backend falls back to in-memory
+# storage, fine for a first try, lost on restart.
+docker-compose up -d
 ```
 
-**Backend (Python)**
+### Step 2 — Install the backend
 
 ```bash
-cd backend
+# Still in genui-framework/backend
 pip install -r requirements.txt
-cp .env.example .env  # Configure your API keys
+
+# For development (running the test suite):
+pip install -r requirements-dev.txt
 ```
 
-### Environment Configuration
+### Step 3 — Configure
 
-Create a `.env` file in the backend directory:
+```bash
+cp .env.example .env
+```
+
+Open `.env` and set **one** thing to start — your LLM key:
 
 ```env
-# Required
-OPENAI_API_KEY=your_openai_key
-
-# Optional - RAG
-QDRANT_HOST=localhost
-QDRANT_PORT=6333
-
-# Optional - Model selection
-RESPONSE_MODEL=gpt-4o-mini
-ZONE_MODEL=gpt-4o-mini
+LLM_PROVIDER=openai            # openai | anthropic | gemini
+OPENAI_API_KEY=sk-...          # the only required value
 ```
 
-### Start the Backend
+Everything else has sensible defaults. The values you'll likely touch later:
+
+```env
+# Cache shared across processes (docker-compose already runs Redis)
+REDIS_URL=redis://localhost:6379/0
+
+# Production: API keys ("key:tenant"). WITHOUT THESE THE API IS OPEN (dev only!)
+CLIENT_API_KEYS=pk_live_abc:myapp     # browser-side key
+ADMIN_API_KEYS=sk_live_xyz:myapp      # server-to-server key
+
+# Measure personalization uplift (10% of users see the generic version)
+HOLDOUT_PERCENT=10
+
+# Other providers instead of OpenAI:
+# LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY=...   (pip install anthropic)
+# LLM_PROVIDER=gemini    + GOOGLE_API_KEY=...      (no extra package)
+```
+
+### Step 4 — Start and verify the backend
 
 ```bash
-cd backend
 uvicorn api.main:app --reload --port 8000
 ```
 
-### Import Styles in Your App
+Verify it's alive:
+
+```bash
+curl http://localhost:8000/health
+# -> {"status": "healthy", ..., "qdrant_connected": true}
+# "degraded" just means Qdrant isn't running — zones still work, without RAG.
+```
+
+Optional sanity check — render a zone from the terminal:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/zone/render \
+  -H "Content-Type: application/json" \
+  -d '{"zone_id": "test", "base_prompt": "Show three example cards about space exploration"}'
+```
+
+You should get JSON with `components` and a `meta.cache` block. Run it twice: the second call returns `"status": "fresh"` — that's the cache working (no LLM call, no cost).
+
+### Step 5 — Frontend (React)
+
+> ⚠️ The npm package is not yet published. Install locally via `npm link`:
+
+```bash
+cd ../frontend
+npm install
+npm run build
+npm link
+
+# In YOUR app's directory:
+npm link genui-framework
+```
+
+In your app's entry file (e.g. `main.tsx`):
 
 ```tsx
-// In your main entry file (e.g., main.tsx or index.tsx)
-// If using npm link:
 import "genui-framework/dist/styles.css";
+```
 
-// Or copy styles directly from the cloned repo:
-// import "./path-to/genui-framework/frontend/dist/styles.css";
+Then drop a zone anywhere:
+
+```tsx
+import { GenUIZone } from "genui-framework";
+
+<GenUIZone
+  apiUrl="http://localhost:8000"
+  zoneId="homepage-recommendations"
+  basePrompt="Show recommended articles"
+  preferredComponentType="bento"
+  maxItems={6}
+  debug // shows reasoning, segment, cache status — remove in production
+/>
+```
+
+Open the page: you'll see a loading skeleton, then the generated cards. The `debug` panel underneath tells you _why_ you're seeing what you're seeing.
+
+### Running the tests
+
+```bash
+cd backend
+python3 -m unittest discover -s tests   # or: pytest tests/
 ```
 
 ---
@@ -158,7 +221,7 @@ import { GenUIZone } from "genui-framework";
   basePrompt="Show recommended articles"
   preferredComponentType="bento"
   maxItems={6}
-/>;
+/>
 ```
 
 #### Full Props Reference
@@ -169,23 +232,30 @@ interface GenUIZoneProps {
   apiUrl: string; // Backend API URL
   zoneId: string; // Unique zone identifier
 
+  // === Auth ===
+  apiKey?: string; // Client API key (X-API-Key); required when CLIENT_API_KEYS is configured
+
   // === Prompt Engineering ===
   basePrompt?: string; // What the zone should display
   contextPrompt?: string; // Additional context for AI (page location, user segment, etc.)
 
   // === Content Control ===
-  pinnedContent?: PinnedContent[]; // Content that MUST be displayed
-  preferredComponentType?: "bento" | "chart" | "text" | "buttons";
+  pinnedContent?: PinnedContent[]; // Content that MUST be displayed (enforced server-side)
+  customComponents?: GenUICustomComponentDef[]; // Your design-system components (name + JSON schema)
+  preferredComponentType?: "bento" | "chart" | "text" | "buttons" | string; // built-in or custom name
   maxItems?: number; // Max items to generate (default: 6)
 
   // === User Context ===
-  userId?: string; // User ID for profile lookup
+  userId?: string; // Stable user ID: enables server-side profile, holdout & audit trail
   currentPage?: string; // Current page path
-  pageMetadata?: Record<string, unknown>; // Custom page context
+  pageMetadata?: Record<string, unknown>; // Custom page context (page-level, not per-user!)
 
   // === Behavior ===
   loadOnMount?: boolean; // Auto-load on mount (default: true)
   refreshInterval?: number; // Auto-refresh in ms (0 = disabled)
+  cacheStrategy?: "segment" | "live"; // 'segment' (default): per-segment cached renders; 'live': always call the LLM
+  streaming?: boolean; // Progressive render via SSE (components appear as generated)
+  trackEvents?: boolean; // Auto impression/click events for uplift measurement (default: true)
 
   // === Theming ===
   theme?: GenUITheme; // Theme overrides
@@ -263,7 +333,7 @@ const articlesContext = useMemo(() => {
   return articles
     .map(
       (a, i) =>
-        `ID ${i}: "${a.title}" (Link: ${a.link}, Img: ${a.src}, Tag: ${a.tag[0]})`
+        `ID ${i}: "${a.title}" (Link: ${a.link}, Img: ${a.src}, Tag: ${a.tag[0]})`,
     )
     .join("; ");
 }, [articles]);
@@ -293,7 +363,7 @@ const contextPrompt = `
   contextPrompt={contextPrompt}
   preferredComponentType="bento"
   maxItems={6}
-/>;
+/>
 ```
 
 ---
@@ -349,7 +419,7 @@ const FallbackBento = () => (
   apiUrl="http://localhost:8000"
   emptyComponent={<FallbackBento />}
   errorComponent={() => <FallbackBento />}
-/>;
+/>
 ```
 
 ---
@@ -409,7 +479,7 @@ function ChatBot() {
     }
   };
 
-  return <ChatUI onSend={handleSend} history={history} loading={isLoading} />;
+  return <ChatUI onSend={handleSend} history={history} loading={isLoading} />
 }
 ```
 
@@ -441,6 +511,9 @@ console.log(meta?.confidence); // 0.87
 console.log(meta?.reasoning); // "Selected based on user interests..."
 console.log(meta?.profileFactors); // ["interests.technology", "demographic.role"]
 console.log(meta?.personalizationApplied); // true
+console.log(meta?.renderId); // "a1b2c3d4e5f6" — identity of the generated variant
+console.log(meta?.cache); // { status: "fresh", segment: "role=developer|eng=high", ageSeconds: 42 }
+console.log(meta?.experiment); // { arm: "personalized", holdoutPercent: 10 } — when holdout is on
 ```
 
 ---
@@ -474,7 +547,7 @@ import { BentoComponent } from "genui-framework";
     columns: 3, // 2, 3, or 4
     gap: 16, // Gap in pixels
   }}
-/>;
+/>
 ```
 
 ### ButtonsComponent — Animated Buttons
@@ -520,7 +593,7 @@ import { ButtonsComponent } from "genui-framework";
     align: "center", // "start" | "center" | "end"
     gap: 12, // Custom gap in pixels
   }}
-/>;
+/>
 ```
 
 #### Button Variants
@@ -556,7 +629,7 @@ import { ChartComponent } from "genui-framework";
     showGrid: true,
     height: 300,
   }}
-/>;
+/>
 ```
 
 ### TextComponent — Styled Text
@@ -569,8 +642,74 @@ import { TextComponent } from "genui-framework";
     content: "This is **markdown** supported text with _emphasis_.",
     style: "normal", // "normal" | "emphasis" | "note" | "heading"
   }}
-/>;
+/>
 ```
+
+---
+
+## 🧩 Custom Components — Your Design System as LLM Vocabulary
+
+The four built-in types cover generic zones, but the real power is letting the LLM generate **your** components. Registration has two halves:
+
+```tsx
+// 1. Render side: name -> React component
+import { registerGenUIComponent } from "genui-framework";
+
+registerGenUIComponent("hero_banner", ({ data }) => (
+  <HeroBanner
+    headline={data.headline}
+    subtitle={data.subtitle}
+    ctaLabel={data.cta_label}
+    ctaUrl={data.cta_url}
+  />
+));
+
+// 2. Generation side: name -> JSON Schema + description (per zone)
+<GenUIZone
+  zoneId="homepage-hero"
+  apiUrl="..."
+  preferredComponentType="hero_banner"
+  customComponents={[
+    {
+      name: "hero_banner",
+      description:
+        "Full-width hero with headline, subtitle and one CTA. Use as the first component of landing zones.",
+      dataSchema: {
+        type: "object",
+        required: ["headline"],
+        properties: {
+          headline: { type: "string", maxLength: 80 },
+          subtitle: { type: "string" },
+          cta_label: { type: "string" },
+          cta_url: { type: "string" },
+        },
+      },
+    },
+  ]}
+/>
+```
+
+What the framework guarantees for custom components:
+
+- The JSON Schema is shown to the LLM (name, description, schema, optional `example`), so the model knows when and how to use the component.
+- Generated data is **validated against the schema** server-side (jsonschema); invalid components are dropped and reported in `meta.sanitization`.
+- The **URL whitelist applies recursively**: URL-named fields (`url`, `link`, `href`, `src`, `image`, `*_url`, …), absolute URLs and markdown links anywhere in the payload are checked; dangerous schemes are always stripped.
+- Custom definitions are part of the **zone cache key**: changing a schema invalidates cached renders automatically.
+- The registered React component receives `data` exactly as validated (no key renaming).
+
+Backend embedders can register types globally instead of per request:
+
+```python
+from schemas import register_component_type
+
+register_component_type(
+    "hero_banner",
+    data_schema={...},
+    description="Full-width hero with headline and CTA",
+)
+```
+
+> Custom names: 2-32 chars, lowercase `[a-z0-9_-]`, starting with a letter. Built-in names cannot be overridden.
 
 ---
 
@@ -593,31 +732,42 @@ interface GenUITheme {
 
 ### Applying Themes
 
+Two equivalent ways — pass `theme` **directly to the zone**, or wrap a group of zones in a `GenUISection`:
+
 ```tsx
 import { GenUISection, GenUIZone } from 'genui-framework';
 
-<GenUISection
-  theme={{
-    borderRadius: '16px',
-    accentColor: '#3b82f6',
-    primaryColor: '#1e1e1e',
-    textColor: '#ffffff',
-    fontFamily: "'Inter', sans-serif",
-  }}
->
-  <GenUIZone ... />
+const theme = {
+  borderRadius: '16px',
+  accentColor: '#3b82f6',
+  primaryColor: '#1e1e1e',
+  textColor: '#ffffff',
+  fontFamily: "'Inter', sans-serif",
+};
+
+// Per zone:
+<GenUIZone theme={theme} apiUrl="..." zoneId="..." />
+
+// Or shared across several zones:
+<GenUISection theme={theme}>
+  <GenUIZone apiUrl="..." zoneId="hero" />
+  <GenUIZone apiUrl="..." zoneId="footer" />
 </GenUISection>
 ```
 
+Only the properties you set are emitted; everything else inherits — from an enclosing `GenUISection`, then from the framework defaults in `genui.css` (a dark glassmorphism theme). Sections nest cleanly: an inner zone without a theme inherits the outer section's, it does not reset to defaults.
+
+> **Dark by default.** Out of the box the components render on a dark glass theme (light text, dark cards). On a light page background, set `primaryColor`/`textColor` to suit — or override the CSS variables below globally.
+
 ### CSS Variables
 
-The framework uses CSS custom properties that you can override:
+The framework's defaults live in `:root` (override them globally to retheme everything):
 
 ```css
 :root {
-  --genui-border-radius: 30px;
-  --genui-primary-color: #fafafa;
-  --genui-secondary-color: #b2b2b2;
+  --genui-border-radius: 24px;
+  --genui-primary-color: #0a0a0c;
+  --genui-secondary-color: #6b7280;
   --genui-accent-color: #3b82f6;
   --genui-text-primary: #ffffff;
   --genui-text-secondary: rgba(255, 255, 255, 0.8);
@@ -625,6 +775,194 @@ The framework uses CSS custom properties that you can override:
   --genui-glass-border: 1px solid rgba(255, 255, 255, 0.1);
 }
 ```
+
+---
+
+## ⚡ Segment Cache — LLM as an Offline Ranker
+
+By default, zone renders are **not** generated per user per request. Users are collapsed into a small number of deterministic **segments** (role, top interests, browsing style, engagement), and each `(zone config, segment)` pair is rendered once and cached with **stale-while-revalidate** semantics:
+
+| Cache state                              | Behavior                                                               |
+| ---------------------------------------- | ---------------------------------------------------------------------- |
+| **fresh** (age ≤ `ZONE_CACHE_FRESH_TTL`) | Served from cache, no LLM call                                         |
+| **stale** (age ≤ `ZONE_CACHE_STALE_TTL`) | Served instantly from cache, re-rendered in background (single-flight) |
+| **miss**                                 | Rendered live (cold start), then cached for the whole segment          |
+
+Anonymous users with no profile signals share a single `anon` segment — typically the most-hit cache entry. Changing any zone configuration (prompts, pinned content, constraints) automatically invalidates its cache entries.
+
+Use Redis for a shared, persistent cache across processes (`REDIS_URL=redis://localhost:6379/0`, included in `docker-compose.yml`); without it, an in-memory fallback is used. The cache always fails open: a cache outage degrades to live rendering.
+
+For genuinely dynamic zones, opt out per zone:
+
+```tsx
+<GenUIZone zoneId="live-dashboard" apiUrl="..." cacheStrategy="live" />
+```
+
+### Pre-warming segments
+
+Render known archetypes offline (deploy hook, cron) so live traffic only sees cache hits:
+
+```http
+POST /api/v1/zone/warmup
+Content-Type: application/json
+
+{
+  "zones": [
+    { "zone_id": "homepage-for-you", "base_prompt": "...", "user_profile": null },
+    {
+      "zone_id": "homepage-for-you",
+      "base_prompt": "...",
+      "user_profile": {
+        "preferences": { "role": { "value": "developer", "confidence": 1.0 } },
+        "interests": { "ai": { "value": true, "confidence": 1.0 } }
+      }
+    }
+  ]
+}
+```
+
+Each response's `meta.cache` reports `status` (`fresh` | `stale` | `miss` | `bypass`), the `segment` key, and `age_seconds` — visible in the `debug` panel of `GenUIZone`. Cache stats are exposed at `GET /api/v1/zone/cache/stats`.
+
+---
+
+## 🛡️ Output Guarantees
+
+What reaches the frontend is guaranteed by the system, not by prompt obedience:
+
+1. **Provider-native structured output** — the ZoneAgent constrains generation with `response_format` (JSON schema derived from the component schemas, falling back to JSON mode).
+2. **Schema validation** — every generated component is validated against Pydantic schemas (`backend/schemas/`) server-side. Invalid components are dropped individually and reported in `meta.sanitization.dropped_components`; one malformed component never breaks the zone.
+3. **URL whitelist (hard rule)** — a generated URL survives **only if it existed in the input**: pinned content, developer prompts, RAG documents, or page context. Invented links/images are stripped (`meta.sanitization.removed_urls`), buttons left without a valid URL are dropped, markdown links collapse to plain text. Dangerous schemes (`javascript:`, `data:`, …) are always blocked, even with the whitelist disabled (`URL_WHITELIST_ENABLED=false`).
+4. **Pinned content enforcement** — pinned items are verified on the _actual output_ (by URL/title) after generation; missing ones are appended automatically. `pinned_content_included` is computed, not model-claimed.
+5. **Frontend defense in depth** — rendered `href`/`src` pass through `sanitizeUrl()` regardless of origin.
+
+> Because URLs must exist in the input, enumerate your content in `contextPrompt` (or `pinnedContent` / RAG) — content the model cannot reference, it cannot link.
+
+---
+
+## 🔐 Auth, Server-Side Profiles & Audit
+
+### API keys & multi-tenancy
+
+Two key classes, configured as comma-separated `key` or `key:tenant` entries:
+
+```env
+CLIENT_API_KEYS=pk_live_abc123:acme,pk_live_def456:globex   # shipped to the browser
+ADMIN_API_KEYS=sk_live_xyz789:acme                          # server-to-server only
+```
+
+- **Client keys** identify the calling app/tenant, gate rate limits, and scope cached renders and stored profiles per tenant. Pass them via the `apiKey` prop (sent as `X-API-Key`; `Authorization: Bearer` also works).
+- **Admin keys** protect `/documents*`, `/zone/warmup`, and `/zone/cache/stats`.
+- **No keys configured = open API** (dev mode, logged loudly). Always configure keys in production.
+- Rate limiting: `RATE_LIMIT_PER_MINUTE` per client key (default 120, `0` disables).
+
+```tsx
+<GenUIZone
+  apiUrl="..."
+  apiKey="pk_live_abc123"
+  userId={user.id}
+  zoneId="home"
+/>
+```
+
+### Server-side profiles (source of truth)
+
+When `userId` is provided, the **server-side profile store** (Redis, or in-memory in dev) is authoritative:
+
+- An existing server profile **overrides** the client-supplied one.
+- With no server profile yet, the client (IndexedDB) copy seeds the store — IndexedDB is thereby demoted to a cache.
+- Agent-extracted profile updates are merged server-side (higher confidence wins) on every `/query`.
+- Endpoints: `GET /api/v1/profile/{user_id}`, `POST /api/v1/profile/sync`, and `DELETE /api/v1/profile/{user_id}` (GDPR erasure, audit-logged).
+- Retention: `PROFILE_TTL_SECONDS` (e.g. `7776000` = auto-expire after 90 days of inactivity).
+
+### Audit log — what was shown to whom
+
+Every zone render, query, profile sync, and profile deletion emits an append-only JSON event (`AUDIT_LOG_PATH` file, or the `genui.audit` logger): tenant, user, zone, segment, cache state, and the exact titles/links displayed. In regulated sectors this answers "why did user X see content Y on date Z?". API keys appear only as fingerprints, never raw.
+
+```json
+{
+  "ts": "2026-06-10T10:30:00+0000",
+  "event": "zone_render",
+  "tenant": "acme",
+  "user_id": "u42",
+  "zone_id": "homepage-for-you",
+  "cache": { "status": "fresh", "segment": "role=developer|eng=high" },
+  "shown_titles": ["API Docs", "Case Study"],
+  "shown_links": ["/docs/api", "/cases/1"]
+}
+```
+
+---
+
+## ⚡️ Streaming & SSR-Safety
+
+### Progressive render (SSE)
+
+With `streaming` enabled, components appear one by one as the model generates them, instead of waiting for the full response:
+
+```tsx
+<GenUIZone zoneId="live-feed" apiUrl="..." cacheStrategy="live" streaming />
+```
+
+Under the hood the zone consumes `POST /api/v1/zone/render/stream` (Server-Sent Events): each `component` event is **already validated and URL-sanitized** before being emitted; the final `complete` event carries the authoritative response (including pinned-content enforcement) and replaces the streamed state. Cache hits stream their components in a single burst, so `streaming` is most useful for `cacheStrategy="live"` zones. Holdout, audit log, and caching behave exactly like the non-streaming endpoint.
+
+### SSR-safety
+
+The library can be imported and rendered in server environments (Next.js, Remix, Astro): CSS is shipped as a separate file (no style injection at import time), IndexedDB persistence degrades to a no-op without a browser, and the BehaviorTracker won't attach listeners without a DOM. Zone fetches run in effects, so server-rendered markup shows your `loadingComponent`/skeleton and hydrates normally. A first-class SSR adapter (zone data fetched server-side) is on the roadmap as a separate package.
+
+---
+
+## 📈 Measuring Uplift — Impressions, Clicks & Holdout
+
+Personalization is only worth its cost if it beats your static page. The framework closes the loop natively:
+
+### Automatic event tracking
+
+With `trackEvents` (default `true`), every `GenUIZone`:
+
+- emits an **impression** when the zone enters the viewport (once per generated variant), and
+- captures **clicks** on any link inside the zone (title + URL),
+
+sending them to `POST /api/v1/events` tagged with the variant identity (`render_id`), the experiment arm, and the segment. Custom events (e.g. conversions) can be sent with `sendGenUIEvents()`.
+
+### Holdout (control group)
+
+```env
+HOLDOUT_PERCENT=10        # 10% of identified users get the generic render
+HOLDOUT_SALT=genui-exp-1  # change to start a new experiment (reshuffles arms)
+```
+
+Assignment is a **sticky hash** of `user_id`: the same user always lands in the same arm, across sessions and servers. Control users are served the _non-personalized_ render (profile and behavior stripped — they share the generic cached variant); anonymous users are excluded (`arm: "none"`) since without a stable identity the comparison would be contaminated. The arm is exposed in `meta.experiment.arm`, so the frontend can also choose to render its own static fallback for control users.
+
+### Reading the result
+
+```http
+GET /api/v1/events/stats?zone_id=homepage-for-you   (admin key)
+```
+
+```json
+{
+  "zone_id": "homepage-for-you",
+  "arms": {
+    "personalized": { "impression": 5400, "click": 540, "ctr": 0.1 },
+    "control": { "impression": 600, "click": 30, "ctr": 0.05 }
+  },
+  "uplift_percent": 100.0,
+  "significance": {
+    "method": "two-proportion z-test (two-tailed)",
+    "z_score": 3.94,
+    "p_value": 0.00008,
+    "significant_95": true,
+    "sample_warning": false
+  },
+  "holdout_percent": 10
+}
+```
+
+`uplift_percent` is the headline number; `significance` tells you whether to believe it — a two-proportion z-test between arms (`significant_95: true` means p < 0.05; `sample_warning` flags arms under 100 impressions, where any conclusion is preliminary). Raw events also land in the audit log for offline slicing (per segment, per item, per time window).
+
+### Observability
+
+Set `TRACING_ENABLED=true` for OpenTelemetry tracing: FastAPI requests, `genui.zone.render` spans (zone, tenant, segment, cache status, experiment arm) and `genui.llm.*` spans (provider, model). Point `OTLP_ENDPOINT` at a collector (Jaeger, Grafana Tempo, ...) or omit it for console output.
 
 ---
 
@@ -667,6 +1005,47 @@ function navigateTo(path: string) {
 ---
 
 ## 🌐 Backend API Reference
+
+### Knowledge Base (RAG) — Tenant-Isolated
+
+The knowledge base feeds the AI real content to curate (and its URLs feed the whitelist). **Every operation is scoped to the tenant of the API key**: tenant A can never retrieve, list, or delete tenant B's documents. Documents indexed before tenant isolation belong to the `default` tenant. All endpoints require an **admin key**.
+
+| Endpoint                            | What it does                                                                                                                                                                                    |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/v1/documents/upload`     | Upload a **file** (PDF, DOCX, HTML, TXT, MD — max 10 MB, multipart): text extracted server-side, semantically chunked, indexed. Images (PNG/JPG/WEBP/TIFF) too with a capable extractor backend |
+| `POST /api/v1/documents`            | Upload raw text (JSON: `content` + `metadata`)                                                                                                                                                  |
+| `GET /api/v1/documents`             | List the tenant's documents with chunk counts                                                                                                                                                   |
+| `POST /api/v1/documents/search`     | Preview what the AI would retrieve for a query (passages + similarity scores) — content debugging                                                                                               |
+| `DELETE /api/v1/documents/{source}` | Delete a document (tenant-scoped, audit-logged)                                                                                                                                                 |
+| `GET /api/v1/documents/stats`       | Collection stats incl. the tenant's chunk count                                                                                                                                                 |
+
+```bash
+# Upload a PDF (url becomes linkable by the AI via the whitelist)
+curl -X POST http://localhost:8000/api/v1/documents/upload \
+  -H "X-API-Key: sk_live_xyz789" \
+  -F "file=@./sustainability-report.pdf" \
+  -F "title=Sustainability Report 2026" \
+  -F "url=/reports/sustainability-2026"
+
+# What would the AI see for this query?
+curl -X POST http://localhost:8000/api/v1/documents/search \
+  -H "X-API-Key: sk_live_xyz789" -H "Content-Type: application/json" \
+  -d '{"query": "renewable energy initiatives", "top_k": 5}'
+```
+
+#### Extraction backends — quality is configuration
+
+```env
+EXTRACTOR_BACKEND=local      # default: pypdf/docx/bs4 — zero dependencies, data stays in-house
+# EXTRACTOR_BACKEND=docling  # local upgrade, no GPU: better tables/layout + images (pip install docling)
+# EXTRACTOR_BACKEND=glmocr   # state-of-the-art incl. scanned docs (pip install glmocr)
+# GLMOCR_BASE_URL=...        # self-hosted GLM-OCR (vLLM/Ollama, ~2-4GB VRAM): data stays in-house
+# GLMOCR_API_KEY=...         # Z.ai cloud API: documents LEAVE your infra — opt-in consciously
+```
+
+Routing is per-format: plain text always decodes locally; a backend only handles the formats it excels at (Docling: PDF/DOCX/HTML/images; GLM-OCR: PDF/images) and everything else falls through to the local parsers. Runtime failures of a backend **fall back to local** with a warning; a configured backend with a missing package fails loudly (501) — that's a deployment mistake, not something to hide. The audit log records which extractor produced each document.
+
+> Notes: embeddings always use OpenAI (`text-embedding-3-small`), so `OPENAI_API_KEY` is required for RAG even when `LLM_PROVIDER=anthropic`. Scanned PDFs need `docling` or `glmocr` — the local backend cannot OCR.
 
 ### POST /api/v1/query — Chat Interface
 
@@ -742,7 +1121,8 @@ Content-Type: application/json
   "user_profile": { ... },
   "behavior_data": { ... },
   "current_page": "/",
-  "page_metadata": { "section": "hero", "campaign": "summer-2024" }
+  "page_metadata": { "section": "hero", "campaign": "summer-2024" },
+  "cache_strategy": "segment"
 }
 ```
 
@@ -768,7 +1148,13 @@ Content-Type: application/json
   "meta": {
     "confidence": 0.87,
     "reasoning": "Selected sustainability and tech content based on user profile",
-    "profile_factors": ["interests.sustainability", "interests.technology"]
+    "profile_factors": ["interests.sustainability", "interests.technology"],
+    "cache": {
+      "status": "fresh",
+      "strategy": "segment",
+      "segment": "int=sustainability+technology",
+      "age_seconds": 42.3
+    }
   },
   "rendered_at": "2024-01-15T10:30:00Z"
 }
@@ -784,46 +1170,43 @@ Content-Type: application/json
 genui-framework/
 ├── backend/                              # Python FastAPI backend
 │   ├── agents/                           # AI agent implementations
-│   │   ├── response_agent.py             # Chat response generation
-│   │   ├── zone_agent.py                 # Zone content rendering
+│   │   ├── zone_agent.py                 # Zone rendering (validation, URL guard,
+│   │   │                                 # pinned enforcement, streaming)
+│   │   ├── response_agent.py             # Chat response generation (datapizza)
 │   │   ├── profile_agent.py              # Profile learning & extraction
 │   │   ├── behave_agent.py               # Behavior analysis
-│   │   └── orchestrator.py               # Multi-agent coordination
+│   │   └── orchestrator.py               # Multi-agent coordination (chat)
 │   ├── api/                              # REST API endpoints
-│   │   ├── main.py                       # FastAPI app, CORS, middleware
-│   │   └── zone_router.py                # Zone rendering routes
-│   ├── rag/                              # Retrieval-Augmented Generation
-│   │   ├── vector_store.py               # Qdrant vector store wrapper
-│   │   └── retriever.py                  # Document retrieval & context building
-│   ├── config/                           # Configuration
-│   │   └── settings.py                   # Environment variables & defaults
-│   ├── utils/                            # Shared utilities
-│   └── requirements.txt                  # Python dependencies
+│   │   ├── main.py                       # FastAPI app, query/documents/profile endpoints
+│   │   ├── zone_router.py                # Zone render + stream + warmup + cache stats
+│   │   ├── events_router.py              # UI event ingestion + uplift stats
+│   │   └── deps.py                       # Shared service singletons
+│   ├── auth/                             # API keys, tenants, FastAPI dependencies
+│   ├── llm/                              # Provider abstraction (OpenAI / Anthropic / Gemini)
+│   ├── schemas/                          # Component schemas (Pydantic) + custom type registry
+│   ├── segmentation/                     # Deterministic profile -> segment mapping
+│   ├── profiles/                         # Server-side profile store + merge logic
+│   ├── experiments/                      # Holdout arm assignment
+│   ├── metrics/                          # Impression/click counters + z-test significance
+│   ├── rag/                              # Qdrant vector store + chunking
+│   ├── utils/                            # zone_cache (SWR), url_guard, audit, rate_limit,
+│   │                                     # json_stream (SSE parser), tracing
+│   ├── config/settings.py                # All env-driven configuration
+│   ├── tests/                            # 136 unit tests (unittest/pytest compatible)
+│   └── docker-compose.yml                # Qdrant + Redis
 │
-└── frontend/
-    └── genui-framework/                  # React component library (npm package)
-        ├── src/
-        │   ├── components/               # React components
-        │   │   ├── GenUISection.tsx      # Theme provider wrapper
-        │   │   ├── GenUIZone.tsx         # AI zone container (22 props)
-        │   │   ├── BentoComponent.tsx    # Glassmorphism grid
-        │   │   ├── ButtonsComponent.tsx  # 8 animated button variants
-        │   │   ├── ChartComponent.tsx    # Recharts integration
-        │   │   ├── TextComponent.tsx     # Markdown text
-        │   │   └── ComponentRenderer.tsx # Dynamic component factory
-        │   ├── hooks/                    # React hooks
-        │   │   ├── useGenUI.ts           # Chat hook (10 return values)
-        │   │   └── useZone.ts            # Zone hook (7 return values)
-        │   ├── styles/                   # CSS
-        │   │   └── genui.css             # Glassmorphism theme, animations
-        │   ├── types/                    # TypeScript definitions
-        │   │   └── index.ts              # All exported types
-        │   └── utils/                    # Utilities
-        │       ├── indexeddb.ts          # Profile & history persistence
-        │       └── behaviorTracker.ts    # Event tracking (8 options)
-        ├── dist/                         # Built output
-        ├── package.json
-        └── rollup.config.js
+└── frontend/                             # React component library (npm package)
+    ├── src/
+    │   ├── components/                   # GenUIZone, GenUISection, Bento/Buttons/Chart/Text,
+    │   │                                 # ComponentRenderer (with custom-component fallback)
+    │   ├── hooks/                        # useZone (cache/streaming/events), useGenUI (chat)
+    │   ├── registry.ts                   # registerGenUIComponent (custom design systems)
+    │   ├── styles/genui.css              # Glassmorphism theme, animations
+    │   ├── types/                        # TypeScript definitions
+    │   └── utils/                        # indexeddb (SSR-safe), behaviorTracker,
+    │                                     # sanitizeUrl, genuiEvents, sse
+    ├── dist/                             # Built output (+ styles.css)
+    └── rollup.config.js
 ```
 
 ## Data Flow
@@ -885,15 +1268,26 @@ genui-framework/
                     JSON Response: { components, meta, ... }
 ```
 
+### Zone render pipeline (what actually happens on `/zone/render`)
+
+1. **Auth & rate limit** — the API key resolves the tenant; client keys are rate-limited.
+2. **Profile resolution** — with a `user_id`, the server-side profile overrides the client copy (or gets seeded by it).
+3. **Holdout assignment** — with `HOLDOUT_PERCENT` set, a sticky hash sends X% of users to the control arm (signals stripped).
+4. **Segmentation** — profile + behavior collapse into a deterministic segment key (`role=developer|int=ai|eng=high`).
+5. **Cache lookup** — fresh hit: served, no LLM. Stale: served + refreshed in background. Miss: continue.
+6. **Generation** — provider-agnostic LLM call with structured output (prompt includes profile, RAG content, pinned items, custom component schemas).
+7. **Guarantees** — per-component schema validation, URL whitelist, pinned-content enforcement.
+8. **Cache write + audit** — the render is cached for the whole segment and audit-logged (what was shown, to whom, why).
+
 ## Agent Responsibilities
 
-| Agent             | File                | Purpose                                               |
-| ----------------- | ------------------- | ----------------------------------------------------- |
-| **ResponseAgent** | `response_agent.py` | Generates chat responses with optional UI components  |
-| **ZoneAgent**     | `zone_agent.py`     | Renders zone content based on prompts + profile + RAG |
-| **ProfileAgent**  | `profile_agent.py`  | Extracts user preferences from conversations          |
-| **BehaveAgent**   | `behave_agent.py`   | Analyzes behavior patterns for UI adjustments         |
-| **Orchestrator**  | `orchestrator.py`   | Coordinates multi-agent workflows                     |
+| Agent             | File                | Purpose                                                                                                          |
+| ----------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **ZoneAgent**     | `zone_agent.py`     | Zone rendering: prompts + profile + RAG → validated, sanitized components (provider-agnostic, streaming-capable) |
+| **ResponseAgent** | `response_agent.py` | Chat responses with optional UI components (datapizza, RAG tools)                                                |
+| **ProfileAgent**  | `profile_agent.py`  | Extracts user preferences from conversations                                                                     |
+| **BehaveAgent**   | `behave_agent.py`   | Analyzes behavior patterns for UI adjustments                                                                    |
+| **Orchestrator**  | `orchestrator.py`   | Runs Response/Profile/Behave agents in parallel for `/query`                                                     |
 
 ## Frontend Module Summary
 
@@ -909,8 +1303,7 @@ genui-framework/
 
 ## 🍕 Powered by datapizza-ai
 
-GenUI's backend agent system is built on top of **[datapizza-ai](https://github.com/datapizza-labs/datapizza-ai)**<br />
-A Python framework for building reliable Gen AI solutions without overhead.
+GenUI's **chat pipeline** (ResponseAgent, ProfileAgent, BehaveAgent) is built on top of **[datapizza-ai](https://github.com/datapizza-labs/datapizza-ai)**, a Python framework for building reliable Gen AI solutions without overhead. The ZoneAgent uses its own provider abstraction (`backend/llm/`) for structured output and streaming.
 
 ### Why datapizza-ai?
 
@@ -923,7 +1316,8 @@ A Python framework for building reliable Gen AI solutions without overhead.
 ---
 
 ## 📄 License
-This project is licensed under the Apache 2.0 License. 
+
+This project is licensed under the Apache 2.0 License.
 See the [LICENSE](LICENSE) file for details.
 
 ---
@@ -931,7 +1325,7 @@ See the [LICENSE](LICENSE) file for details.
 <div align="center">
 
 **GenUI System**
- _Intelligent interfaces that adapt to every user_
+_Intelligent interfaces that adapt to every user_
 
 Built with ❤️ for the personalized web
 

@@ -15,6 +15,8 @@ import { TextComponent } from './TextComponent';
 import { BentoComponent } from './BentoComponent';
 import { ChartComponent } from './ChartComponent';
 import { ButtonsComponent } from './ButtonsComponent';
+import { ComponentErrorBoundary } from './ErrorBoundary';
+import { getRegisteredGenUIComponent } from '../registry';
 
 export interface ComponentRendererProps {
   component?: GenUIComponent;
@@ -53,6 +55,15 @@ const renderSingleComponent = (
 ): React.ReactNode => {
   const { type, layout } = component;
 
+  // A component with no data object can't render anything useful and
+  // would throw downstream (.map/.split on undefined) — skip it quietly.
+  if (component.data == null || typeof component.data !== 'object') {
+    if (!getRegisteredGenUIComponent(type)) {
+      console.warn(`GenUI: component "${type}" has no data, skipping`);
+      return null;
+    }
+  }
+
   // Normalize data to ensure camelCase format
   const data = normalizeData(component.data);
 
@@ -79,25 +90,42 @@ const renderSingleComponent = (
       case 'buttons':
         return <ButtonsComponent data={data as ButtonsComponentData} />;
 
-      default:
+      default: {
+        // Host-registered custom components (see registerGenUIComponent).
+        // They receive the data exactly as validated against the host's
+        // JSON schema: no snake_case -> camelCase normalization.
+        const RegisteredComponent = getRegisteredGenUIComponent(type);
+        if (RegisteredComponent) {
+          return <RegisteredComponent data={component.data} layout={layout} />;
+        }
+
         console.warn(`Unknown component type: ${type}`);
         return (
           <div className="genui-error">
             Unknown component type: {type}
           </div>
         );
+      }
     }
   };
+
+  // Isolate each component: a render-time throw must not take down the
+  // sibling components — or the host application.
+  const guarded = (
+    <ComponentErrorBoundary label={type}>
+      {renderComponent()}
+    </ComponentErrorBoundary>
+  );
 
   if (Object.keys(wrapperStyle).length > 0) {
     return (
       <div key={key} style={wrapperStyle}>
-        {renderComponent()}
+        {guarded}
       </div>
     );
   }
 
-  return <React.Fragment key={key}>{renderComponent()}</React.Fragment>;
+  return <React.Fragment key={key}>{guarded}</React.Fragment>;
 };
 
 export const ComponentRenderer: React.FC<ComponentRendererProps> = ({

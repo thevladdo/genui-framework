@@ -48,6 +48,7 @@ export interface UseGenUIReturnExtended extends UseGenUIReturn {
 export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtended => {
   const {
     apiUrl,
+    apiKey,
     userId = 'anonymous',
     enablePersistence = true,
     enableBehaviorTracking = true,
@@ -130,6 +131,9 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
       // Prepare request body
       const requestBody = {
         query: text,
+        // 'anonymous' is the local default, not an identity: sending it
+        // would share one server-side profile across all anonymous users
+        user_id: userId && userId !== 'anonymous' ? userId : undefined,
         user_profile: profile ? profileToApiFormat(profile) : null,
         conversation_history: history.slice(-10).map(msg => ({
           role: msg.role,
@@ -143,6 +147,7 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(apiKey ? { 'X-API-Key': apiKey } : {}),
         },
         body: JSON.stringify(requestBody),
       });
@@ -210,7 +215,7 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
     } finally {
       setIsLoading(false);
     }
-  }, [apiUrl, userId, profile, history, enablePersistence, onProfileUpdate, onError]);
+  }, [apiUrl, apiKey, userId, profile, history, enablePersistence, onProfileUpdate, onError]);
 
 
   /**

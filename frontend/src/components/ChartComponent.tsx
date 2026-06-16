@@ -59,6 +59,12 @@ export const ChartComponent: React.FC<ChartComponentProps> = ({
     height = 300,
   } = data;
 
+  // Nothing to plot: render nothing rather than crash on an empty/missing
+  // data array (.map on undefined would throw)
+  if (!Array.isArray(chartData) || chartData.length === 0) {
+    return null;
+  }
+
   // Transform data for Recharts format
   const formattedData = chartData.map((item, index) => ({
     name: item.label,
@@ -137,7 +143,7 @@ export const ChartComponent: React.FC<ChartComponentProps> = ({
               innerRadius={chartType === 'donut' ? 60 : 0}
               outerRadius={100}
               paddingAngle={chartType === 'donut' ? 2 : 0}
-              label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+              label={({ name, percent }) => `${name} (${Math.round((percent ?? 0) * 100)}%)`}
             >
               {formattedData.map((entry, index) => (
                 <Cell key={`cell-${index}`} fill={entry.fill} />

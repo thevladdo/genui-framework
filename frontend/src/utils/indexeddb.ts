@@ -34,9 +34,19 @@ interface GenUIDB {
 let dbPromise: Promise<IDBPDatabase<GenUIDB>> | null = null;
 
 /**
+ * SSR guard: IndexedDB only exists in the browser. On the server every
+ * persistence call becomes a harmless no-op so the library can be
+ * imported and rendered in SSR frameworks (Next.js, Remix, Astro, ...).
+ */
+const hasIndexedDB = (): boolean => typeof indexedDB !== 'undefined';
+
+/**
  * Initialize the IndexedDB database
  */
 export const initDB = async (): Promise<IDBPDatabase<GenUIDB>> => {
+  if (!hasIndexedDB()) {
+    throw new Error('IndexedDB is not available in this environment (SSR?)');
+  }
   if (!dbPromise) {
     dbPromise = openDB<GenUIDB>(DB_NAME, DB_VERSION, {
       upgrade(db) {
@@ -58,6 +68,7 @@ export const initDB = async (): Promise<IDBPDatabase<GenUIDB>> => {
  * Get a user profile by ID
  */
 export const getProfile = async (userId: string): Promise<UserProfile | null> => {
+  if (!hasIndexedDB()) return null;
   try {
     const db = await initDB();
     const profile = await db.get(STORE_NAME, userId);
@@ -73,6 +84,7 @@ export const getProfile = async (userId: string): Promise<UserProfile | null> =>
  * Save or update a user profile
  */
 export const saveProfile = async (profile: UserProfile): Promise<void> => {
+  if (!hasIndexedDB()) return;
   try {
     const db = await initDB();
     await db.put(STORE_NAME, profile, profile.userId);
@@ -152,6 +164,7 @@ export const applyProfileUpdates = async (
  * Clear a user's profile
  */
 export const clearProfile = async (userId: string): Promise<void> => {
+  if (!hasIndexedDB()) return;
   try {
     const db = await initDB();
     await db.delete(STORE_NAME, userId);
@@ -299,6 +312,7 @@ export const addToHistory = async (
  * Clear conversation history for a session
  */
 export const clearHistory = async (sessionId: string): Promise<void> => {
+  if (!hasIndexedDB()) return;
   try {
     const db = await initDB();
     await db.delete(HISTORY_STORE, sessionId);

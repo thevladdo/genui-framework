@@ -9,9 +9,9 @@ from dataclasses import dataclass
 import json
 
 from datapizza.agents import Agent
-from datapizza.clients.openai import OpenAIClient
 
 from config import settings
+from llm.datapizza_factory import create_datapizza_client
 from utils.cache import cacheable
 
 logger = logging.getLogger(__name__)
@@ -147,12 +147,8 @@ Guidelines:
         """
         self.model = model or settings.profile_model
         
-        self.client = OpenAIClient(
-            api_key=settings.openai_api_key,
-            model=self.model,
-        )
+        self.client = create_datapizza_client(self.model)
         
-        # Create the agent
         self.agent = Agent(
             name="behave_agent",
             client=self.client,
@@ -187,14 +183,11 @@ Guidelines:
         if not behavior_data:
             return self._empty_result()
         
-        # Build the analysis prompt
         prompt = self._build_analysis_prompt(behavior_data, user_profile)
         
         try:
-            # Use async a_run instead of run
             response = await self.agent.a_run(prompt)
             
-            # Extract text from response - handle different response formats
             if hasattr(response, 'content'):
                 content = response.content
                 if isinstance(content, str):
@@ -218,14 +211,12 @@ Guidelines:
             else:
                 response_text = str(response)
             
-            # Clean up TextBlock wrapper if present
             if response_text.startswith('TextBlock(content='):
                 start = response_text.find('{')
                 end = response_text.rfind('}')
                 if start != -1 and end != -1:
                     response_text = response_text[start:end+1]
             
-            # Parse JSON response
             parsed = self._parse_response(response_text)
             
             return BehaviorAnalysisResult(
@@ -334,7 +325,6 @@ Guidelines:
     def _parse_response(self, response_text: str) -> Dict[str, Any]:
         """Parse the JSON response from the agent."""
         try:
-            # If already a dict or list, return it
             if isinstance(response_text, dict):
                 return response_text
             if isinstance(response_text, list):
@@ -377,7 +367,7 @@ Guidelines:
         if not behavior_data:
             return {"engagement_score": 0.5, "user_type": "casual"}
         
-        duration = behavior_data.get("duration", 0) / 1000  # Convert to seconds
+        duration = behavior_data.get("duration", 0) / 1000
         clicks = behavior_data.get("clickCount", 0)
         scroll_depth = behavior_data.get("maxScrollDepth", 0)
         pages = behavior_data.get("pagesVisited", 0)

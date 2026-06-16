@@ -6,6 +6,7 @@
 import React from "react";
 import { motion } from "framer-motion";
 import type { BentoComponentData, BentoCard } from "../types";
+import { sanitizeUrl } from "../utils/sanitizeUrl";
 
 export interface BentoComponentProps {
   data: BentoComponentData;
@@ -14,23 +15,12 @@ export interface BentoComponentProps {
 
 interface CardProps {
   card: BentoCard;
-  index: number;
 }
 
-const Card: React.FC<CardProps> = ({ card, index }) => {
-  const { title, description, link, image, badge } = card;
-
-  const getGridAreaClass = (idx: number): string => {
-    const areas = [
-      "polo",
-      "secondary1",
-      "secondary2",
-      "tertiary1",
-      "tertiary2",
-      "tertiary3",
-    ];
-    return areas[idx] || "";
-  };
+const Card: React.FC<CardProps> = ({ card }) => {
+  const { title, description, badge } = card;
+  const link = sanitizeUrl(card.link);
+  const image = sanitizeUrl(card.image);
 
   const content = (
     <>
@@ -60,9 +50,11 @@ const Card: React.FC<CardProps> = ({ card, index }) => {
     transition: { duration: 0.3, ease: [0.4, 0, 0.2, 1] as const },
   };
 
-  const gridArea = getGridAreaClass(index);
-  const style: React.CSSProperties = gridArea ? { gridArea } : {};
-
+  // The default grid flows cards into the N-column layout
+  // (genui-bento--cols-*). The named-area "complex" layout is opt-in via
+  // the .genui-layout-complex class and assigned purely in CSS (nth-child),
+  // so no inline grid-area is applied here — applying one unconditionally
+  // would collapse every card into the same cell in the simple layout.
   if (link) {
     return (
       <motion.a
@@ -70,7 +62,6 @@ const Card: React.FC<CardProps> = ({ card, index }) => {
         className="genui-bento-card"
         target="_blank"
         rel="noopener noreferrer"
-        style={style}
         {...motionProps}
       >
         {content}
@@ -79,7 +70,7 @@ const Card: React.FC<CardProps> = ({ card, index }) => {
   }
 
   return (
-    <motion.div className="genui-bento-card" style={style} {...motionProps}>
+    <motion.div className="genui-bento-card" {...motionProps}>
       {content}
     </motion.div>
   );
@@ -99,7 +90,7 @@ export const BentoComponent: React.FC<BentoComponentProps> = ({
   return (
     <div className={colClass} style={style}>
       {cards.map((card, index) => (
-        <Card key={`${card.title}-${index}`} card={card} index={index} />
+        <Card key={`${card.title}-${index}`} card={card} />
       ))}
     </div>
   );

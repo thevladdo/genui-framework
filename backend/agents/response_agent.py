@@ -5,19 +5,22 @@ Generates structured responses suitable for GenUI rendering.
 """
 
 import logging
+from contextvars import ContextVar
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 import json
 
 from datapizza.agents import Agent
-from datapizza.clients.openai import OpenAIClient
 from datapizza.tools import tool
 
 from config import settings
+from llm.datapizza_factory import create_datapizza_client
 from rag import create_vector_store, build_context_from_results
-from utils.cache import cacheable
+from schemas import component_to_dict, validate_components
+from utils.url_guard import UrlGuard
 
 logger = logging.getLogger(__name__)
+_current_tenant: ContextVar[Optional[str]] = ContextVar("genui_tenant", default=None)
 
 
 @dataclass
@@ -61,7 +64,7 @@ class UserProfile:
                     demo_items.append(f"{key}: {value}")
             
             if demo_items:
-                parts.append(f"User Demographics:\n- " + "\n- ".join(demo_items))
+                parts.append("User Demographics:\n- " + "\n- ".join(demo_items))
         
         # Interests
         if self.interests:
@@ -74,7 +77,7 @@ class UserProfile:
                     interest_items.append(f"{key}: {value}")
             
             if interest_items:
-                parts.append(f"User Interests:\n- " + "\n- ".join(interest_items))
+                parts.append("User Interests:\n- " + "\n- ".join(interest_items))
         
         # Preferences
         if self.preferences:
@@ -87,7 +90,7 @@ class UserProfile:
                     pref_items.append(f"{key}: {value}")
             
             if pref_items:
-                parts.append(f"User Preferences:\n- " + "\n- ".join(pref_items))
+                parts.append("User Preferences:\n- " + "\n- ".join(pref_items))
         
         # Behavior patterns
         if self.behavior:
@@ -100,7 +103,7 @@ class UserProfile:
                     behavior_items.append(f"{key}: {value}")
             
             if behavior_items:
-                parts.append(f"Observed Behavior:\n- " + "\n- ".join(behavior_items))
+                parts.append("Observed Behavior:\n- " + "\n- ".join(behavior_items))
         
         if self.history_summary:
             parts.append(f"Interaction History: {self.history_summary}")
@@ -111,7 +114,7 @@ class UserProfile:
 @dataclass 
 class GenUIComponent:
     """Structured component for frontend rendering."""
-    type: str  # "bento", "chart", "text", "buttons"
+    type: str  # "bento", "chart", "text", "buttons", etc.
     data: Dict[str, Any]
     layout: Optional[Dict[str, Any]] = None
     
@@ -191,7 +194,7 @@ Component types and their data structures:
 
 3. "chart" - Data visualization
    data: {
-       "chart_type": "bar|line|pie|area",
+       "chart_type": "bar|line|pie|area|donut",
        "title": "Chart Title",
        "data": [{ "label": "...", "value": ... }],
        "x_axis": "...",
@@ -201,7 +204,7 @@ Component types and their data structures:
 4. "buttons" - Action buttons with links
    data: {
        "buttons": [
-           { "label": "...", "url": "...", "style": "primary|secondary|outline" }
+           { "label": "...", "url": "...", "style": "primary|secondary|outline|ghost|shine|gooey|expandIcon|ringHover" }
        ]
    }
 
@@ -223,7 +226,7 @@ Guidelines:
 PERSONALIZATION EXAMPLES:
 Question: "How does authentication work?"
 
-For a developer (role: sviluppatore):
+For a developer (role: developer):
 "Let's dive into the technical implementation. Authentication typically uses JWT tokens with RS256 signing. 
 Here's the flow: client sends credentials → server validates → generates JWT with payload claims → 
 client stores token → subsequent requests include token in Authorization header. Consider using refresh 
@@ -249,13 +252,9 @@ security regulations. The implementation is handled by your technical team..."
         """
         self.model = model or settings.response_model
         self.vector_store = vector_store or create_vector_store()
+
+        self.client = create_datapizza_client(self.model)
         
-        self.client = OpenAIClient(
-            api_key=settings.openai_api_key,
-            model=self.model,
-        )
-        
-        # Create the agent with tools and streaming support
         self.agent = Agent(
             name="response_agent",
             client=self.client,
@@ -268,12 +267,14 @@ security regulations. The implementation is handled by your technical team..."
     def _search_documents(self, query: str, top_k: int = 5) -> str:
         """
         Search the document knowledge base for relevant information.
-        
+
         Args:
             query: The search query
             top_k: Number of results to retrieve
         """
-        results = self.vector_store.search(query=query, top_k=top_k)
+        results = self.vector_store.search(
+            query=query, top_k=top_k, tenant=_current_tenant.get()
+        )
         return build_context_from_results(results, include_metadata=True)
     
     def _build_query_prompt(
@@ -314,35 +315,45 @@ security regulations. The implementation is handled by your technical team..."
         query: str,
         user_profile: Optional[Dict[str, Any]] = None,
         conversation_history: Optional[List[Dict]] = None,
+        tenant: Optional[str] = None,
     ) -> AgentResponse:
         """Synchronous wrapper for backward compatibility."""
         import asyncio
-        return asyncio.run(self.process_query_async(query, user_profile, conversation_history))
+        return asyncio.run(
+            self.process_query_async(query, user_profile, conversation_history, tenant)
+        )
     
-    @cacheable()
+    # Deliberately NOT cached: responses depend on profile + conversation
+    # history (near-zero hit rate) and caching them would replay stale
+    # personalization. The expensive sub-step (vector search) is cached.
     async def process_query_async(
         self,
         query: str,
         user_profile: Optional[Dict[str, Any]] = None,
         conversation_history: Optional[List[Dict]] = None,
+        tenant: Optional[str] = None,
     ) -> AgentResponse:
         """
         Process a user query and generate a structured response asynchronously.
-        
+
         Args:
             query: The user's query
             user_profile: User profile data from IndexedDB
             conversation_history: Recent conversation messages
-            
+            tenant: Tenant scope for knowledge-base retrieval
+
         Returns:
             AgentResponse with structured components for GenUI
         """
+        # Scope the RAG search tool to this request's tenant
+        _current_tenant.set(tenant)
+
         # Parse user profile
         profile = UserProfile.from_dict(user_profile) if user_profile else None
-        
+
         # Retrieve relevant documents asynchronously with caching
         logger.info(f"Retrieving context for query: {query[:100]}...")
-        search_results = await self.vector_store.search_async(query=query)
+        search_results = await self.vector_store.search_async(query=query, tenant=tenant)
         retrieved_context = build_context_from_results(search_results)
         
         # Build the full prompt
@@ -357,7 +368,6 @@ security regulations. The implementation is handled by your technical team..."
         try:
             response = await self.agent.a_run(full_prompt)
             
-            # Extract text from response - handle different response formats
             if hasattr(response, 'content'):
                 # response.content might be a string, list of TextBlocks, or other format
                 content = response.content
@@ -370,7 +380,6 @@ security regulations. The implementation is handled by your technical team..."
                         if hasattr(block, 'text'):
                             response_text += block.text
                         elif hasattr(block, 'content'):
-                            # Some blocks have nested content
                             response_text += str(block.content)
                         elif isinstance(block, dict) and 'text' in block:
                             response_text += block['text']
@@ -393,15 +402,42 @@ security regulations. The implementation is handled by your technical team..."
             
             logger.debug(f"Extracted response text: {response_text[:200]}...")
             
-            # Parse JSON response
             parsed = self._parse_response(response_text)
-            
+
             # Extract sources from retrieval results
             sources = [
                 {"title": r.metadata.get("source_document", "Unknown"), "url": r.metadata.get("url", "")}
                 for r in search_results
             ]
-            
+
+            # Validate components against schemas; invalid ones are dropped
+            valid_models, dropped = validate_components(parsed.get("components", []))
+            component_dicts = [component_to_dict(c) for c in valid_models]
+
+            # URL whitelist: only URLs that existed in the input survive
+            guard = UrlGuard(enforce_whitelist=settings.url_whitelist_enabled)
+            guard.allow_from_text(query)
+            guard.allow_from_text(retrieved_context)
+            for msg in conversation_history or []:
+                guard.allow_from_text(msg.get("content"))
+            for r in search_results:
+                metadata = r.metadata or {}
+                guard.allow(metadata.get("url"), metadata.get("image"))
+
+            component_dicts, removed_urls = guard.sanitize_components(component_dicts)
+            if dropped or removed_urls:
+                logger.info(
+                    "Response sanitization: dropped_components=%s removed_urls=%s",
+                    dropped, removed_urls,
+                )
+
+            # Model-claimed sources must pass the same URL rules
+            raw_sources = parsed.get("sources", sources)
+            safe_sources = [
+                s for s in raw_sources
+                if isinstance(s, dict) and (not s.get("url") or guard.is_allowed(s["url"]))
+            ]
+
             return AgentResponse(
                 text_response=parsed.get("text_response", response_text),
                 components=[
@@ -410,18 +446,18 @@ security regulations. The implementation is handled by your technical team..."
                         data=c["data"],
                         layout=c.get("layout")
                     )
-                    for c in parsed.get("components", [])
+                    for c in component_dicts
                 ],
-                sources=parsed.get("sources", sources),
+                sources=safe_sources,
                 confidence=parsed.get("confidence", 0.5),
                 suggested_actions=parsed.get("suggested_actions", []),
             )
             
         except Exception as e:
             logger.error(f"Agent processing failed: {e}")
-            # Return a fallback response
+            # Return a fallback response (the error stays in the logs)
             return AgentResponse(
-                text_response=f"I encountered an issue processing your request: {str(e)}",
+                text_response="I couldn't process your request right now.",
                 components=[
                     GenUIComponent(type="text", data={"content": "Please try rephrasing your question.", "style": "note"})
                 ],
@@ -432,12 +468,9 @@ security regulations. The implementation is handled by your technical team..."
     
     def _parse_response(self, response_text: str) -> Dict[str, Any]:
         """Parse the JSON response from the agent."""
-        # Try to extract JSON from the response
         try:
-            # If response_text is already a dict or list, return it directly
             if isinstance(response_text, (dict, list)):
                 if isinstance(response_text, list):
-                    # If it's a list, wrap it in a dict
                     return {"components": response_text, "text_response": "", "confidence": 0.5}
                 return response_text
             
@@ -464,7 +497,6 @@ security regulations. The implementation is handled by your technical team..."
             }
         except TypeError as e:
             logger.warning(f"Type error parsing response: {e}, type: {type(response_text)}")
-            # If we get a type error, try to handle it gracefully
             if isinstance(response_text, (dict, list)):
                 return response_text if isinstance(response_text, dict) else {"components": response_text}
             return {

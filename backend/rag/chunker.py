@@ -52,8 +52,7 @@ class SemanticChunker:
         
         Args:
             embed_model: Embedding model for semantic similarity
-            breakpoint_percentile: Percentile threshold for detecting breakpoints
-                                   Higher = fewer, larger chunks
+            breakpoint_percentile: Percentile threshold for detecting breakpoints Higher = fewer, larger chunks
             buffer_size: Number of sentences to include around breakpoints
         """
         self.embed_model = embed_model or OpenAIEmbedding(

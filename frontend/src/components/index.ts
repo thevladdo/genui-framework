@@ -13,6 +13,8 @@ export type { ButtonsComponentProps } from './ButtonsComponent';
 export { ComponentRenderer } from './ComponentRenderer';
 export type { ComponentRendererProps } from './ComponentRenderer';
 
+export { ComponentErrorBoundary } from './ErrorBoundary';
+
 export { GenUISection } from './GenUISection';
 export { GenUISection as default } from './GenUISection';
 

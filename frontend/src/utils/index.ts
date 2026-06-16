@@ -33,3 +33,8 @@ export type {
   HoverEvent,
   ElementInteraction,
 } from './behaviorTracker';
+
+export { sanitizeUrl } from './sanitizeUrl';
+
+export { sendGenUIEvents } from './genuiEvents';
+export type { GenUIEvent } from './genuiEvents';

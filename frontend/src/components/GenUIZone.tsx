@@ -20,20 +20,26 @@
  * ```
  */
 
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { ComponentRenderer } from './ComponentRenderer';
 import { GenUISection } from './GenUISection';
 import { useZone, UseZoneOptions, PinnedContent } from '../hooks/useZone';
+import type { GenUICustomComponentDef } from '../registry';
 import type { GenUITheme, GenUIComponent } from '../types';
 import { getBehaviorTracker } from '../utils/behaviorTracker';
+import { sendGenUIEvents } from '../utils/genuiEvents';
 
 
 export interface GenUIZoneProps {
-  //  Required 
+  //  Required
   /** Backend API URL */
   apiUrl: string;
   /** Unique identifier for this zone */
   zoneId: string;
+
+  //  Auth
+  /** Client API key (sent as X-API-Key). Required when the backend has CLIENT_API_KEYS configured */
+  apiKey?: string;
 
   //  Prompt Engineering 
   /** Base prompt describing what the zone should display */
@@ -41,11 +47,16 @@ export interface GenUIZoneProps {
   /** Developer-provided context about the zone's location and purpose */
   contextPrompt?: string;
 
-  //  Content Control 
+  //  Content Control
   /** Content that must always be displayed */
   pinnedContent?: PinnedContent[];
-  /** Force a specific component type */
-  preferredComponentType?: 'bento' | 'chart' | 'text' | 'buttons';
+  /**
+   * Host-registered component types the LLM may generate in this zone.
+   * Pair with registerGenUIComponent() so the renderer can display them.
+   */
+  customComponents?: GenUICustomComponentDef[];
+  /** Force a specific component type (built-in or registered custom name) */
+  preferredComponentType?: 'bento' | 'chart' | 'text' | 'buttons' | (string & {});
   /** Maximum number of items to display */
   maxItems?: number;
 
@@ -57,11 +68,28 @@ export interface GenUIZoneProps {
   /** Additional page context metadata */
   pageMetadata?: Record<string, unknown>;
 
-  //  Behavior 
+  //  Behavior
   /** Whether to load automatically on mount (default: true) */
   loadOnMount?: boolean;
   /** Auto-refresh interval in milliseconds (0 = disabled) */
   refreshInterval?: number;
+  /**
+   * Backend cache strategy (default: 'segment').
+   * 'segment' serves per-segment cached renders with stale-while-revalidate;
+   * 'live' always calls the LLM — reserve it for genuinely dynamic zones.
+   */
+  cacheStrategy?: 'segment' | 'live';
+  /**
+   * Progressive render via Server-Sent Events: components appear one by
+   * one as the model generates them. Most useful with cacheStrategy='live'.
+   */
+  streaming?: boolean;
+  /**
+   * Emit impression/click events to the backend for uplift measurement
+   * (default: true). Impressions fire when the zone enters the viewport;
+   * clicks are captured on any link inside the zone.
+   */
+  trackEvents?: boolean;
 
   //  Theming 
   /** Theme configuration */
@@ -118,10 +146,12 @@ const LoadingSkeleton: React.FC<{ type?: string }> = ({ type }) => {
 
 export const GenUIZone: React.FC<GenUIZoneProps> = ({
   apiUrl,
+  apiKey,
   zoneId,
   basePrompt = 'Show relevant content for this user',
   contextPrompt,
   pinnedContent = [],
+  customComponents,
   preferredComponentType,
   maxItems = 6,
   userId = 'anonymous',
@@ -129,6 +159,9 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
   pageMetadata,
   loadOnMount = true,
   refreshInterval = 0,
+  cacheStrategy,
+  streaming = false,
+  trackEvents = true,
   theme,
   className = '',
   style,
@@ -152,10 +185,12 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
     refresh,
   } = useZone({
     apiUrl,
+    apiKey,
     zoneId,
     basePrompt,
     contextPrompt,
     pinnedContent,
+    customComponents,
     preferredComponentType,
     maxItems,
     userId,
@@ -163,28 +198,77 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
     pageMetadata,
     loadOnMount,
     refreshInterval,
+    cacheStrategy,
+    streaming,
     onRender,
     onError,
   });
 
-  // Track zone visibility for behavior analytics
+  // One impression per rendered variant
+  const impressionSentForRef = useRef<string | null>(null);
+
+  const emitEvent = useCallback(
+    (eventType: string, itemTitle?: string, itemUrl?: string) => {
+      if (!trackEvents) return;
+      sendGenUIEvents(apiUrl, apiKey, [{
+        event_type: eventType,
+        zone_id: zoneId,
+        render_id: meta?.renderId,
+        arm: meta?.experiment?.arm,
+        segment: meta?.cache?.segment,
+        item_title: itemTitle,
+        item_url: itemUrl,
+        user_id: userId && userId !== 'anonymous' ? userId : undefined,
+        ts: new Date().toISOString(),
+      }]);
+    },
+    [trackEvents, apiUrl, apiKey, zoneId, userId, meta?.renderId, meta?.experiment?.arm, meta?.cache?.segment]
+  );
+
+  // Capture clicks on any link inside the zone (uplift measurement)
+  const handleZoneClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (!trackEvents) return;
+      const target = e.target as HTMLElement | null;
+      const anchor = target?.closest?.('a');
+      if (!anchor) return;
+      emitEvent(
+        'click',
+        anchor.textContent?.trim().slice(0, 200) || undefined,
+        anchor.getAttribute('href') || undefined,
+      );
+    },
+    [trackEvents, emitEvent]
+  );
+
+  // Track zone visibility: behavior analytics + impression event
   useEffect(() => {
+    if (!zoneRef.current) return;
     const tracker = getBehaviorTracker();
-    if (!tracker || !zoneRef.current) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            tracker.trackInteraction(
-              zoneId,
-              'genui-zone',
-              'scroll-into-view',
-              {
-                hasContent: components.length > 0,
-                personalized: meta?.personalizationApplied ?? false,
-              }
-            );
+          if (!entry.isIntersecting) return;
+
+          tracker?.trackInteraction(
+            zoneId,
+            'genui-zone',
+            'scroll-into-view',
+            {
+              hasContent: components.length > 0,
+              personalized: meta?.personalizationApplied ?? false,
+            }
+          );
+
+          // Impression: once per generated variant actually seen
+          const variant = meta?.renderId ?? 'unknown';
+          if (
+            components.length > 0 &&
+            impressionSentForRef.current !== variant
+          ) {
+            impressionSentForRef.current = variant;
+            emitEvent('impression');
           }
         });
       },
@@ -194,7 +278,7 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
     observer.observe(zoneRef.current);
 
     return () => observer.disconnect();
-  }, [zoneId, components.length, meta?.personalizationApplied]);
+  }, [zoneId, components.length, meta?.personalizationApplied, meta?.renderId, emitEvent]);
 
   // Render loading state
   if (isLoading && components.length === 0) {
@@ -255,6 +339,7 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
         className="genui-zone__content"
         data-zone-id={zoneId}
         data-personalized={meta?.personalizationApplied ? 'true' : 'false'}
+        onClickCapture={handleZoneClick}
       >
         {isLoading && components.length > 0 && (
           <div className="genui-zone__refreshing">
@@ -276,6 +361,9 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
                 profileFactors: meta.profileFactors,
                 pinnedIncluded: pinnedContentIncluded,
                 renderedAt: meta.renderedAt,
+                renderId: meta.renderId,
+                cache: meta.cache,
+                experiment: meta.experiment,
               }, null, 2)}
             </pre>
           </details>

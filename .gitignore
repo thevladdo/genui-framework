@@ -120,6 +120,7 @@ dmypy.json
 jspm_packages/
 
 package-lock.json
+/test-app
 
 # Testing
 /coverage
@@ -337,6 +338,11 @@ models/
 secrets/
 *.pem
 *.key
+
+# GenUI runtime data
+audit.jsonl
+audit*.jsonl
+*.audit.jsonl
 
 # Temporary files
 tmp/

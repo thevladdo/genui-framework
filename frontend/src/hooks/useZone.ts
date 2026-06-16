@@ -5,8 +5,10 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { GenUIComponent, UserProfile } from '../types';
+import type { GenUICustomComponentDef } from '../registry';
 import { getProfile, profileToApiFormat } from '../utils/indexeddb';
 import { getBehaviorTracker } from '../utils/behaviorTracker';
+import { readSSEStream } from '../utils/sse';
 
 // ============================================
 // Types
@@ -30,6 +32,8 @@ export interface PinnedContent {
 export interface UseZoneOptions {
   /** Backend API URL */
   apiUrl: string;
+  /** Client API key (sent as X-API-Key). Required when the backend has CLIENT_API_KEYS configured */
+  apiKey?: string;
   /** Unique identifier for this zone */
   zoneId: string;
   /** Base prompt describing what the zone should display */
@@ -38,8 +42,14 @@ export interface UseZoneOptions {
   contextPrompt?: string;
   /** Content that must always be displayed */
   pinnedContent?: PinnedContent[];
-  /** Force a specific component type */
-  preferredComponentType?: 'bento' | 'chart' | 'text' | 'buttons';
+  /**
+   * Host-registered component types (name + JSON schema + description)
+   * the LLM may generate in this zone. Pair with registerGenUIComponent()
+   * so the renderer knows how to display them.
+   */
+  customComponents?: GenUICustomComponentDef[];
+  /** Force a specific component type (built-in or registered custom name) */
+  preferredComponentType?: 'bento' | 'chart' | 'text' | 'buttons' | (string & {});
   /** Maximum number of items to display */
   maxItems?: number;
   /** User ID for profile lookup */
@@ -52,10 +62,40 @@ export interface UseZoneOptions {
   loadOnMount?: boolean;
   /** Auto-refresh interval in milliseconds (0 = disabled) */
   refreshInterval?: number;
+  /**
+   * Cache strategy on the backend:
+   * - 'segment' (default): serve per-segment cached renders (stale-while-revalidate)
+   * - 'live': always call the LLM (for genuinely dynamic zones)
+   */
+  cacheStrategy?: 'segment' | 'live';
+  /**
+   * Progressive render via Server-Sent Events: components appear one by
+   * one as the model generates them. Most useful with cacheStrategy='live';
+   * cache hits complete in a single burst either way. (default: false)
+   */
+  streaming?: boolean;
   /** Callback when zone renders successfully */
   onRender?: (components: GenUIComponent[]) => void;
   /** Callback on render error */
   onError?: (error: Error) => void;
+}
+
+export interface ZoneCacheMeta {
+  /** Cache outcome: 'fresh' | 'stale' | 'miss' | 'bypass' */
+  status: string;
+  /** Strategy used: 'segment' | 'live' */
+  strategy?: string;
+  /** Segment key this render was cached under */
+  segment?: string;
+  /** Age of the cached render in seconds */
+  ageSeconds?: number;
+}
+
+export interface ZoneExperimentMeta {
+  /** Experiment arm: 'personalized' | 'control' | 'none' */
+  arm: string;
+  /** Configured holdout share (0-100) */
+  holdoutPercent?: number;
 }
 
 export interface ZoneRenderMeta {
@@ -64,6 +104,12 @@ export interface ZoneRenderMeta {
   profileFactors: string[];
   personalizationApplied: boolean;
   renderedAt: string;
+  /** Identity of the generated variant (shared by users on the same cache entry) */
+  renderId?: string;
+  /** Cache info (segment, hit status, age) */
+  cache?: ZoneCacheMeta;
+  /** Holdout experiment info, present when a holdout is configured */
+  experiment?: ZoneExperimentMeta;
 }
 
 export interface UseZoneReturn {
@@ -90,10 +136,12 @@ export interface UseZoneReturn {
 export const useZone = (options: UseZoneOptions): UseZoneReturn => {
   const {
     apiUrl,
+    apiKey,
     zoneId,
     basePrompt = 'Show relevant content for this user',
     contextPrompt,
     pinnedContent = [],
+    customComponents,
     preferredComponentType,
     maxItems = 6,
     userId = 'anonymous',
@@ -101,6 +149,8 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
     pageMetadata,
     loadOnMount = true,
     refreshInterval = 0,
+    cacheStrategy,
+    streaming = false,
     onRender,
     onError,
   } = options;
@@ -145,6 +195,9 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
       // Build request
       const requestBody = {
         zone_id: zoneId,
+        // 'anonymous' is the local default, not an identity: sending it
+        // would share one server-side profile across all anonymous users
+        user_id: userId && userId !== 'anonymous' ? userId : undefined,
         base_prompt: basePrompt,
         context_prompt: contextPrompt,
         pinned_content: pinnedContent.map(p => ({
@@ -155,19 +208,63 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
           id: p.id,
           metadata: p.metadata,
         })),
+        custom_components: customComponents?.map(c => ({
+          name: c.name,
+          data_schema: c.dataSchema,
+          description: c.description,
+          example: c.example,
+        })),
         preferred_component_type: preferredComponentType,
         max_items: maxItems,
         user_profile: userProfile,
         behavior_data: behaviorData,
         current_page: currentPage || (typeof window !== 'undefined' ? window.location.pathname : undefined),
         page_metadata: pageMetadata,
+        cache_strategy: cacheStrategy,
       };
 
-      // Make API request
-      const response = await fetch(`${apiUrl}/api/v1/zone/render`, {
+      // Applies a full /render-shaped response to local state
+      const applyResponse = (data: any): GenUIComponent[] => {
+        const renderedComponents: GenUIComponent[] = (data.components || []).map((c: any) => ({
+          type: c.type,
+          data: c.data,
+          layout: c.layout,
+        }));
+
+        setComponents(renderedComponents);
+        setPinnedContentIncluded(data.pinned_content_included || []);
+        setMeta({
+          confidence: data.meta?.confidence ?? 0.5,
+          reasoning: data.meta?.reasoning ?? '',
+          profileFactors: data.meta?.profile_factors ?? [],
+          personalizationApplied: data.personalization_applied ?? false,
+          renderedAt: data.rendered_at,
+          renderId: data.meta?.render_id,
+          cache: data.meta?.cache
+            ? {
+                status: data.meta.cache.status,
+                strategy: data.meta.cache.strategy,
+                segment: data.meta.cache.segment,
+                ageSeconds: data.meta.cache.age_seconds,
+              }
+            : undefined,
+          experiment: data.meta?.experiment
+            ? {
+                arm: data.meta.experiment.arm,
+                holdoutPercent: data.meta.experiment.holdout_percent,
+              }
+            : undefined,
+        });
+
+        return renderedComponents;
+      };
+
+      const endpoint = streaming ? '/api/v1/zone/render/stream' : '/api/v1/zone/render';
+      const response = await fetch(`${apiUrl}${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(apiKey ? { 'X-API-Key': apiKey } : {}),
         },
         body: JSON.stringify(requestBody),
       });
@@ -177,27 +274,39 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
         throw new Error(errorData.detail || `Zone render failed: ${response.status}`);
       }
 
+      if (streaming && response.body) {
+        // Progressive render: components appear as the model emits them;
+        // the final `complete` event is authoritative and replaces them
+        setComponents([]);
+        let finalComponents: GenUIComponent[] | null = null;
+        let streamError: Error | null = null;
+
+        await readSSEStream(response, (event, data) => {
+          if (!mountedRef.current) return;
+          if (event === 'component') {
+            setComponents(prev => [...prev, {
+              type: data.type,
+              data: data.data,
+              layout: data.layout,
+            }]);
+          } else if (event === 'complete') {
+            finalComponents = applyResponse(data);
+          } else if (event === 'error') {
+            streamError = new Error(data?.detail || 'Zone stream failed');
+          }
+        });
+
+        if (streamError) throw streamError;
+        if (!mountedRef.current) return;
+        onRender?.(finalComponents ?? []);
+        return;
+      }
+
       const data = await response.json();
 
       if (!mountedRef.current) return;
 
-      // Transform response
-      const renderedComponents: GenUIComponent[] = data.components.map((c: any) => ({
-        type: c.type,
-        data: c.data,
-        layout: c.layout,
-      }));
-
-      setComponents(renderedComponents);
-      setPinnedContentIncluded(data.pinned_content_included || []);
-      setMeta({
-        confidence: data.meta?.confidence ?? 0.5,
-        reasoning: data.meta?.reasoning ?? '',
-        profileFactors: data.meta?.profile_factors ?? [],
-        personalizationApplied: data.personalization_applied ?? false,
-        renderedAt: data.rendered_at,
-      });
-
+      const renderedComponents = applyResponse(data);
       onRender?.(renderedComponents);
 
     } catch (err) {
@@ -213,15 +322,19 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
     }
   }, [
     apiUrl,
+    apiKey,
     zoneId,
     basePrompt,
     contextPrompt,
     pinnedContent,
+    customComponents,
     preferredComponentType,
     maxItems,
     userId,
     currentPage,
     pageMetadata,
+    cacheStrategy,
+    streaming,
     onRender,
     onError,
   ]);
@@ -248,11 +361,16 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
     };
   }, [loadOnMount]); // Only run on mount, not when render changes
 
+  // Keep the latest render callback in a ref so the auto-refresh timer
+  // doesn't reset every time a parent re-render recreates the callback
+  const renderRef = useRef(render);
+  renderRef.current = render;
+
   // Auto-refresh interval
   useEffect(() => {
     if (refreshInterval > 0 && loadOnMount) {
       refreshTimerRef.current = setInterval(() => {
-        render();
+        renderRef.current();
       }, refreshInterval);
 
       return () => {
@@ -261,7 +379,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
         }
       };
     }
-  }, [refreshInterval, loadOnMount, render]);
+  }, [refreshInterval, loadOnMount]);
 
   return {
     components,

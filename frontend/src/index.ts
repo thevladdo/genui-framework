@@ -17,6 +17,7 @@ export {
   ChartComponent,
   ButtonsComponent,
   ComponentRenderer,
+  ComponentErrorBoundary,
 } from './components';
 
 export type {
@@ -32,6 +33,19 @@ export {
   useGenUI,
   useZone
 } from './hooks';
+
+// Component Registry (custom design-system components)
+export {
+  registerGenUIComponent,
+  getRegisteredGenUIComponent,
+  getRegisteredGenUIComponentNames,
+} from './registry';
+
+export type {
+  GenUICustomComponentDef,
+  GenUIRegisteredComponent,
+  GenUIRegisteredComponentProps,
+} from './registry';
 
 // Types
 export type {

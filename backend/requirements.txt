@@ -3,6 +3,8 @@ datapizza-ai>=0.0.9
 
 # LLM Providers
 openai>=1.0.0
+# anthropic>=0.40.0 
+# (LLM_PROVIDER=gemini uses the OpenAI-compatible endpoint, no extra package)
 
 # RAG Components
 llama-index>=0.10.0
@@ -21,17 +23,25 @@ python-multipart>=0.0.6
 httpx>=0.26.0
 aiofiles>=23.2.1
 
-# Document Processing
+# Caching (zone render cache; optional — falls back to in-memory)
+redis>=5.0.0
+
+# Document Processing (local extractor backend)
 pypdf>=4.0.0
 python-docx>=1.1.0
 beautifulsoup4>=4.12.0
+# Optional extractor backends (EXTRACTOR_BACKEND):
+# docling>=2.0.0   # better tables/layout + images, fully local, no GPU
+# glmocr>=0.1.0    # state-of-the-art incl. scans; self-hosted or Z.ai API
 
 # Utilities
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
 python-dotenv>=1.0.0
+jsonschema>=4.20.0
 
 # Observability
 opentelemetry-api>=1.22.0
 opentelemetry-sdk>=1.22.0
 opentelemetry-instrumentation-fastapi>=0.43b0
+opentelemetry-exporter-otlp>=1.22.0

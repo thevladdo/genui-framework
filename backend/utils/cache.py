@@ -64,7 +64,7 @@ def _generate_cache_key(*args, **kwargs) -> str:
         "kwargs": {k: str(v) for k, v in sorted(kwargs.items())}
     }
     key_str = json.dumps(key_data, sort_keys=True)
-    return hashlib.md5(key_str.encode()).hexdigest()
+    return hashlib.sha256(key_str.encode()).hexdigest()[:32]
 
 
 def cacheable(

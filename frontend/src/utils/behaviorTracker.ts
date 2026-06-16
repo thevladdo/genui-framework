@@ -143,7 +143,9 @@ export class BehaviorTracker {
    */
   start(): void {
     if (this.isTracking) return;
-    
+    // SSR guard: there is nothing to track without a DOM
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
     this.isTracking = true;
     this.record.startTime = Date.now();
     
@@ -397,10 +399,10 @@ export class BehaviorTracker {
 
   private trackPageEnter(path?: string, title?: string): void {
     this.currentPage = {
-      path: path || window.location.pathname,
-      title: title || document.title,
+      path: path || (typeof window !== 'undefined' ? window.location.pathname : ''),
+      title: title || (typeof document !== 'undefined' ? document.title : ''),
       enterTime: Date.now(),
-      referrer: document.referrer || undefined,
+      referrer: (typeof document !== 'undefined' && document.referrer) || undefined,
     };
     
     this.record.metrics.navigationPattern.push(this.currentPage.path);

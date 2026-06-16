@@ -5,6 +5,7 @@
 
 import React from "react";
 import type { ButtonsComponentData, ButtonDef, ButtonVariant } from "../types";
+import { sanitizeUrl } from "../utils/sanitizeUrl";
 
 export interface ButtonsComponentProps {
   data: ButtonsComponentData;
@@ -37,7 +38,6 @@ const ArrowIcon: React.FC<{ direction: "left" | "right" }> = ({
 const SingleButton: React.FC<SingleButtonProps> = ({ button }) => {
   const {
     label,
-    url,
     onClick,
     style = "primary",
     showArrow,
@@ -48,6 +48,8 @@ const SingleButton: React.FC<SingleButtonProps> = ({ button }) => {
     disabled = false,
     size = "md",
   } = button;
+
+  const url = sanitizeUrl(button.url);
 
   // Arrow shows by default on all buttons, unless explicitly set to false
   const shouldShowArrow = showArrow !== false;
@@ -125,6 +127,11 @@ export const ButtonsComponent: React.FC<ButtonsComponentProps> = ({
   className = "",
 }) => {
   const { buttons, direction = "horizontal", align = "start", gap } = data;
+
+  // Guard against a missing/empty buttons array (.map on undefined throws)
+  if (!Array.isArray(buttons) || buttons.length === 0) {
+    return null;
+  }
 
   const containerClass = [
     "genui-buttons",

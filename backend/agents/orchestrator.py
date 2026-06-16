@@ -5,7 +5,7 @@ Coordinates the Response Agent, Profile Agent, and Behave Agent for unified quer
 
 import logging
 import asyncio
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
 from .response_agent import ResponseAgent, AgentResponse, create_response_agent
@@ -61,7 +61,7 @@ class OrchestratorResult:
             "sources": self.response.sources,
             "suggested_actions": self.response.suggested_actions,
             
-            # Profile update instructions for IndexedDB
+            # Profile update instructions
             "profile_updates": {
                 "should_update": should_update,
                 "updates": all_updates,
@@ -128,6 +128,7 @@ class AgentOrchestrator:
         user_profile: Optional[Dict[str, Any]] = None,
         conversation_history: Optional[List[Dict]] = None,
         behavior_data: Optional[Dict[str, Any]] = None,
+        tenant: Optional[str] = None,
     ) -> OrchestratorResult:
         """
         Process a user query through all agents asynchronously.
@@ -142,9 +143,9 @@ class AgentOrchestrator:
             OrchestratorResult with combined agent outputs
         """
         if self.parallel_execution:
-            return await self._process_parallel_async(query, user_profile, conversation_history, behavior_data)
+            return await self._process_parallel_async(query, user_profile, conversation_history, behavior_data, tenant)
         else:
-            return await self._process_sequential_async(query, user_profile, conversation_history, behavior_data)
+            return await self._process_sequential_async(query, user_profile, conversation_history, behavior_data, tenant)
     
     def process_sync(
         self,
@@ -162,6 +163,7 @@ class AgentOrchestrator:
         user_profile: Optional[Dict[str, Any]],
         conversation_history: Optional[List[Dict]],
         behavior_data: Optional[Dict[str, Any]],
+        tenant: Optional[str] = None,
     ) -> OrchestratorResult:
         """Run all agents in parallel using asyncio.gather for true async concurrency."""
         
@@ -170,6 +172,7 @@ class AgentOrchestrator:
             query,
             user_profile,
             conversation_history,
+            tenant,
         )
         
         profile_task = self.profile_agent.analyze_message_async(
@@ -215,6 +218,7 @@ class AgentOrchestrator:
         user_profile: Optional[Dict[str, Any]],
         conversation_history: Optional[List[Dict]],
         behavior_data: Optional[Dict[str, Any]],
+        tenant: Optional[str] = None,
     ) -> OrchestratorResult:
         """Run agents sequentially (for debugging or low-resource environments)."""
         
@@ -223,6 +227,7 @@ class AgentOrchestrator:
             query,
             user_profile,
             conversation_history,
+            tenant,
         )
         
         # Then profile agent
@@ -322,30 +327,6 @@ class AgentOrchestrator:
         
         return profile
     
-    async def process_async(
-        self,
-        query: str,
-        user_profile: Optional[Dict[str, Any]] = None,
-        conversation_history: Optional[List[Dict]] = None,
-        behavior_data: Optional[Dict[str, Any]] = None,
-    ) -> OrchestratorResult:
-        """
-        Async version of process for use with FastAPI.
-        """
-        loop = asyncio.get_event_loop()
-        
-        # Run in thread pool to not block the event loop
-        result = await loop.run_in_executor(
-            self._executor,
-            lambda: self.process(query, user_profile, conversation_history, behavior_data),
-        )
-        
-        return result
-    
-    def __del__(self):
-        """Cleanup thread pool on deletion."""
-        self._executor.shutdown(wait=False)
-
 
 # Factory function
 def create_orchestrator(**kwargs) -> AgentOrchestrator:

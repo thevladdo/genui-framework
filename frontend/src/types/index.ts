@@ -252,6 +252,8 @@ export interface BehaviorTrackerOptions {
 export interface UseGenUIOptions {
   /** Backend API URL */
   apiUrl: string;
+  /** Client API key (sent as X-API-Key). Required when the backend has CLIENT_API_KEYS configured */
+  apiKey?: string;
   /** User ID for profile management */
   userId?: string;
   /** Enable IndexedDB persistence */

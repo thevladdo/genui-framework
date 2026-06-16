@@ -7,13 +7,13 @@ Determines what user data should be stored in IndexedDB.
 import logging
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 
 from datapizza.agents import Agent
-from datapizza.clients.openai import OpenAIClient
 
 from config import settings
+from llm.datapizza_factory import create_datapizza_client
 from utils.cache import cacheable
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ class ProfileUpdate:
     value: Any
     confidence: float
     source: str  # The query/statement that led to this insight
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -132,10 +132,7 @@ User: "Can you explain this more simply? The technical jargon is confusing."
         """
         self.model = model or settings.profile_model
         
-        self.client = OpenAIClient(
-            api_key=settings.openai_api_key,
-            model=self.model,
-        )
+        self.client = create_datapizza_client(self.model)
         
         # Create the agent
         self.agent = Agent(
@@ -185,16 +182,13 @@ User: "Can you explain this more simply? The technical jargon is confusing."
         full_prompt = "\n\n".join(prompt_parts)
         
         try:
-            # Use async a_run instead of run
             response = await self.agent.a_run(full_prompt)
             
-            # Extract text from response - handle different response formats
             if hasattr(response, 'content'):
                 content = response.content
                 if isinstance(content, str):
                     response_text = content
                 elif isinstance(content, list):
-                    # Extract text from list of content blocks
                     response_text = ""
                     for block in content:
                         if hasattr(block, 'text'):
@@ -219,7 +213,6 @@ User: "Can you explain this more simply? The technical jargon is confusing."
                 if start != -1 and end != -1:
                     response_text = response_text[start:end+1]
             
-            # Parse the JSON response
             parsed = self._parse_response(response_text)
             
             # Convert to ProfileAnalysisResult
@@ -244,7 +237,6 @@ User: "Can you explain this more simply? The technical jargon is confusing."
             
         except Exception as e:
             logger.error(f"Profile analysis failed: {e}")
-            # Return empty result on failure
             return ProfileAnalysisResult(
                 has_profile_info=False,
                 updates=[],
@@ -256,7 +248,6 @@ User: "Can you explain this more simply? The technical jargon is confusing."
     def _parse_response(self, response_text: str) -> Dict[str, Any]:
         """Parse JSON response from the agent."""
         try:
-            # If already a dict or list, return it
             if isinstance(response_text, dict):
                 return response_text
             if isinstance(response_text, list):

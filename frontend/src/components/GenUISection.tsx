@@ -7,19 +7,14 @@ import React, { useMemo } from 'react';
 import type { GenUISectionProps, GenUITheme } from '../types';
 import '../styles/genui.css';
 
-const DEFAULT_THEME: GenUITheme = {
-  carouselNumOfSlides: 4,
-  carouselAutoRotate: false,
-  borderRadius: '30px',
-  primaryColor: '#fafafa',
-  secondaryColor: '#b2b2b2',
-  backgroundColor: 'transparent',
-  textColor: '#1a1a1a',
-  accentColor: '#3b82f6',
-  fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-  fontSize: '16px',
-};
-
+/**
+ * Emit ONLY the CSS variables explicitly provided in `theme`.
+ *
+ * Defaults live in genui.css (:root), never here — so a GenUISection
+ * nested inside another (e.g. the one GenUIZone wraps its content in)
+ * with no theme of its own emits nothing and inherits the parent's
+ * theme, instead of resetting everything to component-level defaults.
+ */
 const themeToCSSVars = (theme: GenUITheme): Record<string, string> => {
   const vars: Record<string, string> = {};
 
@@ -60,14 +55,9 @@ export const GenUISection: React.FC<GenUISectionProps> = ({
   className = '',
   style = {},
 }) => {
-  const mergedTheme = useMemo(() => ({
-    ...DEFAULT_THEME,
-    ...theme,
-  }), [theme]);
-
   const cssVars = useMemo(() =>
-    themeToCSSVars(mergedTheme),
-    [mergedTheme]
+    themeToCSSVars(theme),
+    [theme]
   );
 
   const combinedStyle: React.CSSProperties = useMemo(() => ({

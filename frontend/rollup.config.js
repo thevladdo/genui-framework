@@ -7,19 +7,33 @@ import postcss from 'rollup-plugin-postcss';
 
 import packageJson from './package.json' assert { type: 'json' };
 
+const onwarn = (warning, warn) => {
+  const id = warning.id || (warning.ids && warning.ids[0]) || '';
+  if (
+    (warning.code === 'MODULE_LEVEL_DIRECTIVE' || warning.code === 'CIRCULAR_DEPENDENCY') &&
+    /node_modules/.test(id + (warning.message || ''))
+  ) {
+    return;
+  }
+  warn(warning);
+};
+
 export default [
   {
     input: 'src/index.ts',
+    onwarn,
     output: [
       {
         file: packageJson.main,
         format: 'cjs',
         sourcemap: true,
+        exports: 'named',
       },
       {
         file: packageJson.module,
         format: 'esm',
         sourcemap: true,
+        exports: 'named',
       },
     ],
     plugins: [
