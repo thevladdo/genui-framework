@@ -16,13 +16,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with: { node-version: 22 }
       - name: Build library
         working-directory: frontend
-        run: npm ci && npm run build
+        run: npm install && npm run build
       - name: Build studio
         working-directory: studio
-        run: npm ci && npm run build
+        run: npm install && npm run build
       - uses: actions/upload-pages-artifact@v3
         with: { path: studio/dist }
   deploy:
