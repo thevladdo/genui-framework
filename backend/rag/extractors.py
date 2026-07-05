@@ -13,14 +13,14 @@ The extraction backend is configuration, not code (EXTRACTOR_BACKEND):
 - "glmocr": GLM-OCR (0.9B vision model, MIT). State-of-the-art document
   parsing incl. scanned documents; self-hosted (vLLM/Ollama, ~2-4GB
   VRAM) keeps data in-house, or via the Z.ai cloud API (data leaves
-  your infra — opt-in consciously). `pip install glmocr`
+  your infra, opt-in consciously). `pip install glmocr`
 
 Routing rules:
 - txt/md are always decoded locally (no backend adds value there).
 - A backend only handles the formats it is good at (see _BACKEND_FORMATS);
   everything else falls through to the local parsers.
 - Runtime failures of a configured backend fall back to local with a
-  warning (fail-open) — except formats only the backend can handle
+  warning (fail-open), except formats only the backend can handle
   (e.g. images), which fail explicitly.
 - A configured backend whose package is missing raises ImportError
   loudly: that is a deployment mistake, not a degradation to hide.

@@ -1,7 +1,7 @@
 /**
  * Server-Sent Events reader over fetch
  *
- * EventSource only supports GET, but zone rendering needs a POST body —
+ * EventSource only supports GET, but zone rendering needs a POST body,
  * so the stream endpoint is consumed via fetch + ReadableStream and
  * parsed here. Handles chunk boundaries that split events.
  */

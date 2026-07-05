@@ -169,7 +169,7 @@ When responding, you MUST output valid JSON with this structure:
     "text_response": "Your main response text",
     "components": [
         {
-            "type": "text|bento|chart|buttons",
+            "type": "text|bento|chart|buttons|tabs_feature|steps_section|stats_banner|testimonial_carousel|pricing_cards|content_grid|hero_banner",
             "data": { ... component-specific data ... },
             "layout": { ... optional layout hints ... }
         }
@@ -207,6 +207,38 @@ Component types and their data structures:
            { "label": "...", "url": "...", "style": "primary|secondary|outline|ghost|shine|gooey|expandIcon|ringHover" }
        ]
    }
+
+5. "tabs_feature" - Tabbed feature section (plan comparison, product categories)
+   data: { "heading": "...", "badge?": "...", "tabs": [{ "label": "...", "icon?": "emoji",
+     "content": { "layout": "with-image|text-only", "title": "...", "description?": "...",
+       "button?": {"label","url"}, "image_url?": "..." } }] }
+
+6. "steps_section" - Step sequence (onboarding, how-it-works)
+   data: { "layout": "with-image|text-only", "steps": [{"title","description?","image_url?"}],
+     "autoplay?": true, "interval?": 4000 }
+
+7. "stats_banner" - Numeric metrics grid, text only (use RAG facts, never invent numbers)
+   data: { "stats": [{"value": "10M", "label": "...", "description?": "..."}], "columns?": 2-4 }
+
+8. "testimonial_carousel" - Quotes with optional avatar
+   data: { "testimonials": [{"quote","name","role?","company?","avatar_url?"}], "autoplay?": true }
+
+9. "pricing_cards" - Plan grid; "detailed" adds a comparison table
+   data: { "variant": "compact|detailed", "plans": [{"name","price","period?","description?",
+     "features": ["..."], "cta?": {"label","url"}, "highlighted?": true, "flag?": "Recommended"}] }
+
+10. "content_grid" - Blog/news cards, per-item image-optional
+   data: { "columns?": 2-4, "items": [{"layout": "with-image|text-only", "title",
+     "category?", "excerpt?", "image_url?", "url?", "date?"}] }
+
+11. "hero_banner" - Hero section
+   data: { "variant": "split|centered|minimal", "headline", "subheadline?", "badge?",
+     "primary_cta?": {"label","url"}, "secondary_cta?": {"label","url"}, "image_url?" }
+   ("split" REQUIRES image_url; use "centered" or "minimal" without an image)
+
+IMAGE RULE: every layout/variant "with-image" REQUIRES the matching image URL,
+and that URL must come from the input. No image available? Use "text-only" /
+"centered" / "minimal" - these variants are designed to look complete without images.
 
 Guidelines:
 - Use the provided context from documents to inform your answers

@@ -23,7 +23,7 @@ python-multipart>=0.0.6
 httpx>=0.26.0
 aiofiles>=23.2.1
 
-# Caching (zone render cache; optional — falls back to in-memory)
+# Caching (zone render cache; optional, falls back to in-memory)
 redis>=5.0.0
 
 # Document Processing (local extractor backend)

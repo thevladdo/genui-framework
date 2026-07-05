@@ -31,7 +31,8 @@ const Card: React.FC<CardProps> = ({ card }) => {
         />
       )}
 
-      <div className="genui-bento-card__overlay" />
+      {/* Readability gradient: only meaningful over a photo */}
+      {image && <div className="genui-bento-card__overlay" />}
 
       {badge && <span className="genui-bento-card__badge">{badge}</span>}
 
@@ -53,13 +54,17 @@ const Card: React.FC<CardProps> = ({ card }) => {
   // The default grid flows cards into the N-column layout
   // (genui-bento--cols-*). The named-area "complex" layout is opt-in via
   // the .genui-layout-complex class and assigned purely in CSS (nth-child),
-  // so no inline grid-area is applied here — applying one unconditionally
+  // so no inline grid-area is applied here. Applying one unconditionally
   // would collapse every card into the same cell in the simple layout.
+  // Image-optional degradation: without a cover the card gets an
+  // accent-tinted gradient (CSS) instead of an empty dark box
+  const cardClass = `genui-bento-card ${image ? '' : 'genui-bento-card--text-only'}`.trim();
+
   if (link) {
     return (
       <motion.a
         href={link}
-        className="genui-bento-card"
+        className={cardClass}
         target="_blank"
         rel="noopener noreferrer"
         {...motionProps}
@@ -70,7 +75,7 @@ const Card: React.FC<CardProps> = ({ card }) => {
   }
 
   return (
-    <motion.div className="genui-bento-card" {...motionProps}>
+    <motion.div className={cardClass} {...motionProps}>
       {content}
     </motion.div>
   );

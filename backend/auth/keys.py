@@ -1,6 +1,6 @@
 """
 API Key Registry
-Key parsing, validation, and tenant resolution — no web framework imports.
+Key parsing, validation, and tenant resolution, no web framework imports.
 
 Key model (pragmatic for a browser-called API, same approach as
 Algolia/Supabase publishable keys):

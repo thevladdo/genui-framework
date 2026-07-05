@@ -18,7 +18,7 @@ Everything removed is reported so it can surface in debug metadata.
 import re
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-# Absolute URLs (http/https) — captures until whitespace or closing delimiter
+# Absolute URLs (http/https): captures until whitespace or closing delimiter
 _ABSOLUTE_URL_RE = re.compile(r"https?://[^\s<>\"')\]}]+")
 
 # Relative paths like /products/electric-cars, preceded by a delimiter
@@ -140,7 +140,7 @@ class UrlGuard:
         - text: markdown links to non-allowed URLs collapse to their text.
         - chart: no URLs to check.
         - custom (host-registered) types: the data payload is walked
-          recursively — URL-named fields (url, link, href, src, image,
+          recursively: URL-named fields (url, link, href, src, image,
           *_url, ...) are checked against the whitelist; any string value
           with a dangerous scheme or a non-allowed absolute URL is removed;
           markdown links inside text values are checked too.

@@ -12,7 +12,7 @@ Semantics:
 Backends:
 - Redis (redis_url configured): shared across processes, survives restarts.
 - In-memory fallback: used when redis_url is unset or Redis is unreachable.
-  The cache always fails open — a cache outage degrades to live rendering,
+  The cache always fails open: a cache outage degrades to live rendering,
   it never breaks rendering.
 """
 

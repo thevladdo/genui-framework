@@ -9,8 +9,8 @@ whether the difference is statistically meaningful.
 Pure math (stdlib only), deliberately conservative in what it reports:
 - p_value: two-tailed
 - significant_95: p < 0.05
-- sample_warning: flagged when either arm has < 100 impressions —
-  treat any conclusion as preliminary below that.
+- sample_warning: flagged when either arm has < 100 impressions
+  (treat any conclusion as preliminary below that).
 """
 
 import math
@@ -29,7 +29,7 @@ def two_proportion_significance(
     Two-tailed two-proportion z-test between arm A and arm B CTRs.
 
     Returns None when the test cannot be computed (an arm without
-    impressions, or zero variance — e.g. no clicks anywhere).
+    impressions, or zero variance, e.g. no clicks anywhere).
     """
     if impressions_a <= 0 or impressions_b <= 0:
         return None

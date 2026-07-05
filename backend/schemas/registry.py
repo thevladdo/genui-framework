@@ -23,7 +23,11 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-BUILTIN_TYPES = ("bento", "chart", "text", "buttons")
+BUILTIN_TYPES = (
+    "bento", "chart", "text", "buttons",
+    "tabs_feature", "steps_section", "stats_banner",
+    "testimonial_carousel", "pricing_cards", "content_grid", "hero_banner",
+)
 
 _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
 

@@ -4,6 +4,7 @@ FastAPI application exposing the multi-agent system for GenUI frontend.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
 
@@ -318,6 +319,9 @@ async def upload_document(
         content_length = len(request.content)
 
         if content_length < 10000:
+            request.metadata.setdefault(
+                "indexed_at", datetime.now(timezone.utc).isoformat()
+            )
             chunks = chunker.chunk_text(
                 text=request.content,
                 metadata=request.metadata,
@@ -388,7 +392,10 @@ async def upload_document_file(
         chunker = create_chunker()
         vector_store = create_vector_store()
 
-        metadata: Dict[str, Any] = {"title": source_name}
+        metadata: Dict[str, Any] = {
+            "title": source_name,
+            "indexed_at": datetime.now(timezone.utc).isoformat(),
+        }
         if url:
             metadata["url"] = url
         if file.filename:
@@ -436,6 +443,7 @@ async def _process_document_background(
         chunker = create_chunker()
         vector_store = create_vector_store()
 
+        metadata.setdefault("indexed_at", datetime.now(timezone.utc).isoformat())
         chunks = chunker.chunk_text(
             text=content,
             metadata=metadata,
@@ -488,6 +496,7 @@ async def search_documents(
         results = await vector_store.search_async(
             query=request.query,
             top_k=request.top_k,
+            score_threshold=0.0,  # preview shows everything; real scores are the point
             tenant=auth.tenant,
         )
         return {

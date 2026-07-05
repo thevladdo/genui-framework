@@ -7,7 +7,7 @@ These schemas serve two purposes:
    native structured output (response_format), so the model is constrained
    at generation time.
 2. Every component coming back from the model is validated against them
-   server-side before reaching the frontend — an invalid component is
+   server-side before reaching the frontend: an invalid component is
    dropped (and reported), it never breaks the rest of the render.
 
 The component vocabulary mirrors the frontend renderers in
@@ -19,7 +19,7 @@ ComponentRenderer normalizes them to camelCase.
 import logging
 from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Union
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
 from .registry import ComponentTypeDef
 
@@ -105,6 +105,151 @@ class ButtonsData(_SchemaModel):
 
 
 
+# Enterprise section components.
+# Image-optional pattern: layout is EXPLICIT so the LLM always picks a
+# variant and the frontend knows which shape to render. Validators
+# enforce coherence: "with-image" without an image URL is invalid (the
+# component gets dropped, never rendered half-empty).
+ImageLayout = Literal["with-image", "text-only"]
+
+
+class CTALinkModel(_SchemaModel):
+    label: str = Field(..., min_length=1)
+    url: Optional[str] = None
+
+
+class FeatureTabContent(_SchemaModel):
+    layout: ImageLayout = "text-only"
+    badge: Optional[str] = None
+    title: str = Field(..., min_length=1)
+    description: Optional[str] = None
+    button: Optional[CTALinkModel] = None
+    image_url: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _image_coherence(self) -> "FeatureTabContent":
+        if self.layout == "with-image" and not self.image_url:
+            raise ValueError("layout 'with-image' requires image_url")
+        return self
+
+
+class FeatureTab(_SchemaModel):
+    label: str = Field(..., min_length=1)
+    icon: Optional[str] = Field(default=None, max_length=8)
+    content: FeatureTabContent
+
+
+class TabsFeatureData(_SchemaModel):
+    """Tabbed feature section (plan comparison, SaaS highlights)."""
+    badge: Optional[str] = None
+    heading: str = Field(..., min_length=1)
+    description: Optional[str] = None
+    tabs: List[FeatureTab] = Field(..., min_length=1, max_length=6)
+
+
+class StepItem(_SchemaModel):
+    title: str = Field(..., min_length=1)
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+
+
+class StepsSectionData(_SchemaModel):
+    """Animated step sequence (onboarding, purchase flow)."""
+    layout: ImageLayout = "text-only"
+    steps: List[StepItem] = Field(..., min_length=1, max_length=8)
+    autoplay: Optional[bool] = None
+    interval: Optional[int] = Field(default=None, ge=1500, le=20000)
+
+    @model_validator(mode="after")
+    def _image_coherence(self) -> "StepsSectionData":
+        if self.layout == "with-image" and not any(s.image_url for s in self.steps):
+            raise ValueError("layout 'with-image' requires at least one step image_url")
+        return self
+
+
+class StatItem(_SchemaModel):
+    value: str = Field(..., min_length=1, max_length=24)
+    label: str = Field(..., min_length=1)
+    description: Optional[str] = None
+
+
+class StatsBannerData(_SchemaModel):
+    """Numeric metrics grid: pure text, values typically from RAG."""
+    stats: List[StatItem] = Field(..., min_length=1, max_length=8)
+    columns: Optional[Literal[2, 3, 4]] = None
+
+
+class TestimonialItem(_SchemaModel):
+    quote: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1)
+    role: Optional[str] = None
+    company: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+
+class TestimonialCarouselData(_SchemaModel):
+    """Quote carousel; missing avatars degrade to initials."""
+    testimonials: List[TestimonialItem] = Field(..., min_length=1, max_length=12)
+    autoplay: Optional[bool] = None
+    interval: Optional[int] = Field(default=None, ge=2500, le=30000)
+
+
+class PricingPlanModel(_SchemaModel):
+    name: str = Field(..., min_length=1)
+    price: str = Field(..., min_length=1, max_length=24)
+    period: Optional[str] = Field(default=None, max_length=16)
+    description: Optional[str] = None
+    features: List[str] = Field(default_factory=list, max_length=16)
+    cta: Optional[CTALinkModel] = None
+    highlighted: Optional[bool] = None
+    flag: Optional[str] = Field(default=None, max_length=32)
+
+
+class PricingCardsData(_SchemaModel):
+    """Plan grid; 'detailed' adds a feature comparison table."""
+    plans: List[PricingPlanModel] = Field(..., min_length=1, max_length=4)
+    variant: Literal["compact", "detailed"] = "compact"
+
+
+class ContentGridItemModel(_SchemaModel):
+    layout: ImageLayout = "text-only"
+    title: str = Field(..., min_length=1)
+    category: Optional[str] = None
+    excerpt: Optional[str] = None
+    image_url: Optional[str] = None
+    url: Optional[str] = None
+    date: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _image_coherence(self) -> "ContentGridItemModel":
+        if self.layout == "with-image" and not self.image_url:
+            raise ValueError("layout 'with-image' requires image_url")
+        return self
+
+
+class ContentGridData(_SchemaModel):
+    """Blog/news card grid with per-item image-optional layout."""
+    items: List[ContentGridItemModel] = Field(..., min_length=1, max_length=12)
+    columns: Optional[Literal[2, 3, 4]] = None
+
+
+class HeroBannerData(_SchemaModel):
+    """Parametric hero: split (text+image) | centered | minimal."""
+    variant: Literal["split", "centered", "minimal"] = "centered"
+    badge: Optional[str] = None
+    headline: str = Field(..., min_length=1)
+    subheadline: Optional[str] = None
+    primary_cta: Optional[CTALinkModel] = None
+    secondary_cta: Optional[CTALinkModel] = None
+    image_url: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _image_coherence(self) -> "HeroBannerData":
+        if self.variant == "split" and not self.image_url:
+            raise ValueError("variant 'split' requires image_url")
+        return self
+
+
 # Components (discriminated by "type")
 class _ComponentBase(_SchemaModel):
     layout: Optional[Dict[str, Any]] = None
@@ -130,12 +275,54 @@ class ButtonsComponentModel(_ComponentBase):
     data: ButtonsData
 
 
+class TabsFeatureComponentModel(_ComponentBase):
+    type: Literal["tabs_feature"]
+    data: TabsFeatureData
+
+
+class StepsSectionComponentModel(_ComponentBase):
+    type: Literal["steps_section"]
+    data: StepsSectionData
+
+
+class StatsBannerComponentModel(_ComponentBase):
+    type: Literal["stats_banner"]
+    data: StatsBannerData
+
+
+class TestimonialCarouselComponentModel(_ComponentBase):
+    type: Literal["testimonial_carousel"]
+    data: TestimonialCarouselData
+
+
+class PricingCardsComponentModel(_ComponentBase):
+    type: Literal["pricing_cards"]
+    data: PricingCardsData
+
+
+class ContentGridComponentModel(_ComponentBase):
+    type: Literal["content_grid"]
+    data: ContentGridData
+
+
+class HeroBannerComponentModel(_ComponentBase):
+    type: Literal["hero_banner"]
+    data: HeroBannerData
+
+
 GenUIComponentModel = Annotated[
     Union[
         TextComponentModel,
         BentoComponentModel,
         ChartComponentModel,
         ButtonsComponentModel,
+        TabsFeatureComponentModel,
+        StepsSectionComponentModel,
+        StatsBannerComponentModel,
+        TestimonialCarouselComponentModel,
+        PricingCardsComponentModel,
+        ContentGridComponentModel,
+        HeroBannerComponentModel,
     ],
     Field(discriminator="type"),
 ]
@@ -180,7 +367,7 @@ def _validate_custom_data(
     Returns an error summary, or None when valid.
 
     A broken *schema* (developer error) is logged but does not drop the
-    component — the host's content should not disappear because of a
+    component. The host's content should not disappear because of a
     typo in their schema definition.
     """
     try:
@@ -221,7 +408,7 @@ def validate_components(
     their JSON Schema; anything else is dropped.
 
     Returns:
-        (valid_components, errors) — errors are human-readable summaries
+        (valid_components, errors): errors are human-readable summaries
         of what was dropped, for debug metadata and logging.
     """
     valid: List[ValidatedComponent] = []
@@ -279,7 +466,7 @@ def zone_output_json_schema(
     structured output (response_format=json_schema).
 
     When custom component types are in play, their schemas are added to
-    the components union — otherwise the provider-side schema would
+    the components union, otherwise the provider-side schema would
     steer the model away from the very types the host registered.
     """
     schema = ZoneAgentOutput.model_json_schema()

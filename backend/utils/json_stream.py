@@ -10,7 +10,7 @@ closing brace arrives.
 
 The parser is a small character-level state machine that survives
 arbitrary chunk boundaries (a chunk may split a string, an escape
-sequence, or a brace). It never throws on malformed input — an object
+sequence, or a brace). It never throws on malformed input: an object
 that fails json.loads is simply skipped.
 """
 

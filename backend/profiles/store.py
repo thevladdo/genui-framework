@@ -33,7 +33,7 @@ class ProfileStore:
             redis_url: Redis connection URL; None uses in-memory storage.
             ttl_seconds: Profile retention (0 = keep forever). Useful for
                 data-minimization policies (e.g. auto-expire after 90 days
-                of inactivity — the TTL refreshes on every write).
+                of inactivity; the TTL refreshes on every write).
         """
         self.key_prefix = key_prefix
         self.ttl_seconds = ttl_seconds

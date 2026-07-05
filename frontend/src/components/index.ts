@@ -15,6 +15,27 @@ export type { ComponentRendererProps } from './ComponentRenderer';
 
 export { ComponentErrorBoundary } from './ErrorBoundary';
 
+export { TabsFeature } from './TabsFeature';
+export type { TabsFeatureProps } from './TabsFeature';
+
+export { StepsSection } from './StepsSection';
+export type { StepsSectionProps } from './StepsSection';
+
+export { StatsBanner } from './StatsBanner';
+export type { StatsBannerProps } from './StatsBanner';
+
+export { TestimonialCarousel } from './TestimonialCarousel';
+export type { TestimonialCarouselProps } from './TestimonialCarousel';
+
+export { PricingCards } from './PricingCards';
+export type { PricingCardsProps } from './PricingCards';
+
+export { ContentGrid } from './ContentGrid';
+export type { ContentGridProps } from './ContentGrid';
+
+export { HeroBanner } from './HeroBanner';
+export type { HeroBannerProps } from './HeroBanner';
+
 export { GenUISection } from './GenUISection';
 export { GenUISection as default } from './GenUISection';
 

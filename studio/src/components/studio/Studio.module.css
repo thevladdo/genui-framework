@@ -1,0 +1,407 @@
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 0 32px 64px;
+  max-width: 1280px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.pageHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.connectedTo {
+  font-size: 13px;
+  color: var(--st-text-muted);
+}
+
+.connectedTo code {
+  font-family: var(--st-font-mono);
+  color: var(--st-text);
+}
+
+.disconnect {
+  border: 1px solid var(--st-border);
+  background: transparent;
+  color: var(--st-text-muted);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 160ms var(--st-ease), border-color 160ms var(--st-ease);
+}
+
+.disconnect:hover {
+  color: var(--st-text);
+  border-color: var(--st-border-strong);
+}
+
+/* --- Connect gate ----------------------------------------------------- */
+
+.gateWrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 48px 16px 64px;
+}
+
+.gate {
+  width: min(480px, 100%);
+  padding: 40px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: center;
+}
+
+.gateShield {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 6px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(59, 130, 246, 0.12);
+  font-size: 22px;
+}
+
+.gateTitle {
+  font-size: 26px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.gateSub {
+  margin: 0 0 16px;
+  color: var(--st-text-muted);
+  font-size: 14px;
+}
+
+.fieldLabel {
+  text-align: left;
+  font-size: 13px;
+  color: var(--st-text-muted);
+  margin-top: 8px;
+}
+
+.field {
+  padding: 12px 14px;
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--st-text);
+  font-family: var(--st-font-mono);
+  font-size: 14px;
+}
+
+.gateWarning {
+  margin: 14px 0 4px;
+  padding: 12px 14px;
+  border-radius: var(--st-radius-sm);
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  color: var(--st-warning);
+  font-size: 13px;
+  text-align: left;
+  line-height: 1.5;
+}
+
+.gateFootnote {
+  color: var(--st-text-faint);
+  font-size: 13px;
+  text-align: center;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.primaryButton {
+  padding: 13px 20px;
+  border: none;
+  border-radius: var(--st-radius-sm);
+  background: var(--st-accent);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 180ms var(--st-ease);
+}
+
+.primaryButton:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.primaryButton:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.error {
+  margin: 6px 0 0;
+  color: var(--st-danger);
+  font-size: 13px;
+  text-align: left;
+}
+
+/* --- Upload ---------------------------------------------------------- */
+
+.uploadCard {
+  padding: 20px;
+}
+
+.dropzone,
+.dropzoneActive {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 36px 16px;
+  border: 1px dashed var(--st-border-strong);
+  border-radius: var(--st-radius-sm);
+  transition: border-color 160ms var(--st-ease), background 160ms var(--st-ease);
+}
+
+.dropzoneActive {
+  border-color: var(--st-accent);
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.dropIcon {
+  font-size: 22px;
+  color: var(--st-text-muted);
+}
+
+.dropTitle {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.dropFormats {
+  margin: 0;
+  font-family: var(--st-font-mono);
+  font-size: 12px;
+  color: var(--st-text-faint);
+}
+
+.browse {
+  border: none;
+  background: none;
+  color: var(--st-accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.uploadList {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.uploadItem {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.uploadName {
+  font-family: var(--st-font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uploadBusy { color: var(--st-text-muted); }
+.uploadDone { color: var(--st-success); }
+.uploadError { color: var(--st-danger); text-align: right; }
+
+/* --- Table ------------------------------------------------------------ */
+
+.tableCard {
+  padding: 24px;
+}
+
+.tableHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.countPill {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--st-border);
+  font-size: 12px;
+  color: var(--st-text-muted);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--st-text-faint);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--st-border);
+}
+
+.table td {
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--st-border);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.tdName {
+  font-family: var(--st-font-mono);
+  font-size: 13px;
+}
+
+.tdMuted {
+  color: var(--st-text-muted);
+}
+
+.typePill {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--st-border-strong);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.thActions,
+.tdActions {
+  text-align: right;
+}
+
+.deleteButton {
+  border: none;
+  background: transparent;
+  color: var(--st-text-muted);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 8px;
+  transition: color 160ms var(--st-ease), background 160ms var(--st-ease);
+}
+
+.deleteButton:hover {
+  color: var(--st-danger);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.tableEmpty {
+  margin: 8px 0 0;
+  color: var(--st-text-muted);
+  font-size: 14px;
+}
+
+/* --- Query tester ------------------------------------------------------ */
+
+.testerCard {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.testerSub {
+  margin: -4px 0 4px;
+  color: var(--st-text-muted);
+  font-size: 14px;
+}
+
+.testerForm {
+  display: flex;
+  gap: 12px;
+}
+
+.testerInput {
+  flex: 1;
+  padding: 13px 16px;
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--st-text);
+  font-family: var(--st-font-mono);
+  font-size: 14px;
+}
+
+.resultCard {
+  padding: 16px;
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.resultHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.scorePill {
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: var(--st-accent);
+  color: #ffffff;
+  font-family: var(--st-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.resultSource {
+  font-family: var(--st-font-mono);
+  font-size: 12px;
+  color: var(--st-text-muted);
+}
+
+.resultContent {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+@media (max-width: 720px) {
+  .page {
+    padding: 0 16px 48px;
+  }
+
+  .testerForm {
+    flex-direction: column;
+  }
+
+  .table th:nth-child(4),
+  .table td:nth-child(4) {
+    display: none;
+  }
+}

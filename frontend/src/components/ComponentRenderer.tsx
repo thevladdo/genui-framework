@@ -15,6 +15,13 @@ import { TextComponent } from './TextComponent';
 import { BentoComponent } from './BentoComponent';
 import { ChartComponent } from './ChartComponent';
 import { ButtonsComponent } from './ButtonsComponent';
+import { TabsFeature } from './TabsFeature';
+import { StepsSection } from './StepsSection';
+import { StatsBanner } from './StatsBanner';
+import { TestimonialCarousel } from './TestimonialCarousel';
+import { PricingCards } from './PricingCards';
+import { ContentGrid } from './ContentGrid';
+import { HeroBanner } from './HeroBanner';
 import { ComponentErrorBoundary } from './ErrorBoundary';
 import { getRegisteredGenUIComponent } from '../registry';
 
@@ -56,7 +63,7 @@ const renderSingleComponent = (
   const { type, layout } = component;
 
   // A component with no data object can't render anything useful and
-  // would throw downstream (.map/.split on undefined) — skip it quietly.
+  // would throw downstream (.map/.split on undefined), so skip it quietly.
   if (component.data == null || typeof component.data !== 'object') {
     if (!getRegisteredGenUIComponent(type)) {
       console.warn(`GenUI: component "${type}" has no data, skipping`);
@@ -90,6 +97,27 @@ const renderSingleComponent = (
       case 'buttons':
         return <ButtonsComponent data={data as ButtonsComponentData} />;
 
+      case 'tabs_feature':
+        return <TabsFeature data={data} />;
+
+      case 'steps_section':
+        return <StepsSection data={data} />;
+
+      case 'stats_banner':
+        return <StatsBanner data={data} />;
+
+      case 'testimonial_carousel':
+        return <TestimonialCarousel data={data} />;
+
+      case 'pricing_cards':
+        return <PricingCards data={data} />;
+
+      case 'content_grid':
+        return <ContentGrid data={data} />;
+
+      case 'hero_banner':
+        return <HeroBanner data={data} />;
+
       default: {
         // Host-registered custom components (see registerGenUIComponent).
         // They receive the data exactly as validated against the host's
@@ -110,7 +138,7 @@ const renderSingleComponent = (
   };
 
   // Isolate each component: a render-time throw must not take down the
-  // sibling components — or the host application.
+  // sibling components, or the host application.
   const guarded = (
     <ComponentErrorBoundary label={type}>
       {renderComponent()}

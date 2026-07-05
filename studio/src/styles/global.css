@@ -1,0 +1,128 @@
+/*
+ * GenUI Studio design tokens.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --st-bg: #0a0a0c;
+  --st-surface: rgba(255, 255, 255, 0.03);
+  --st-surface-strong: rgba(0, 0, 0, 0.6);
+  --st-border: rgba(255, 255, 255, 0.08);
+  --st-border-strong: rgba(255, 255, 255, 0.14);
+  --st-text: #ffffff;
+  --st-text-muted: #9ca3af;
+  --st-text-faint: #6b7280;
+  --st-accent: #3b82f6;
+  --st-danger: #ef4444;
+  --st-warning: #f59e0b;
+  --st-success: #22c55e;
+
+  --st-glow: 0 -20px 80px -20px rgba(134, 134, 240, 0.12) inset;
+  --st-blur: 20px;
+
+  --st-radius: 24px;
+  --st-radius-sm: 12px;
+  --st-radius-lg: 32px;
+
+  --st-font: 'Inter', system-ui, -apple-system, sans-serif;
+  --st-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+  --st-ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background:
+    radial-gradient(1200px 700px at 85% -10%, rgba(59, 130, 246, 0.08), transparent 60%),
+    radial-gradient(900px 600px at -10% 110%, rgba(134, 134, 240, 0.06), transparent 60%),
+    var(--st-bg);
+  color: var(--st-text);
+  font-family: var(--st-font);
+  font-size: 16px;
+  line-height: 1.5;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font-family: inherit;
+}
+
+::selection {
+  background: rgba(59, 130, 246, 0.35);
+}
+
+.st-display {
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  line-height: 1.02;
+  margin: 0;
+}
+
+.st-section-title {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  font-size: 20px;
+  margin: 0;
+}
+
+.st-code-label {
+  font-family: var(--st-font-mono);
+  font-size: 13px;
+  color: var(--st-text-faint);
+  margin: 0 0 40px;
+}
+
+.st-glass {
+  background: var(--st-surface-strong);
+  backdrop-filter: blur(var(--st-blur));
+  -webkit-backdrop-filter: blur(var(--st-blur));
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius);
+  box-shadow: var(--st-glow);
+}
+
+:focus-visible {
+  outline: 2px solid var(--st-accent);
+  outline-offset: 2px;
+}
+
+[data-accent-light='true'] .genui-button--primary,
+[data-accent-light='true'] .genui-button--shine,
+[data-accent-light='true'] .genui-button--gooey,
+[data-accent-light='true'] .genui-button--expandIcon {
+  color: #0a0a0c;
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

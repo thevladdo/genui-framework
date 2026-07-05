@@ -76,7 +76,7 @@ export interface GenUIZoneProps {
   /**
    * Backend cache strategy (default: 'segment').
    * 'segment' serves per-segment cached renders with stale-while-revalidate;
-   * 'live' always calls the LLM — reserve it for genuinely dynamic zones.
+   * 'live' always calls the LLM. Reserve it for genuinely dynamic zones.
    */
   cacheStrategy?: 'segment' | 'live';
   /**

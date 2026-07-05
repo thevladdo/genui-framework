@@ -14,7 +14,7 @@ Output guarantees (enforced by the system, not by the prompt):
 - Every component is validated against the Pydantic schemas in
   backend/schemas; invalid components are dropped, not propagated.
 - URLs in the output must exist in the input (pinned content, developer
-  prompts, RAG documents, page context) — invented URLs are stripped
+  prompts, RAG documents, page context). Invented URLs are stripped
   by the UrlGuard.
 - Pinned content is verified after generation and appended if missing.
 """
@@ -104,7 +104,7 @@ You MUST output valid JSON with this structure:
 {
     "components": [
         {
-            "type": "bento|chart|text|buttons",
+            "type": "bento|chart|text|buttons|tabs_feature|steps_section|stats_banner|testimonial_carousel|pricing_cards|content_grid|hero_banner",
             "data": { ... component-specific data ... },
             "layout": { ... optional layout hints ... }
         }
@@ -142,6 +142,38 @@ COMPONENT TYPES:
 
 4. "buttons" - Action buttons
    data: { "buttons": [{ "label": "...", "url": "...", "style": "primary|secondary|outline|ghost|shine|gooey|expandIcon|ringHover" }] }
+
+5. "tabs_feature" - Tabbed feature section (plan comparison, product categories)
+   data: { "heading": "...", "badge?": "...", "tabs": [{ "label": "...", "icon?": "emoji",
+     "content": { "layout": "with-image|text-only", "title": "...", "description?": "...",
+       "button?": {"label","url"}, "image_url?": "..." } }] }
+
+6. "steps_section" - Step sequence (onboarding, how-it-works)
+   data: { "layout": "with-image|text-only", "steps": [{"title","description?","image_url?"}],
+     "autoplay?": true, "interval?": 4000 }
+
+7. "stats_banner" - Numeric metrics grid, text only (use RAG facts, never invent numbers)
+   data: { "stats": [{"value": "10M", "label": "...", "description?": "..."}], "columns?": 2-4 }
+
+8. "testimonial_carousel" - Quotes with optional avatar
+   data: { "testimonials": [{"quote","name","role?","company?","avatar_url?"}], "autoplay?": true }
+
+9. "pricing_cards" - Plan grid; "detailed" adds a comparison table
+   data: { "variant": "compact|detailed", "plans": [{"name","price","period?","description?",
+     "features": ["..."], "cta?": {"label","url"}, "highlighted?": true, "flag?": "Recommended"}] }
+
+10. "content_grid" - Blog/news cards, per-item image-optional
+   data: { "columns?": 2-4, "items": [{"layout": "with-image|text-only", "title",
+     "category?", "excerpt?", "image_url?", "url?", "date?"}] }
+
+11. "hero_banner" - Hero section
+   data: { "variant": "split|centered|minimal", "headline", "subheadline?", "badge?",
+     "primary_cta?": {"label","url"}, "secondary_cta?": {"label","url"}, "image_url?" }
+   ("split" REQUIRES image_url; use "centered" or "minimal" without an image)
+
+IMAGE RULE: every layout/variant "with-image" REQUIRES the matching image URL,
+and that URL must come from the input. No image available? Use "text-only" /
+"centered" / "minimal" - these variants are designed to look complete without images.
 
 CRITICAL RULES:
 
@@ -212,14 +244,14 @@ CRITICAL RULES:
         Render a zone progressively. Yields events:
 
             {"type": "component", "component": {...}}
-                — one per generated component, already validated against
+                one per generated component, already validated against
                   the schemas and passed through the URL whitelist
             {"type": "complete", "result": ZoneRenderResult}
-                — the authoritative final result (includes pinned-content
+                the authoritative final result (includes pinned-content
                   enforcement; clients should replace streamed state with it)
 
         Any failure degrades to a single complete event with the
-        fallback render — the stream never errors out mid-way.
+        fallback render. The stream never errors out mid-way.
         """
         try:
             custom_types = merge_custom_types(request.custom_components)

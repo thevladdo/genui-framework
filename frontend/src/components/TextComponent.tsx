@@ -5,7 +5,7 @@
  * Uses the bundled react-markdown instead of a hand-rolled parser so that
  * headings, lists, nested emphasis, code and links all render correctly.
  * Link URLs pass through sanitizeUrl (urlTransform), so a markdown link
- * with a dangerous scheme is stripped — defense-in-depth matching the
+ * with a dangerous scheme is stripped: defense-in-depth matching the
  * URL whitelist applied to every other component.
  */
 

@@ -4,7 +4,7 @@ ProfileAgent, BehaveAgent).
 
 datapizza ships one client class per provider; module paths differ
 between versions, so candidates are tried in order and unknown setups
-fall back to the OpenAI client with a loud warning — a misconfigured
+fall back to the OpenAI client with a loud warning. A misconfigured
 provider must degrade, not crash the chat pipeline.
 """
 

@@ -3,13 +3,13 @@ Holdout Assignment Module
 Deterministic experiment-arm assignment for measuring personalization uplift.
 
 The question an enterprise buyer asks is "does personalization beat my
-static page?" — answerable only with a control group. With a holdout
+static page?", answerable only with a control group. With a holdout
 configured, X% of identified users get the *non-personalized* render
 (control), the rest get the personalized one. Comparing click-through
 rates between arms gives the uplift.
 
 Properties:
-- Sticky: assignment is a pure hash of (salt, user_id) — the same user
+- Sticky: assignment is a pure hash of (salt, user_id); the same user
   always lands in the same arm, across sessions and processes. Changing
   the salt reshuffles all assignments (= starts a new experiment).
 - Anonymous users (no user_id) are excluded (ARM_NONE): without a stable

@@ -1,6 +1,6 @@
 """
 Audit Log
-Append-only record of what was shown to whom — a compliance requirement
+Append-only record of what was shown to whom, a compliance requirement
 in regulated sectors, where "why did user X see content Y on date Z?"
 must be answerable.
 
@@ -12,7 +12,7 @@ Sink:
 - AUDIT_LOG_PATH empty -> emitted on the "genui.audit" logger (INFO),
   so any structured-logging pipeline can pick them up.
 
-The raw API key is never audited — only its fingerprint.
+The raw API key is never audited, only its fingerprint.
 """
 
 import json

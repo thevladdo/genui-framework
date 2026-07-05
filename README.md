@@ -70,6 +70,40 @@ GenUI System is a comprehensive framework for building **Generative User Interfa
 
 ---
 
+## 🎛️ GenUI Studio
+
+**GenUI Studio** is the companion web app for building with the framework — a single SPA (`studio/`, React + Vite) with two tools. Run it locally with `cd studio && npm run dev`.
+
+<div align="center">
+  <br />
+  <img src="./studio/screenshots/Studio_HP.png" alt="GenUI Studio — homepage with Theme Playground and Content Studio" width="100%" height="auto" />
+  <br /><br />
+</div>
+
+### 🎨 Theme Playground
+
+Configure the entire `--genui-*` token dictionary in real time and watch **every real framework component** (not mockups) update live: hero banners, tabs, pricing, stats, testimonials, bento, charts, and both `with-image` / `text-only` variants. Toggle light/dark, tune radius scale, blur, spacing, accent, brand surfaces, heading weight, and font. Export the result as a `GenUITheme` object, CSS variables, JSON, or copy a **shareable link** that encodes the theme in the URL.
+
+<div align="center">
+  <br />
+  <img src="./studio/screenshots/Studio_ThemePlayground.png" alt="GenUI Studio — Theme Playground with live component preview and token controls" width="100%" height="auto" />
+  <br /><br />
+</div>
+
+### 📚 Content Studio
+
+Manage the RAG knowledge base that feeds the AI: connect to your backend (URL + admin key, stored only in the browser session), **drag-and-drop documents** (PDF, DOCX, HTML, TXT, MD, images), browse the indexed knowledge base with chunk counts, and **test retrieval queries** to see exactly which passages the AI would surface, with similarity scores.
+
+<div align="center">
+  <br />
+  <img src="./studio/screenshots/Studio_ContentStudio.png" alt="GenUI Studio — Content Studio with document upload, knowledge base table, and query tester" width="100%" height="auto" />
+  <br /><br />
+</div>
+
+> **Note:** the Content Studio requires a reachable backend and an admin key, so for now it runs **locally only** (`npm run dev`). On the public GitHub Pages build it shows an "available locally" notice. A hosted version arrives with proper user auth on the roadmap.
+
+---
+
 # 📖 Usage Guide
 
 ## 🚀 Quick Start
@@ -185,7 +219,7 @@ import { GenUIZone } from "genui-framework";
   preferredComponentType="bento"
   maxItems={6}
   debug // shows reasoning, segment, cache status — remove in production
-/>
+/>;
 ```
 
 Open the page: you'll see a loading skeleton, then the generated cards. The `debug` panel underneath tells you _why_ you're seeing what you're seeing.
@@ -221,7 +255,7 @@ import { GenUIZone } from "genui-framework";
   basePrompt="Show recommended articles"
   preferredComponentType="bento"
   maxItems={6}
-/>
+/>;
 ```
 
 #### Full Props Reference
@@ -363,7 +397,7 @@ const contextPrompt = `
   contextPrompt={contextPrompt}
   preferredComponentType="bento"
   maxItems={6}
-/>
+/>;
 ```
 
 ---
@@ -419,7 +453,7 @@ const FallbackBento = () => (
   apiUrl="http://localhost:8000"
   emptyComponent={<FallbackBento />}
   errorComponent={() => <FallbackBento />}
-/>
+/>;
 ```
 
 ---
@@ -479,7 +513,7 @@ function ChatBot() {
     }
   };
 
-  return <ChatUI onSend={handleSend} history={history} loading={isLoading} />
+  return <ChatUI onSend={handleSend} history={history} loading={isLoading} />;
 }
 ```
 
@@ -547,7 +581,7 @@ import { BentoComponent } from "genui-framework";
     columns: 3, // 2, 3, or 4
     gap: 16, // Gap in pixels
   }}
-/>
+/>;
 ```
 
 ### ButtonsComponent — Animated Buttons
@@ -593,7 +627,7 @@ import { ButtonsComponent } from "genui-framework";
     align: "center", // "start" | "center" | "end"
     gap: 12, // Custom gap in pixels
   }}
-/>
+/>;
 ```
 
 #### Button Variants
@@ -629,7 +663,7 @@ import { ChartComponent } from "genui-framework";
     showGrid: true,
     height: 300,
   }}
-/>
+/>;
 ```
 
 ### TextComponent — Styled Text
@@ -642,8 +676,40 @@ import { TextComponent } from "genui-framework";
     content: "This is **markdown** supported text with _emphasis_.",
     style: "normal", // "normal" | "emphasis" | "note" | "heading"
   }}
-/>
+/>;
 ```
+
+---
+
+### Enterprise Section Components
+
+Seven section-level components for editorial, e-commerce, insurance, SaaS and corporate portals — same token system, same validation pipeline, all **image-optional by design**: every image-bearing variant declares `layout: "with-image" | "text-only"` (or a hero `variant`), the backend schema enforces coherence (`with-image` without an `image_url` is rejected), and the text-only shape is a _designed_ alternative (accent gradients, emphasized typography), never a card with a hole.
+
+| Type                   | Use case                                                      | Image-optional           |
+| ---------------------- | ------------------------------------------------------------- | ------------------------ |
+| `tabs_feature`         | plan comparison, SaaS highlights, product categories          | per-tab `content.layout` |
+| `steps_section`        | onboarding, how-it-works, purchase flow (autoplay + progress) | section `layout`         |
+| `stats_banner`         | numeric metrics ("10M users") — populate from RAG facts       | text-only by design      |
+| `testimonial_carousel` | quotes with avatar → initials fallback                        | avatar optional          |
+| `pricing_cards`        | plan grid; `variant: "detailed"` adds a comparison table      | text-only by design      |
+| `content_grid`         | blog/news cards                                               | per-item `layout`        |
+| `hero_banner`          | hero: `split` (requires image) · `centered` · `minimal`       | variant chain fallback   |
+
+```json
+{
+  "type": "hero_banner",
+  "data": {
+    "variant": "centered",
+    "headline": "Coverage that adapts",
+    "subheadline": "Personalized in real time.",
+    "primary_cta": { "label": "Get a quote", "url": "/quote" }
+  }
+}
+```
+
+### Semantic tokens & light mode
+
+New components consume **level-2 semantic tokens** — rebrand by overriding just these: `--genui-surface-1/2/3`, `--genui-border-subtle/strong`, `--genui-text-primary/secondary/tertiary/on-accent`, `--genui-radius-sm/md/lg/full`, `--genui-shadow-sm/md/lg`. Dark is the default; switch any subtree with `[data-theme="light"]` (or re-assert `[data-theme="dark"]` when nesting).
 
 ---
 
@@ -686,7 +752,7 @@ registerGenUIComponent("hero_banner", ({ data }) => (
       },
     },
   ]}
-/>
+/>;
 ```
 
 What the framework guarantees for custom components:

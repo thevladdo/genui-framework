@@ -8,17 +8,14 @@
     "strict": true,
     "noEmit": false,
     "declaration": true,
+    "rootDir": "src",
     "declarationDir": "dist",
     "outDir": "dist",
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "isolatedModules": true,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"]
-    }
+    "isolatedModules": true
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

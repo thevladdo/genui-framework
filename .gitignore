@@ -356,3 +356,6 @@ temp/
 
 # Turbo
 .turbo
+
+*.md
+!README.md

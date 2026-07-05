@@ -5,7 +5,7 @@ JSON-constrained completion and raw-delta streaming.
 
 The server-side guarantees (Pydantic/jsonschema validation, URL
 whitelist, pinned enforcement) do NOT depend on the provider honoring
-the schema — provider-native structured output is an optimization, the
+the schema. Provider-native structured output is an optimization, the
 validation pipeline is the guarantee. This keeps the interface small
 enough that adding a provider is one file.
 """

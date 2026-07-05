@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     chunk_size: int = 512
     chunk_overlap: int = 50
     top_k_retrieval: int = 5
-    similarity_threshold: float = 0.7
+    similarity_threshold: float = 0.35
 
     # Document Extraction (file uploads)
     extractor_backend: str = Field(

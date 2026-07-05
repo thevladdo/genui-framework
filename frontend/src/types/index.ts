@@ -28,6 +28,26 @@ export interface GenUITheme {
   fontFamily?: string;
   /** Base font size */
   fontSize?: string;
+  /** Glassmorphism backdrop blur, e.g. '20px' (default from CSS: 20px) */
+  glassBlur?: string;
+  /** Spacing scale: multiplies every --genui-spacing-* token (default: 'base') */
+  spacingScale?: 'sm' | 'base' | 'lg';
+  /** Color mode: emits data-theme on the section (default: dark via :root) */
+  mode?: 'light' | 'dark';
+  /** Surface hierarchy overrides (page -> card -> raised element) */
+  surface1?: string;
+  surface2?: string;
+  surface3?: string;
+  /** Text color on accent-colored surfaces (buttons, pills) */
+  textOnAccent?: string;
+  /** Radius scale: small elements (chips, inputs). borderRadius covers md */
+  radiusSm?: string;
+  /** Radius scale: large containers (heroes, panels) */
+  radiusLg?: string;
+  /** Radius scale: pills/avatars (e.g. '999px', or '0px' for square brands) */
+  radiusFull?: string;
+  /** Heading font weight for section components (default: 700) */
+  fontWeightHeading?: string;
 }
 
 
@@ -138,16 +158,157 @@ export interface ButtonsComponentData {
 
 
 // ============================================
+// Enterprise section components
+// ============================================
+
+/**
+ * Image-optional pattern (shared): components with an image render it
+ * when layout is "with-image"; with "text-only" they CHANGE SHAPE
+ * (accent gradients, emphasized typography) instead of leaving a hole.
+ * The backend schema enforces coherence (text-only => no imageUrl needed).
+ */
+export type ImageLayout = "with-image" | "text-only";
+
+export interface CTALink {
+  label: string;
+  url?: string;
+}
+
+/** One tab of a TabsFeature section */
+export interface FeatureTab {
+  label: string;
+  /** Short icon: emoji or 1-2 chars (no icon library dependency) */
+  icon?: string;
+  content: {
+    layout: ImageLayout;
+    badge?: string;
+    title: string;
+    description?: string;
+    button?: CTALink;
+    imageUrl?: string;
+  };
+}
+
+export interface TabsFeatureData {
+  badge?: string;
+  heading: string;
+  description?: string;
+  tabs: FeatureTab[];
+}
+
+export interface StepItem {
+  title: string;
+  description?: string;
+  imageUrl?: string;
+}
+
+export interface StepsSectionData {
+  layout: ImageLayout;
+  steps: StepItem[];
+  /** Auto-advance through steps */
+  autoplay?: boolean;
+  /** Milliseconds per step when autoplaying */
+  interval?: number;
+}
+
+export interface StatItem {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+export interface StatsBannerData {
+  stats: StatItem[];
+  columns?: 2 | 3 | 4;
+}
+
+export interface TestimonialItem {
+  quote: string;
+  name: string;
+  role?: string;
+  company?: string;
+  avatarUrl?: string;
+}
+
+export interface TestimonialCarouselData {
+  testimonials: TestimonialItem[];
+  autoplay?: boolean;
+  interval?: number;
+}
+
+export interface PricingPlan {
+  name: string;
+  price: string;
+  period?: string;
+  description?: string;
+  features: string[];
+  cta?: CTALink;
+  highlighted?: boolean;
+  /** Badge on the highlighted plan, e.g. "Recommended" */
+  flag?: string;
+}
+
+export interface PricingCardsData {
+  plans: PricingPlan[];
+  /** compact: cards only; detailed: cards + feature comparison table */
+  variant?: "compact" | "detailed";
+}
+
+export interface ContentGridItem {
+  layout: ImageLayout;
+  title: string;
+  category?: string;
+  excerpt?: string;
+  imageUrl?: string;
+  url?: string;
+  date?: string;
+}
+
+export interface ContentGridData {
+  items: ContentGridItem[];
+  columns?: 2 | 3 | 4;
+}
+
+export interface HeroBannerData {
+  /** split: text+image 50/50 · centered: text over image/gradient · minimal: text only */
+  variant: "split" | "centered" | "minimal";
+  badge?: string;
+  headline: string;
+  subheadline?: string;
+  primaryCta?: CTALink;
+  secondaryCta?: CTALink;
+  imageUrl?: string;
+}
+
+// ============================================
 // Generic Component Type
 // ============================================
 
-export type ComponentType = "text" | "bento" | "chart" | "buttons";
+export type ComponentType =
+  | "text"
+  | "bento"
+  | "chart"
+  | "buttons"
+  | "tabs_feature"
+  | "steps_section"
+  | "stats_banner"
+  | "testimonial_carousel"
+  | "pricing_cards"
+  | "content_grid"
+  | "hero_banner";
 
 export type ComponentData =
   | TextComponentData
   | BentoComponentData
   | ChartComponentData
-  | ButtonsComponentData;
+  | ButtonsComponentData
+  | TabsFeatureData
+  | StepsSectionData
+  | StatsBannerData
+  | TestimonialCarouselData
+  | PricingCardsData
+  | ContentGridData
+  | HeroBannerData;
 
 export interface GenUIComponent {
   type: ComponentType;

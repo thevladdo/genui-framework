@@ -2,7 +2,7 @@
 OpenAI chat client (and OpenAI-compatible providers).
 
 Covers more than OpenAI itself: any endpoint speaking the OpenAI chat
-API works via `base_url` — Google Gemini (OpenAI-compatible endpoint),
+API works via `base_url`: Google Gemini (OpenAI-compatible endpoint),
 Azure OpenAI, Mistral, vLLM, Ollama, OpenRouter, ...
 """
 

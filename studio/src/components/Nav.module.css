@@ -1,0 +1,58 @@
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px 32px;
+}
+
+.wordmark {
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+}
+
+.wordmark span {
+  color: var(--st-text-muted);
+  font-weight: 500;
+}
+
+.tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.tab {
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  color: white;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: color 180ms var(--st-ease), border-color 180ms var(--st-ease),
+    background 180ms var(--st-ease);
+}
+
+.tab:hover {
+  color: var(--st-text);
+  background: var(--st-surface);
+}
+
+.tab[aria-current='page'] {
+  color: var(--st-text);
+  border-color: var(--st-border-strong);
+  background: var(--st-surface);
+}
+
+@media (max-width: 640px) {
+  .nav {
+    padding: 16px;
+  }
+
+  .tab {
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+}

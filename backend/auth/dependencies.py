@@ -8,7 +8,7 @@ Usage:
 
 Keys are presented in the X-API-Key header (or Authorization: Bearer).
 When no keys are configured, auth is OPEN (dev mode) and a warning is
-logged once — production deployments must configure CLIENT_API_KEYS /
+logged once. Production deployments must configure CLIENT_API_KEYS /
 ADMIN_API_KEYS.
 
 require_client also enforces the per-key rate limit (admin keys are
@@ -91,7 +91,7 @@ async def require_client(
     if not registry.enabled:
         if not _warned_open:
             logger.warning(
-                "No API keys configured — endpoints are OPEN. "
+                "No API keys configured; endpoints are OPEN. "
                 "Set CLIENT_API_KEYS / ADMIN_API_KEYS in production."
             )
             _warned_open = True

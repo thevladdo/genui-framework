@@ -273,7 +273,8 @@ class QdrantVectorStore:
             List of RetrievalResult objects
         """
         top_k = top_k or settings.top_k_retrieval
-        score_threshold = score_threshold or settings.similarity_threshold
+        if score_threshold is None:
+            score_threshold = settings.similarity_threshold
 
         query_embedding = await self._generate_embedding_async(query)
 
@@ -326,7 +327,7 @@ class QdrantVectorStore:
 
         Args:
             source_document: The source identifier to delete
-            tenant: Tenant scope — a tenant can only delete its own documents
+            tenant: Tenant scope (a tenant can only delete its own documents)
 
         Returns:
             True if deletion was successful
@@ -374,7 +375,7 @@ class QdrantVectorStore:
                     scroll_filter=qmodels.Filter(must=[self._tenant_condition(tenant)]),
                     limit=_LIST_SCROLL_PAGE,
                     offset=offset,
-                    with_payload=["source_document", "title", "url", "file_type"],
+                    with_payload=["source_document", "title", "url", "file_type", "indexed_at"],
                     with_vectors=False,
                 )
 
@@ -387,6 +388,7 @@ class QdrantVectorStore:
                         "title": payload.get("title"),
                         "url": payload.get("url"),
                         "file_type": payload.get("file_type"),
+                        "indexed_at": payload.get("indexed_at"),
                     })
                     entry["chunks"] += 1
 

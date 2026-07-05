@@ -4,8 +4,8 @@ Ingestion of UI events (impressions, clicks) emitted by GenUI zones,
 closing the measurement loop: every generated variant can be tied to
 what users actually did with it.
 
-- POST /api/v1/events       (client key)  — batch event ingestion
-- GET  /api/v1/events/stats (admin key)   — per-arm CTR and uplift
+- POST /api/v1/events       (client key)  : batch event ingestion
+- GET  /api/v1/events/stats (admin key)   : per-arm CTR and uplift
 
 Counters are aggregated per (tenant, zone, experiment arm) in the
 metrics store; each raw event also lands in the audit log for offline

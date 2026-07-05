@@ -146,7 +146,7 @@ class TestBackendDispatcher(unittest.TestCase):
         extractors._extract_glmocr = _boom
         with self.assertRaises(Exception):
             # Local docx parser will fail on fake bytes (or raise ImportError
-            # without python-docx) — either way, glmocr was not invoked
+            # without python-docx). Either way, glmocr was not invoked
             extract_text("doc.docx", b"not a real docx", backend="glmocr")
 
     def test_runtime_failure_falls_back_to_local(self):
