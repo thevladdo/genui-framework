@@ -20,6 +20,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+# TS source dir wrongly swallowed by the Python `lib/` rule
+!studio/src/lib/
 parts/
 sdist/
 var/
@@ -185,6 +187,8 @@ out
 # Gatsby files
 .cache/
 public
+# studio assets wrongly swallowed by the backend `public` rule
+!studio/public/
 
 # vuepress build output
 .vuepress/dist
