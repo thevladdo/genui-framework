@@ -109,6 +109,33 @@ export const Home = () => {
           →
         </span>
       </motion.a>
+
+      <footer className={styles.footer}>
+        <span className={styles.footerLeft}>
+          <span className={styles.footerBrand}>GenUI</span>
+          <span className={styles.footerNote}>
+            Designed &amp; built by Vlad Dogariu.
+          </span>
+        </span>
+        <nav className={styles.footerLinks} aria-label="Project links">
+          <a
+            className={styles.footerLink}
+            href="https://github.com/thevladdo/genui-framework"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Source on GitHub ↗
+          </a>
+          <a
+            className={styles.footerLink}
+            href="https://thevladdo.github.io/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Portfolio ↗
+          </a>
+        </nav>
+      </footer>
     </main>
   );
 };

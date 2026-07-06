@@ -160,3 +160,51 @@
     min-height: 240px;
   }
 }
+
+.footer {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--st-border);
+}
+
+.footerLeft {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.footerBrand {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--st-text);
+}
+
+.footerNote {
+  font-size: 13px;
+  color: var(--st-text-faint);
+}
+
+.footerLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+
+.footerLink {
+  font-family: var(--st-font-mono);
+  font-size: 13px;
+  color: var(--st-text-muted);
+  text-decoration: none;
+  transition: color 160ms var(--st-ease);
+}
+
+.footerLink:hover {
+  color: var(--st-text);
+}

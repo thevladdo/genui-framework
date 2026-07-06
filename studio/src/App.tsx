@@ -6,7 +6,7 @@
  * Playground stays in the main bundle because it IS the public product.
  */
 
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { About } from './components/about/About';
 import { Home } from './components/Home';
 import { LocalOnlyModal } from './components/LocalOnlyModal';
@@ -26,6 +26,10 @@ const StudioPage = import.meta.env.DEV
 
 const App = () => {
   const { path, query, replaceQuery, navigate } = useHashRoute();
+
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [path]);
   const isSafari =
     typeof navigator !== 'undefined' &&
     /Safari/i.test(navigator.userAgent) &&

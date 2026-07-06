@@ -1,5 +1,6 @@
 .side-rays-container {
-    position: absolute;
+    position: fixed;
+    top: 0;
     inset: 0;
     pointer-events: none;
     z-index: 0;

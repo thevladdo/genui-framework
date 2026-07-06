@@ -27,16 +27,16 @@ export const PlaygroundPage = ({ query, replaceQuery }: PlaygroundPageProps) => 
     });
   }, [query]);
 
-  const onChange = useCallback(
-    (patch: Partial<StudioTheme>) => {
-      setTheme((current) => {
-        const next = { ...current, ...patch };
-        replaceQuery(themeToQuery(next));
-        return next;
-      });
-    },
-    [replaceQuery],
-  );
+  const onChange = useCallback((patch: Partial<StudioTheme>) => {
+    setTheme((current) => ({ ...current, ...patch }));
+  }, []);
+
+  useEffect(() => {
+    const next = themeToQuery(theme);
+    if (next === query) return;
+    const id = window.setTimeout(() => replaceQuery(next), 200);
+    return () => window.clearTimeout(id);
+  }, [theme, query, replaceQuery]);
 
   return (
     <main className={styles.page}>
