@@ -92,6 +92,7 @@ export type {
   ProfileUpdate,
   ProfileUpdateInstruction,
   BehaviorMeta,
+  SanitizationReport,
   ResponseMeta,
   GenUIResponse,
   
@@ -101,6 +102,7 @@ export type {
   
   // Hook Types
   BehaviorTrackerOptions,
+  PrivacyLevel,
   UseGenUIOptions,
   UseGenUIReturn,
 } from './types';

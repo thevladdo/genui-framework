@@ -35,7 +35,7 @@ const toCamelCase = (str: string): string => {
   return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 };
 
-const normalizeData = (data: any): any => {
+export const normalizeData = (data: any): any => {
   if (data === null || data === undefined) return data;
 
   if (Array.isArray(data)) {
@@ -47,7 +47,8 @@ const normalizeData = (data: any): any => {
     for (const key in data) {
       if (data.hasOwnProperty(key)) {
         const camelKey = toCamelCase(key);
-        normalized[camelKey] = normalizeData(data[key]);
+        normalized[camelKey] =
+          key === 'metadata' ? data[key] : normalizeData(data[key]);
       }
     }
     return normalized;
@@ -127,12 +128,21 @@ const renderSingleComponent = (
           return <RegisteredComponent data={component.data} layout={layout} />;
         }
 
-        console.warn(`Unknown component type: ${type}`);
-        return (
-          <div className="genui-error">
-            Unknown component type: {type}
-          </div>
+        console.warn(
+          `GenUI: unknown component type "${type}" (newer backend contract?), skipping`
         );
+        if (
+          typeof process !== 'undefined' &&
+          process.env &&
+          process.env.NODE_ENV !== 'production'
+        ) {
+          return (
+            <div className="genui-error">
+              Unknown component type: {type}
+            </div>
+          );
+        }
+        return null;
       }
     }
   };

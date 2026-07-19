@@ -25,6 +25,13 @@ from .registry import ComponentTypeDef
 
 logger = logging.getLogger(__name__)
 
+# Version of the component contract carried by every API response
+# (zone renders and /query). Bump it when a component's shape changes
+# incompatibly or a new built-in type ships: an already-deployed
+# frontend bundle can then detect a newer backend and degrade unknown
+# types silently instead of breaking the end user's page.
+GENUI_CONTRACT_VERSION = 1
+
 
 class _SchemaModel(BaseModel):
     """Base config: tolerate unknown extra fields, the model often adds some."""

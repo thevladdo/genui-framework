@@ -16,12 +16,16 @@ import { useHashRoute } from './hooks/useHashRoute';
 import SideRays from './components/side-rays/SideRays';
 import DotGrid from './components/dot-grid/DotGrid';
 
-// Content Studio needs a backend + admin key, so it's gated to local dev
-// until user auth (JWT) lands. `import.meta.env.DEV` is statically false in
-// the production (GitHub Pages) build, so the branch is dead code and the
-// dynamic import is tree-shaken — the admin bundle never ships publicly.
+// Content Studio and the Measurement dashboard need a backend + admin key,
+// so they're gated to local dev until user auth (JWT) lands.
+// `import.meta.env.DEV` is statically false in the production (GitHub
+// Pages) build, so the branches are dead code and the dynamic imports are
+// tree-shaken — the admin bundles never ship publicly.
 const StudioPage = import.meta.env.DEV
   ? lazy(() => import('./components/studio/StudioPage'))
+  : null;
+const MeasurePage = import.meta.env.DEV
+  ? lazy(() => import('./components/measure/MeasurePage'))
   : null;
 
 const App = () => {
@@ -101,6 +105,23 @@ const App = () => {
           <>
             <Home />
             <LocalOnlyModal onClose={() => navigate('/')} />
+          </>
+        )
+      )}
+
+      {path === '/measure' && (
+        MeasurePage ? (
+          <Suspense fallback={<p style={{ padding: 32 }}>Loading Measurement…</p>}>
+            <MeasurePage />
+          </Suspense>
+        ) : (
+          <>
+            <Home />
+            <LocalOnlyModal
+              onClose={() => navigate('/')}
+              title="Measurement runs locally"
+              body="The Measurement dashboard reads uplift and cache statistics from your GenUI backend with an admin key, so for now it's available only when you run the studio on your own machine:"
+            />
           </>
         )
       )}

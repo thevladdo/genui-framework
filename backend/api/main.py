@@ -4,22 +4,37 @@ FastAPI application exposing the multi-agent system for GenUI frontend.
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Form, UploadFile
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Form, Request, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, PlainTextResponse
 from api.deps import get_profile_store
 from api.events_router import router as events_router
 from api.zone_router import router as zone_router
 from pydantic import BaseModel, Field
 
 from auth import AuthContext
-from auth.dependencies import get_audit_logger, require_admin, require_client
+from auth.dependencies import (
+    USER_TOKEN_HEADER,
+    check_user_access,
+    get_audit_logger,
+    require_admin,
+    require_client,
+)
+from auth.identity import AuthError
+from llm.embeddings import EmbeddingConfigError
+from llm.factory import llm_configured
 from config import settings
 from agents import get_orchestrator, OrchestratorResult
+from metrics.ops import get_ops_metrics
 from rag import create_chunker, create_vector_store
+from schemas.components import GENUI_CONTRACT_VERSION
+from utils.redis_conn import shared_redis
+from utils.tracing import span
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -87,10 +102,21 @@ class MetaInfo(BaseModel):
     topics: List[str]
     sentiment: str
     behavior: Optional[BehaviorMeta] = None
+    sanitization: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="What the guarantee chain removed: removed_urls, "
+                    "dropped_components, removed_numbers, policy_violations"
+    )
 
 
 class QueryResponse(BaseModel):
     """Response from the query endpoint."""
+    contract_version: int = Field(
+        default=GENUI_CONTRACT_VERSION,
+        description="Component contract version of the responding backend; "
+                    "older frontend bundles use it to detect newer contracts "
+                    "and silently skip unknown component types."
+    )
     text: str = Field(..., description="Main text response")
     components: List[ComponentData] = Field(
         default_factory=list,
@@ -118,11 +144,20 @@ class DocumentUploadRequest(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    """Health check response."""
+    """
+    Dependency statuses only: safe for unauthenticated monitors.
+    Collection internals live behind the admin key (/documents/stats).
+    """
     status: str
     version: str
     qdrant_connected: bool
-    collection_stats: Optional[Dict[str, Any]] = None
+    # Redis state as the stores see it: "connected" | "reconnecting"
+    # (configured but unreachable, in-memory fallback active) | "disabled"
+    # (not configured — single-process dev only).
+    redis: Optional[str] = None
+    # "configured" | "unconfigured": key/endpoint presence for the selected
+    # provider. Reachability shows up as error counters in /metrics.
+    llm: str = "unconfigured"
 
 
 # Lifespan management
@@ -170,34 +205,130 @@ app.include_router(zone_router)
 app.include_router(events_router)
 
 
+@app.exception_handler(AuthError)
+async def auth_error_handler(request: Request, exc: AuthError) -> JSONResponse:
+    """Translate framework-free auth failures (auth.identity) to HTTP."""
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(EmbeddingConfigError)
+async def embedding_config_error_handler(
+    request: Request, exc: EmbeddingConfigError
+) -> JSONResponse:
+    """
+    An unconfigured or mismatched embedding fails loudly with the fix in
+    the message — never a silent OpenAI fallback or a mute no-RAG render.
+    """
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+# Observability: HTTP metrics middleware + health/readiness/liveness + /metrics
+@app.middleware("http")
+async def http_metrics_middleware(request: Request, call_next):
+    """
+    Request count and latency per route template (bounded label set: an
+    unmatched path is labeled "unmatched", never echoed — random 404
+    probing must not explode metric cardinality).
+    """
+    ops = get_ops_metrics()
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        route = request.scope.get("route")
+        path = getattr(route, "path", None) or "unmatched"
+        ops.observe(
+            "genui_http_requests_total",
+            {"method": request.method, "path": path, "status": "500"},
+        )
+        raise
+    route = request.scope.get("route")
+    path = getattr(route, "path", None) or "unmatched"
+    labels = {"method": request.method, "path": path}
+    ops.observe(
+        "genui_http_requests_total", {**labels, "status": str(response.status_code)}
+    )
+    ops.observe(
+        "genui_http_request_seconds_sum", labels, time.perf_counter() - start
+    )
+    ops.observe("genui_http_request_seconds_count", labels)
+    return response
+
+
+async def _dependency_health() -> HealthResponse:
+    """One truthful snapshot of the real dependencies (Qdrant, Redis, LLM)."""
+    try:
+        vector_store = create_vector_store()
+        qdrant_connected = bool(vector_store.get_collection_stats())
+    except Exception as e:
+        logger.warning(f"Qdrant health check failed: {e}")
+        qdrant_connected = False
+
+    # Probe the same handle the stores use.
+    redis_status = await shared_redis(settings.redis_url).probe()
+    redis_ok = redis_status == "connected" or (
+        redis_status == "disabled" and settings.genui_dev_open
+    )
+
+    llm_ok = llm_configured()
+
+    return HealthResponse(
+        status="healthy" if (qdrant_connected and redis_ok and llm_ok) else "degraded",
+        version="1.0.0",
+        qdrant_connected=qdrant_connected,
+        redis=redis_status,
+        llm="configured" if llm_ok else "unconfigured",
+    )
+
+
 # API Endpoints
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """
-    Health check endpoint.
-    Returns system status and Qdrant connection info.
+    Aggregate dependency health for dashboards and uptime monitors.
+    Always 200; the body carries the truth (status: healthy | degraded).
     """
-    try:
-        vector_store = create_vector_store()
-        stats = vector_store.get_collection_stats()
-        qdrant_connected = True
-    except Exception as e:
-        logger.warning(f"Qdrant health check failed: {e}")
-        stats = None
-        qdrant_connected = False
-    
-    return HealthResponse(
-        status="healthy" if qdrant_connected else "degraded",
-        version="1.0.0",
-        qdrant_connected=qdrant_connected,
-        collection_stats=stats,
+    return await _dependency_health()
+
+
+@app.get("/live")
+async def liveness():
+    """Process liveness: 200 as long as the event loop answers."""
+    return {"status": "alive"}
+
+
+@app.get("/ready")
+async def readiness():
+    """
+    Readiness for load balancers: 503 only when the process cannot serve
+    at all (LLM unconfigured = every render/query fails). A degraded
+    dependency (Redis blip, Qdrant down) keeps serving via fallbacks, so
+    it stays 200: failing readiness on every replica for a shared
+    dependency would turn degradation into a full outage.
+    """
+    health = await _dependency_health()
+    status_code = 200 if health.llm == "configured" else 503
+    return JSONResponse(status_code=status_code, content=health.model_dump())
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+async def metrics(auth: AuthContext = Depends(require_admin)):
+    """
+    Prometheus text exposition (admin key: tenant names and traffic
+    volumes are operator data). Scrape with
+    `authorization: credentials: <admin key>` in prometheus.yml.
+    """
+    text = await get_ops_metrics().render_text(
+        extra_gauges={"genui_llm_configured": 1.0 if llm_configured() else 0.0}
     )
+    return PlainTextResponse(text, media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @app.post("/api/v1/query", response_model=QueryResponse)
 async def process_query(
     request: QueryRequest,
     auth: AuthContext = Depends(require_client),
+    user_token: Optional[str] = Security(USER_TOKEN_HEADER),
 ):
     """
     Process a user query through the multi-agent system.
@@ -210,6 +341,8 @@ async def process_query(
     5. Analyzes behavior data using the Behave Agent (if provided)
     6. Persists profile updates server-side and audit-logs the interaction
     """
+    check_user_access(auth, request.user_id, user_token)
+
     try:
         orchestrator = get_orchestrator()
         profile_store = get_profile_store()
@@ -232,14 +365,24 @@ async def process_query(
         if request.conversation_history:
             history = [{"role": m.role, "content": m.content} for m in request.conversation_history]
 
-        # Process through orchestrator with async
-        result: OrchestratorResult = await orchestrator.process(
-            query=request.query,
-            user_profile=request.user_profile,
-            conversation_history=history,
-            behavior_data=request.behavior_data,
-            tenant=auth.tenant,
-        )
+        # Process through orchestrator with async. 
+        # The span ties the genui.llm.* client spans to this query,
+        # the counters are the SRE's view on chat LLM spend and failures.
+        ops = get_ops_metrics()
+        started = time.perf_counter()
+        try:
+            with span("genui.query", tenant=auth.tenant):
+                result: OrchestratorResult = await orchestrator.process(
+                    query=request.query,
+                    user_profile=request.user_profile,
+                    conversation_history=history,
+                    behavior_data=request.behavior_data,
+                    tenant=auth.tenant,
+                )
+        except Exception:
+            ops.observe_generation(auth.tenant, "query", outcome="error")
+            raise
+        ops.observe_generation(auth.tenant, "query", time.perf_counter() - started)
 
         # Format response for frontend
         frontend_response = result.to_frontend_response()
@@ -291,6 +434,7 @@ async def process_query(
                 topics=meta_data["topics"],
                 sentiment=meta_data["sentiment"],
                 behavior=behavior_meta,
+                sanitization=meta_data.get("sanitization"),
             ),
         )
         
@@ -578,6 +722,7 @@ class ProfileSyncRequest(BaseModel):
 async def sync_profile(
     request: ProfileSyncRequest,
     auth: AuthContext = Depends(require_client),
+    user_token: Optional[str] = Security(USER_TOKEN_HEADER),
 ):
     """
     Merge a client-side (IndexedDB) profile into the server store.
@@ -586,6 +731,7 @@ async def sync_profile(
     carry strictly higher confidence (e.g. collected while the server
     had no data).
     """
+    check_user_access(auth, request.user_id, user_token)
     store = get_profile_store()
     merged = await store.sync_client_profile(
         auth.tenant, request.user_id, request.profile_data
@@ -610,8 +756,10 @@ async def sync_profile(
 async def get_profile(
     user_id: str,
     auth: AuthContext = Depends(require_client),
+    user_token: Optional[str] = Security(USER_TOKEN_HEADER),
 ):
     """Read the server-side profile (source of truth)."""
+    check_user_access(auth, user_id, user_token)
     store = get_profile_store()
     profile = await store.get(auth.tenant, user_id)
     if profile is None:
@@ -623,6 +771,7 @@ async def get_profile(
 async def delete_profile(
     user_id: str,
     auth: AuthContext = Depends(require_client),
+    user_token: Optional[str] = Security(USER_TOKEN_HEADER),
 ):
     """
     Erase a user profile (GDPR right-to-erasure).
@@ -630,6 +779,7 @@ async def delete_profile(
     The deletion itself is audit-logged; the audit record contains no
     profile data.
     """
+    check_user_access(auth, user_id, user_token)
     store = get_profile_store()
     existed = await store.delete(auth.tenant, user_id)
 

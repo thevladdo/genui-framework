@@ -12,10 +12,9 @@ import asyncio
 from qdrant_client import QdrantClient, AsyncQdrantClient
 from qdrant_client.http import models as qmodels
 
-from llama_index.embeddings.openai import OpenAIEmbedding
-
 from auth.keys import DEFAULT_TENANT
 from config import settings
+from llm.embeddings import EmbeddingClient, EmbeddingConfigError, create_embedding_client
 from .chunker import SemanticChunk
 from utils.cache import cacheable, clear_cache
 
@@ -46,65 +45,92 @@ class QdrantVectorStore:
         host: str = None,
         port: int = None,
         collection_name: str = None,
-        embedding_model: Optional[OpenAIEmbedding] = None,
+        embedder: Optional[EmbeddingClient] = None,
     ):
         """
         Initialize connection to Qdrant.
-        
+
         Args:
             host: Qdrant server host
             port: Qdrant server port
             collection_name: Name of the vector collection
-            embedding_model: Model for generating embeddings
+            embedder: EmbeddingClient (created from config if not provided;
+                raises EmbeddingConfigError when embedding is unconfigured)
         """
         self.host = host or settings.qdrant_host
         self.port = port or settings.qdrant_port
         self.collection_name = collection_name or settings.qdrant_collection
-        
+
         # Initialize Qdrant client (both sync and async)
         self.client = QdrantClient(host=self.host, port=self.port)
         self.async_client = AsyncQdrantClient(host=self.host, port=self.port)
-        
-        # Embedding model
-        self.embed_model = embedding_model or OpenAIEmbedding(
-            model=settings.embedding_model,
-            api_key=settings.openai_api_key,
-        )
-        
-        # Ensure collection exists
+
+        # Embedding goes through the provider abstraction
+        self.embed_model = embedder or create_embedding_client()
+
+        # Vector size of the collection actually in Qdrant (set below).
+        # Embeddings are checked against it so a model/collection mismatch
+        # fails loudly instead of corrupting or silently skipping batches
+        self._collection_dim: Optional[int] = None
         self._ensure_collection()
-    
+
     def _ensure_collection(self):
-        """Create collection if it doesn't exist."""
+        """Create collection if it doesn't exist; validate its dimension."""
         try:
             collections = self.client.get_collections().collections
             exists = any(c.name == self.collection_name for c in collections)
-            
+
             if not exists:
                 logger.info(f"Creating collection: {self.collection_name}")
-                self.client.create_collection(
-                    collection_name=self.collection_name,
-                    vectors_config=qmodels.VectorParams(
-                        size=settings.qdrant_vector_size,
-                        distance=qmodels.Distance.COSINE,
-                    ),
-                )
-                
-                # Create payload indices for filtering
-                self.client.create_payload_index(
-                    collection_name=self.collection_name,
-                    field_name="source_document",
-                    field_schema=qmodels.PayloadSchemaType.KEYWORD,
-                )
-                self.client.create_payload_index(
-                    collection_name=self.collection_name,
-                    field_name="file_type",
-                    field_schema=qmodels.PayloadSchemaType.KEYWORD,
-                )
+                # The vector size follows the configured embedding model
+                self._collection_dim = self.embed_model.dimension
+                try:
+                    self.client.create_collection(
+                        collection_name=self.collection_name,
+                        vectors_config=qmodels.VectorParams(
+                            size=self._collection_dim,
+                            distance=qmodels.Distance.COSINE,
+                        ),
+                    )
 
-                logger.info(f"Collection {self.collection_name} created successfully")
-            else:
+                    # Create payload indices for filtering
+                    self.client.create_payload_index(
+                        collection_name=self.collection_name,
+                        field_name="source_document",
+                        field_schema=qmodels.PayloadSchemaType.KEYWORD,
+                    )
+                    self.client.create_payload_index(
+                        collection_name=self.collection_name,
+                        field_name="file_type",
+                        field_schema=qmodels.PayloadSchemaType.KEYWORD,
+                    )
+
+                    logger.info(f"Collection {self.collection_name} created successfully")
+                except Exception as create_err:
+                    # Multi-worker boot race
+                    if (
+                        getattr(create_err, "status_code", None) != 409
+                        and "already exists" not in str(create_err)
+                    ):
+                        raise
+                    logger.info(
+                        f"Collection {self.collection_name} created by another worker"
+                    )
+                    exists = True
+
+            if exists:
                 logger.info(f"Collection {self.collection_name} already exists")
+                self._collection_dim = self._existing_vector_size()
+                known = self.embed_model.dimension_if_known()
+                if self._collection_dim and known and known != self._collection_dim:
+                    raise EmbeddingConfigError(
+                        f"Embedding model '{self.embed_model.model}' produces "
+                        f"{known}-dimensional vectors but collection "
+                        f"'{self.collection_name}' was created with dimension "
+                        f"{self._collection_dim}. Re-index into a new collection "
+                        f"(change QDRANT_COLLECTION) or switch back to a "
+                        f"{self._collection_dim}-dimensional embedding model."
+                    )
 
             # Tenant index: created unconditionally so existing collections gain it on upgrade
             try:
@@ -119,6 +145,32 @@ class QdrantVectorStore:
         except Exception as e:
             logger.error(f"Error ensuring collection: {e}")
             raise
+
+    def _existing_vector_size(self) -> Optional[int]:
+        """Vector size of the existing collection; None if undeterminable."""
+        try:
+            info = self.client.get_collection(self.collection_name)
+            vectors = info.config.params.vectors
+            return getattr(vectors, "size", None)  # named-vector configs: skip
+        except Exception as e:
+            logger.warning(f"Could not read collection vector size: {e}")
+            return None
+
+    def _check_dimension(self, vector: List[float]) -> None:
+        """
+        A produced vector must match the collection: a mismatch means the
+        operator changed embedding model over an existing index — raise a
+        readable error instead of letting Qdrant fail batch-by-batch.
+        """
+        if self._collection_dim and len(vector) != self._collection_dim:
+            raise EmbeddingConfigError(
+                f"Embedding model '{self.embed_model.model}' produced a "
+                f"{len(vector)}-dimensional vector but collection "
+                f"'{self.collection_name}' expects {self._collection_dim}. "
+                f"Re-index into a new collection (change QDRANT_COLLECTION) "
+                f"or switch back to a {self._collection_dim}-dimensional "
+                f"embedding model."
+            )
 
     def _tenant_condition(self, tenant: Optional[str]):
         """
@@ -148,18 +200,16 @@ class QdrantVectorStore:
     
     def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for a text string."""
-        return self.embed_model.get_text_embedding(text)
-    
+        return self.embed_model.embed([text])[0]
+
     async def _generate_embedding_async(self, text: str) -> List[float]:
         """Generate embedding for a text string asynchronously."""
-        # OpenAI embeddings are already async-capable
-        # Run in thread pool to avoid blocking
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.embed_model.get_text_embedding, text)
-    
+        return await loop.run_in_executor(None, self._generate_embedding, text)
+
     def _generate_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for multiple texts."""
-        return self.embed_model.get_text_embedding_batch(texts)
+        return self.embed_model.embed(texts)
     
     def index_chunks(
         self,
@@ -192,9 +242,13 @@ class QdrantVectorStore:
             texts = [chunk.content for chunk in batch]
             try:
                 embeddings = self._generate_embeddings_batch(texts)
+            except EmbeddingConfigError:
+                raise
             except Exception as e:
                 logger.error(f"Embedding generation failed for batch {i}: {e}")
                 continue
+            if embeddings:
+                self._check_dimension(embeddings[0])
             
             # Prepare points for Qdrant
             points = []
@@ -277,6 +331,7 @@ class QdrantVectorStore:
             score_threshold = settings.similarity_threshold
 
         query_embedding = await self._generate_embedding_async(query)
+        self._check_dimension(query_embedding)
 
         # Build filter conditions: tenant isolation is always applied
         conditions = [self._tenant_condition(tenant)]
@@ -413,8 +468,8 @@ class QdrantVectorStore:
             info = self.client.get_collection(self.collection_name)
             stats = {
                 "points_count": info.points_count,
-                "vectors_count": info.vectors_count,
-                "indexed_vectors_count": info.indexed_vectors_count,
+                "vectors_count": getattr(info, "vectors_count", None),
+                "indexed_vectors_count": getattr(info, "indexed_vectors_count", None),
                 "status": info.status,
             }
             if tenant is not None:

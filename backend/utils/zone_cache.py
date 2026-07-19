@@ -18,12 +18,11 @@ Backends:
 
 import hashlib
 import json
-import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
-logger = logging.getLogger(__name__)
+from .redis_conn import shared_redis
 
 # Cache entries whose readable key would be unreasonably long are hashed
 _MAX_KEY_LENGTH = 200
@@ -83,9 +82,7 @@ class ZoneRenderCache:
         self.lock_ttl = lock_ttl
         self.key_prefix = key_prefix
 
-        self._redis_url = redis_url
-        self._redis = None
-        self._redis_unavailable = False
+        self._conn = shared_redis(redis_url)
 
         # In-memory fallback: key -> (created_at, payload)
         self._memory: Dict[str, Tuple[float, Dict[str, Any]]] = {}
@@ -93,29 +90,10 @@ class ZoneRenderCache:
         self._memory_locks: Dict[str, float] = {}
 
 
-    # Backend plumbing 
+    # Backend plumbing
     async def _get_redis(self):
-        """Lazily connect to Redis; mark unavailable on failure (fail-open)."""
-        if not self._redis_url or self._redis_unavailable:
-            return None
-        if self._redis is None:
-            try:
-                import redis.asyncio as aioredis
-
-                self._redis = aioredis.from_url(
-                    self._redis_url,
-                    encoding="utf-8",
-                    decode_responses=True,
-                )
-                await self._redis.ping()
-                logger.info("Zone cache connected to Redis at %s", self._redis_url)
-            except Exception as e:
-                logger.warning(
-                    "Zone cache: Redis unavailable (%s), using in-memory fallback", e
-                )
-                self._redis = None
-                self._redis_unavailable = True
-        return self._redis
+        """The shared Redis client, or None while unavailable (fail-open)."""
+        return await self._conn.get()
 
     def _full_key(self, key: str) -> str:
         return f"{self.key_prefix}{key}"
@@ -148,7 +126,7 @@ class ZoneRenderCache:
                 await redis.set(self._full_key(key), envelope, ex=self.stale_ttl)
                 return
             except Exception as e:
-                logger.warning("Zone cache: Redis SET failed (%s), using memory", e)
+                await self._conn.mark_failure(e)
 
         self._evict_memory_if_needed()
         self._memory[key] = (created_at, payload)
@@ -158,12 +136,16 @@ class ZoneRenderCache:
         if redis is not None:
             try:
                 raw = await redis.get(self._full_key(key))
+            except Exception as e:
+                await self._conn.mark_failure(e)
+            else:
                 if raw is None:
                     return None
-                envelope = json.loads(raw)
-                return float(envelope["created_at"]), envelope["payload"]
-            except Exception as e:
-                logger.warning("Zone cache: Redis GET failed (%s), using memory", e)
+                try:
+                    envelope = json.loads(raw)
+                    return float(envelope["created_at"]), envelope["payload"]
+                except (ValueError, KeyError, TypeError):
+                    return None
 
         entry = self._memory.get(key)
         if entry is None:
@@ -200,7 +182,7 @@ class ZoneRenderCache:
                 )
                 return bool(acquired)
             except Exception as e:
-                logger.warning("Zone cache: Redis lock failed (%s), using memory", e)
+                await self._conn.mark_failure(e)
 
         now = time.time()
         expiry = self._memory_locks.get(key)
@@ -217,7 +199,7 @@ class ZoneRenderCache:
                 await redis.delete(self._full_key(f"lock:{key}"))
                 return
             except Exception as e:
-                logger.warning("Zone cache: Redis unlock failed (%s)", e)
+                await self._conn.mark_failure(e)
 
         self._memory_locks.pop(key, None)
 
@@ -228,6 +210,7 @@ class ZoneRenderCache:
         redis = await self._get_redis()
         return {
             "backend": "redis" if redis is not None else "memory",
+            "redis": self._conn.status,
             "fresh_ttl": self.fresh_ttl,
             "stale_ttl": self.stale_ttl,
             "memory_entries": len(self._memory),

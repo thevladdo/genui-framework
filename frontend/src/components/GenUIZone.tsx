@@ -40,6 +40,12 @@ export interface GenUIZoneProps {
   //  Auth
   /** Client API key (sent as X-API-Key). Required when the backend has CLIENT_API_KEYS configured */
   apiKey?: string;
+  /**
+   * Signed user identity token (sent as X-User-Token). Required alongside
+   * userId when the backend has USER_TOKEN_SECRETS configured; mint it
+   * server-side with sign_user_token() and pass it to the client.
+   */
+  userToken?: string;
 
   //  Prompt Engineering 
   /** Base prompt describing what the zone should display */
@@ -147,6 +153,7 @@ const LoadingSkeleton: React.FC<{ type?: string }> = ({ type }) => {
 export const GenUIZone: React.FC<GenUIZoneProps> = ({
   apiUrl,
   apiKey,
+  userToken,
   zoneId,
   basePrompt = 'Show relevant content for this user',
   contextPrompt,
@@ -186,6 +193,7 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
   } = useZone({
     apiUrl,
     apiKey,
+    userToken,
     zoneId,
     basePrompt,
     contextPrompt,

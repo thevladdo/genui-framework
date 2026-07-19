@@ -24,14 +24,18 @@ export default [
     onwarn,
     output: [
       {
-        file: packageJson.main,
+        dir: 'dist',
         format: 'cjs',
+        entryFileNames: 'index.cjs',
+        chunkFileNames: 'chunks/[name]-[hash].cjs',
         sourcemap: true,
         exports: 'named',
       },
       {
-        file: packageJson.module,
+        dir: 'dist',
         format: 'esm',
+        entryFileNames: 'index.esm.js',
+        chunkFileNames: 'chunks/[name]-[hash].esm.js',
         sourcemap: true,
         exports: 'named',
       },
@@ -46,7 +50,7 @@ export default [
         minimize: true,
       }),
     ],
-    external: ['react', 'react-dom'],
+    external: [/^react($|\/)/, /^react-dom($|\/)/],
   },
   {
     input: 'dist/index.d.ts',

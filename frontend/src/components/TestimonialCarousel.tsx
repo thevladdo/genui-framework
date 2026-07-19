@@ -31,17 +31,18 @@ export const TestimonialCarousel: React.FC<TestimonialCarouselProps> = ({
 }) => {
   const { testimonials, autoplay = false, interval = 6000 } = data;
   const [active, setActive] = useState(0);
+  const [paused, setPaused] = useState(false);
   const count = Array.isArray(testimonials) ? testimonials.length : 0;
 
   useEffect(() => {
-    if (!autoplay || count < 2) return;
+    if (!autoplay || count < 2 || paused) return;
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     const timer = setInterval(
       () => setActive((current) => (current + 1) % count),
       Math.max(interval, 2500),
     );
     return () => clearInterval(timer);
-  }, [autoplay, interval, count]);
+  }, [autoplay, interval, count, paused]);
 
   if (count === 0) return null;
 
@@ -50,8 +51,14 @@ export const TestimonialCarousel: React.FC<TestimonialCarouselProps> = ({
   const meta = [item.role, item.company].filter(Boolean).join(' · ');
 
   return (
-    <section className={`genui-testimonials ${className}`.trim()}>
-      <blockquote className="genui-testimonials__quote">
+    <section
+      className={`genui-testimonials ${className}`.trim()}
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+      onFocus={() => setPaused(true)}
+      onBlur={() => setPaused(false)}
+    >
+      <blockquote className="genui-testimonials__quote" aria-live="polite">
         “{item.quote}”
       </blockquote>
 

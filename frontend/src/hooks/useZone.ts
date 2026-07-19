@@ -4,10 +4,11 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { GenUIComponent, UserProfile } from '../types';
+import type { GenUIComponent, SanitizationReport, UserProfile } from '../types';
 import type { GenUICustomComponentDef } from '../registry';
 import { getProfile, profileToApiFormat } from '../utils/indexeddb';
 import { getBehaviorTracker } from '../utils/behaviorTracker';
+import { redactPII } from '../utils/privacy';
 import { readSSEStream } from '../utils/sse';
 
 // ============================================
@@ -34,6 +35,12 @@ export interface UseZoneOptions {
   apiUrl: string;
   /** Client API key (sent as X-API-Key). Required when the backend has CLIENT_API_KEYS configured */
   apiKey?: string;
+  /**
+   * Signed user identity token (sent as X-User-Token). Required alongside
+   * userId when the backend has USER_TOKEN_SECRETS configured; mint it
+   * server-side with sign_user_token() and pass it to the client.
+   */
+  userToken?: string;
   /** Unique identifier for this zone */
   zoneId: string;
   /** Base prompt describing what the zone should display */
@@ -104,12 +111,20 @@ export interface ZoneRenderMeta {
   profileFactors: string[];
   personalizationApplied: boolean;
   renderedAt: string;
+  /**
+   * Component contract version of the responding backend (undefined on
+   * older backends). When it is newer than this bundle understands,
+   * unknown component types are skipped silently in production.
+   */
+  contractVersion?: number;
   /** Identity of the generated variant (shared by users on the same cache entry) */
   renderId?: string;
   /** Cache info (segment, hit status, age) */
   cache?: ZoneCacheMeta;
   /** Holdout experiment info, present when a holdout is configured */
   experiment?: ZoneExperimentMeta;
+  /** What the backend guarantee chain removed from the model's output */
+  sanitization?: SanitizationReport;
 }
 
 export interface UseZoneReturn {
@@ -137,6 +152,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
   const {
     apiUrl,
     apiKey,
+    userToken,
     zoneId,
     basePrompt = 'Show relevant content for this user',
     contextPrompt,
@@ -156,12 +172,18 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
   } = options;
 
   const [components, setComponents] = useState<GenUIComponent[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  // Truthful initial state: when the zone will fetch on mount, it IS
+  // loading from the very first paint. Server-side rendering only sees
+  // this initial state (effects never run there), so renderToString
+  // emits the loading skeleton instead of empty HTML, and the client's
+  // first paint matches it: no hydration mismatch, no layout shift.
+  const [isLoading, setIsLoading] = useState(loadOnMount);
   const [error, setError] = useState<Error | null>(null);
   const [meta, setMeta] = useState<ZoneRenderMeta | null>(null);
   const [pinnedContentIncluded, setPinnedContentIncluded] = useState<string[]>([]);
-  
+
   const mountedRef = useRef(true);
+  const abortRef = useRef<AbortController | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /**
@@ -169,7 +191,13 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
    */
   const render = useCallback(async () => {
     if (!mountedRef.current) return;
-    
+
+    // Last issued wins: abort the previous inflight request so a stale
+    // response can never overwrite the state of a newer one
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setIsLoading(true);
     setError(null);
 
@@ -185,12 +213,21 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
         console.warn('Failed to load user profile for zone:', e);
       }
 
-      // Get behavior data
+      // Get behavior data (already sanitized at capture time by the tracker)
       let behaviorData: Record<string, unknown> | null = null;
       const tracker = getBehaviorTracker();
       if (tracker) {
         behaviorData = tracker.getCompactSummary();
       }
+
+      // The auto-captured page path follows the tracker's privacy level; an
+      // explicit currentPage prop is the integrator's own choice and goes raw
+      const privacyLevel = tracker?.getPrivacyLevel() ?? 'balanced';
+      const autoPage =
+        typeof window !== 'undefined' ? window.location.pathname : undefined;
+      const pagePath =
+        currentPage ||
+        (autoPage && privacyLevel !== 'off' ? redactPII(autoPage) : autoPage);
 
       // Build request
       const requestBody = {
@@ -218,7 +255,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
         max_items: maxItems,
         user_profile: userProfile,
         behavior_data: behaviorData,
-        current_page: currentPage || (typeof window !== 'undefined' ? window.location.pathname : undefined),
+        current_page: pagePath,
         page_metadata: pageMetadata,
         cache_strategy: cacheStrategy,
       };
@@ -239,6 +276,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
           profileFactors: data.meta?.profile_factors ?? [],
           personalizationApplied: data.personalization_applied ?? false,
           renderedAt: data.rendered_at,
+          contractVersion: data.contract_version,
           renderId: data.meta?.render_id,
           cache: data.meta?.cache
             ? {
@@ -254,6 +292,14 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
                 holdoutPercent: data.meta.experiment.holdout_percent,
               }
             : undefined,
+          sanitization: data.meta?.sanitization
+            ? {
+                removedUrls: data.meta.sanitization.removed_urls ?? [],
+                droppedComponents: data.meta.sanitization.dropped_components ?? [],
+                removedNumbers: data.meta.sanitization.removed_numbers ?? [],
+                policyViolations: data.meta.sanitization.policy_violations ?? [],
+              }
+            : undefined,
         });
 
         return renderedComponents;
@@ -265,8 +311,10 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
         headers: {
           'Content-Type': 'application/json',
           ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+          ...(userToken ? { 'X-User-Token': userToken } : {}),
         },
         body: JSON.stringify(requestBody),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -282,7 +330,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
         let streamError: Error | null = null;
 
         await readSSEStream(response, (event, data) => {
-          if (!mountedRef.current) return;
+          if (!mountedRef.current || controller.signal.aborted) return;
           if (event === 'component') {
             setComponents(prev => [...prev, {
               type: data.type,
@@ -297,32 +345,37 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
         });
 
         if (streamError) throw streamError;
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || controller.signal.aborted) return;
         onRender?.(finalComponents ?? []);
         return;
       }
 
       const data = await response.json();
 
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || controller.signal.aborted) return;
 
       const renderedComponents = applyResponse(data);
       onRender?.(renderedComponents);
 
     } catch (err) {
+      // An aborted request was superseded (or unmounted): not an error
+      if (controller.signal.aborted) return;
       if (!mountedRef.current) return;
-      
+
       const error = err instanceof Error ? err : new Error(String(err));
       setError(error);
       onError?.(error);
     } finally {
-      if (mountedRef.current) {
+      // Only the winner clears the loading flag: a superseded request
+      // must not, because its successor is still loading
+      if (mountedRef.current && !controller.signal.aborted) {
         setIsLoading(false);
       }
     }
   }, [
     apiUrl,
     apiKey,
+    userToken,
     zoneId,
     basePrompt,
     contextPrompt,
@@ -348,23 +401,55 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
     await render();
   }, [render]);
 
-  // Initial load on mount
-  useEffect(() => {
-    mountedRef.current = true;
-    
-    if (loadOnMount) {
-      render();
-    }
-
-    return () => {
-      mountedRef.current = false;
-    };
-  }, [loadOnMount]); // Only run on mount, not when render changes
-
-  // Keep the latest render callback in a ref so the auto-refresh timer
-  // doesn't reset every time a parent re-render recreates the callback
+  // Keep the latest render callback in a ref so effects and the
+  // auto-refresh timer don't retrigger every time a parent re-render
+  // recreates the callback (inline onRender/onError props, etc.)
   const renderRef = useRef(render);
   renderRef.current = render;
+
+  // Mount lifecycle, kept separate from the fetch trigger below so a
+  // prop change never flips mountedRef; unmount aborts the inflight fetch
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  // Everything that changes WHAT this zone requests, compared BY VALUE.
+  // Hosts routinely pass fresh object/array literals on every render
+  // (pinnedContent={[...]}, inline pageMetadata), so depending on prop
+  // identities here would refetch on every parent re-render: a fetch
+  // loop. Serializing makes an equal-value re-render a no-op, while a
+  // real change (zoneId, userId, prompt, ...) triggers a refetch that
+  // aborts the inflight request (last issued wins). Callbacks are
+  // deliberately excluded: they change behavior, not the request.
+  const requestKey = JSON.stringify([
+    apiUrl,
+    apiKey,
+    userToken,
+    zoneId,
+    basePrompt,
+    contextPrompt,
+    pinnedContent,
+    customComponents,
+    preferredComponentType,
+    maxItems,
+    userId,
+    currentPage,
+    pageMetadata,
+    cacheStrategy,
+    streaming,
+  ]);
+
+  // Fetch on mount and again whenever the request identity changes
+  // (reactive props: a zone reused across SPA routes must not serve
+  // the previous route's content)
+  useEffect(() => {
+    if (!loadOnMount) return;
+    renderRef.current();
+  }, [loadOnMount, requestKey]);
 
   // Auto-refresh interval
   useEffect(() => {

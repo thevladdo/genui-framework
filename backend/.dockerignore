@@ -1,0 +1,13 @@
+.env
+audit*.jsonl
+
+# Local environments / caches
+venv
+__pycache__
+*.pyc
+.pytest_cache
+
+tests
+requirements-dev.txt
+docker-compose.yml
+.dockerignore

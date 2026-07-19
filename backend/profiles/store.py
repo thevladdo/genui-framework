@@ -11,12 +11,16 @@ failing open.
 """
 
 import json
-import logging
 from typing import Any, Dict, Optional
+
+from utils.redis_conn import shared_redis
 
 from .merge import apply_profile_updates, merge_client_profile
 
-logger = logging.getLogger(__name__)
+# Bound for the in-memory fallback (aligned with the zone cache cap).
+# The fallback is a shock absorber during Redis blips, not a durable
+# profile database: without a cap it grows one dict entry per user.
+_MEMORY_MAX_PROFILES = 2000
 
 
 class ProfileStore:
@@ -38,28 +42,13 @@ class ProfileStore:
         self.key_prefix = key_prefix
         self.ttl_seconds = ttl_seconds
 
-        self._redis_url = redis_url
-        self._redis = None
-        self._redis_unavailable = False
+        self._conn = shared_redis(redis_url)
 
         self._memory: Dict[str, Dict[str, Any]] = {}
 
     async def _get_redis(self):
-        if not self._redis_url or self._redis_unavailable:
-            return None
-        if self._redis is None:
-            try:
-                import redis.asyncio as aioredis
-
-                self._redis = aioredis.from_url(
-                    self._redis_url, encoding="utf-8", decode_responses=True
-                )
-                await self._redis.ping()
-            except Exception as e:
-                logger.warning("Profile store: Redis unavailable (%s), using memory", e)
-                self._redis = None
-                self._redis_unavailable = True
-        return self._redis
+        """The shared Redis client, or None while unavailable (fail-open)."""
+        return await self._conn.get()
 
     def _key(self, tenant: str, user_id: str) -> str:
         return f"{self.key_prefix}{tenant}:{user_id}"
@@ -73,9 +62,13 @@ class ProfileStore:
         if redis is not None:
             try:
                 raw = await redis.get(key)
-                return json.loads(raw) if raw else None
             except Exception as e:
-                logger.warning("Profile store: Redis GET failed (%s)", e)
+                await self._conn.mark_failure(e)
+            else:
+                try:
+                    return json.loads(raw) if raw else None
+                except ValueError:
+                    return None  # corrupt entry = no profile; next sync rewrites it
 
         return self._memory.get(key)
 
@@ -92,9 +85,18 @@ class ProfileStore:
                 )
                 return
             except Exception as e:
-                logger.warning("Profile store: Redis SET failed (%s), using memory", e)
+                await self._conn.mark_failure(e)
 
+        self._memory.pop(key, None)  # re-insert = most recently written
+        self._evict_memory_if_needed()
         self._memory[key] = profile
+
+    def _evict_memory_if_needed(self) -> None:
+        """Bound the fallback store; evict the least-recently-written profiles."""
+        if len(self._memory) < _MEMORY_MAX_PROFILES:
+            return
+        for key in list(self._memory)[: max(1, _MEMORY_MAX_PROFILES // 10)]:
+            del self._memory[key]
 
     async def delete(self, tenant: str, user_id: str) -> bool:
         """Erase a profile (GDPR right-to-erasure). True if it existed."""
@@ -106,7 +108,7 @@ class ProfileStore:
             try:
                 existed = bool(await redis.delete(key))
             except Exception as e:
-                logger.warning("Profile store: Redis DELETE failed (%s)", e)
+                await self._conn.mark_failure(e)
 
         if key in self._memory:
             del self._memory[key]

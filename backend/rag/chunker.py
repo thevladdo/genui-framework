@@ -14,11 +14,42 @@ from llama_index.core.node_parser import (
     SemanticSplitterNodeParser,
     SentenceSplitter,
 )
-from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.core.embeddings import BaseEmbedding
+from pydantic import PrivateAttr
 
 from config import settings
+from llm.embeddings import EmbeddingClient, create_embedding_client
 
 logger = logging.getLogger(__name__)
+
+
+class _ClientEmbedding(BaseEmbedding):
+    """
+    LlamaIndex adapter over the provider-neutral EmbeddingClient, so the
+    semantic splitter embeds through the configured endpoint too — never
+    through a hardwired OpenAI call.
+    """
+
+    _client: EmbeddingClient = PrivateAttr()
+
+    def __init__(self, client: EmbeddingClient, **kwargs):
+        super().__init__(model_name=client.model, **kwargs)
+        self._client = client
+
+    def _get_query_embedding(self, query: str) -> List[float]:
+        return self._client.embed([query])[0]
+
+    def _get_text_embedding(self, text: str) -> List[float]:
+        return self._client.embed([text])[0]
+
+    def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        return self._client.embed(texts)
+
+    async def _aget_query_embedding(self, query: str) -> List[float]:
+        return self._get_query_embedding(query)
+
+    async def _aget_text_embedding(self, text: str) -> List[float]:
+        return self._get_text_embedding(text)
 
 
 @dataclass
@@ -43,23 +74,22 @@ class SemanticChunker:
     
     def __init__(
         self,
-        embed_model: Optional[OpenAIEmbedding] = None,
+        embed_model: Optional[EmbeddingClient] = None,
         breakpoint_percentile: int = None,
         buffer_size: int = None,
     ):
         """
         Initialize the semantic chunker.
-        
+
         Args:
-            embed_model: Embedding model for semantic similarity
+            embed_model: EmbeddingClient for semantic similarity (created
+                from config if not provided; raises EmbeddingConfigError
+                when embedding is unconfigured — no silent OpenAI fallback)
             breakpoint_percentile: Percentile threshold for detecting breakpoints Higher = fewer, larger chunks
             buffer_size: Number of sentences to include around breakpoints
         """
-        self.embed_model = embed_model or OpenAIEmbedding(
-            model=settings.embedding_model,
-            api_key=settings.openai_api_key,
-        )
-        
+        self.embed_model = _ClientEmbedding(embed_model or create_embedding_client())
+
         self.breakpoint_percentile = (
             breakpoint_percentile or settings.breakpoint_percentile_threshold
         )

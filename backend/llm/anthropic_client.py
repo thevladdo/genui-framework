@@ -24,7 +24,13 @@ _DEFAULT_MAX_TOKENS = 4096
 class AnthropicChatClient(LLMChatClient):
     """LLMChatClient over the Anthropic Messages API."""
 
-    def __init__(self, api_key: str, model: str, max_tokens: int = _DEFAULT_MAX_TOKENS):
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        max_tokens: int = _DEFAULT_MAX_TOKENS,
+        timeout: Optional[float] = None,
+    ):
         try:
             from anthropic import AsyncAnthropic
         except ImportError as e:
@@ -35,7 +41,10 @@ class AnthropicChatClient(LLMChatClient):
 
         self.model = model
         self.max_tokens = max_tokens
-        self._client = AsyncAnthropic(api_key=api_key)
+        client_kwargs: Dict[str, Any] = {"api_key": api_key}
+        if timeout is not None:
+            client_kwargs["timeout"] = timeout
+        self._client = AsyncAnthropic(**client_kwargs)
 
     @staticmethod
     def _json_messages(user: str) -> list:

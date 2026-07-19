@@ -73,6 +73,7 @@ class OrchestratorResult:
                 "interaction_type": self.profile_analysis.interaction_type,
                 "topics": self.profile_analysis.topics,
                 "sentiment": self.profile_analysis.sentiment,
+                "sanitization": self.response.sanitization,
             }
         }
         

@@ -8,7 +8,7 @@
  * instead of leaving an image-shaped hole.
  */
 
-import React, { useState } from 'react';
+import React, { useId, useRef, useState } from 'react';
 import type { TabsFeatureData } from '../types';
 import { sanitizeUrl } from '../utils/sanitizeUrl';
 
@@ -20,8 +20,23 @@ export interface TabsFeatureProps {
 export const TabsFeature: React.FC<TabsFeatureProps> = ({ data, className = '' }) => {
   const { badge, heading, description, tabs } = data;
   const [active, setActive] = useState(0);
+  const baseId = useId();
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   if (!Array.isArray(tabs) || tabs.length === 0) return null;
+
+  const onTablistKeyDown = (e: React.KeyboardEvent) => {
+    const last = tabs.length - 1;
+    let next: number | null = null;
+    if (e.key === 'ArrowRight') next = active === last ? 0 : active + 1;
+    else if (e.key === 'ArrowLeft') next = active === 0 ? last : active - 1;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = last;
+    if (next === null) return;
+    e.preventDefault();
+    setActive(next);
+    tabRefs.current[next]?.focus();
+  };
 
   const tab = tabs[Math.min(active, tabs.length - 1)];
   const content = tab.content ?? { layout: 'text-only' as const, title: tab.label };
@@ -38,13 +53,23 @@ export const TabsFeature: React.FC<TabsFeatureProps> = ({ data, className = '' }
       </header>
 
       {tabs.length > 1 && (
-        <div className="genui-tabsfeature__triggers" role="tablist">
+        <div
+          className="genui-tabsfeature__triggers"
+          role="tablist"
+          onKeyDown={onTablistKeyDown}
+        >
           {tabs.map((t, i) => (
             <button
               key={`${t.label}-${i}`}
               type="button"
               role="tab"
+              id={`${baseId}-tab-${i}`}
               aria-selected={i === active}
+              aria-controls={`${baseId}-panel`}
+              tabIndex={i === active ? 0 : -1}
+              ref={(el) => {
+                tabRefs.current[i] = el;
+              }}
               className="genui-tabsfeature__trigger"
               onClick={() => setActive(i)}
             >
@@ -57,6 +82,9 @@ export const TabsFeature: React.FC<TabsFeatureProps> = ({ data, className = '' }
 
       <div
         role="tabpanel"
+        id={`${baseId}-panel`}
+        aria-labelledby={`${baseId}-tab-${active}`}
+        tabIndex={0}
         className={`genui-tabpanel ${textOnly ? 'genui-tabpanel--text-only' : ''}`.trim()}
       >
         <div className="genui-tabpanel__body">

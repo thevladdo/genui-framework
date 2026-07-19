@@ -1,0 +1,67 @@
+# GenUI deployment — one full backend per customer (see deploy/README.md).
+#
+#   cp customer.env.example customer.env   # edit: engine key, tenants, budget
+#   docker compose up -d --build
+#   ./smoke.sh
+#
+# Redis and Qdrant are intentionally NOT published on the host: they are
+# reachable only from the backend on the compose network. The backend is the
+# single entry point (put your TLS proxy in front of :8000).
+#
+# This is the production bring-up. backend/docker-compose.yml is the DEV
+# helper (dependencies only, backend run on the host with uvicorn --reload).
+
+name: genui
+
+services:
+  backend:
+    build: ../backend
+    image: genui-backend
+    init: true
+    restart: unless-stopped
+    env_file: customer.env
+    environment:
+      # Wired to the services below; a customer.env value cannot detach them.
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      # No healthcheck on qdrant: the backend does not need it at boot
+      # (vector store connects lazily; /health does not depend on it).
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/live', timeout=2)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  qdrant:
+    # Pinned: a reproducible bring-up must not float on :latest.
+    # Keep the server within one minor of the qdrant-client the image
+    # installs, or stats/health calls fail on response-schema mismatch.
+    image: qdrant/qdrant:v1.18.0
+    restart: unless-stopped
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+volumes:
+  redis_data:
+  qdrant_storage:

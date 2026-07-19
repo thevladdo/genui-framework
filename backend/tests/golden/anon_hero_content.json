@@ -1,0 +1,72 @@
+{
+  "description": "Anonymous visitor on the home page: no pinned, no RAG, image URLs only from page_metadata. The recorded response contains an incoherent steps_section (layout with-image, no image): it must be dropped while the rest renders.",
+  "request": {
+    "zone_id": "home-hero",
+    "base_prompt": "Welcome new visitors and route them to signup or the blog.",
+    "context_prompt": null,
+    "pinned_content": [],
+    "preferred_component_type": null,
+    "max_items": 5,
+    "current_page": "/",
+    "page_metadata": {
+      "hero_image": "https://cdn.acme.example/img/hero.jpg",
+      "blog_url": "https://acme.example/blog",
+      "signup_url": "https://acme.example/signup"
+    },
+    "archetype": {}
+  },
+  "retrieved": [],
+  "invariants": {
+    "allowed_types": ["hero_banner", "content_grid", "steps_section"]
+  },
+  "llm_response": {
+    "components": [
+      {
+        "type": "hero_banner",
+        "data": {
+          "variant": "split",
+          "headline": "Pages that adapt to every visitor",
+          "subheadline": "GenUI curates each zone for the person reading it.",
+          "primary_cta": {"label": "Create your account", "url": "https://acme.example/signup"},
+          "image_url": "https://cdn.acme.example/img/hero.jpg"
+        }
+      },
+      {
+        "type": "steps_section",
+        "data": {
+          "layout": "with-image",
+          "steps": [
+            {"title": "Install the SDK"},
+            {"title": "Define a zone"}
+          ]
+        }
+      },
+      {
+        "type": "content_grid",
+        "data": {
+          "columns": 2,
+          "items": [
+            {
+              "layout": "text-only",
+              "title": "Why adaptive interfaces win",
+              "excerpt": "Recommendations moved into the page itself.",
+              "url": "https://acme.example/blog",
+              "category": "Blog"
+            },
+            {
+              "layout": "text-only",
+              "title": "From profile to layout",
+              "excerpt": "How segments turn into components.",
+              "category": "Engineering"
+            }
+          ]
+        }
+      }
+    ],
+    "pinned_included": [],
+    "personalization_applied": false,
+    "confidence": 0.7,
+    "reasoning": "Anonymous visitor: generic hero plus editorial teasers.",
+    "profile_factors": []
+  }
+}

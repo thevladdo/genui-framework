@@ -1,10 +1,11 @@
 /**
  * LocalOnlyModal
  *
- * Shown on the public (GitHub Pages) build when a visitor opens the
- * Content Studio: it needs a reachable backend + admin key, so it's
- * gated to local dev until proper user auth (JWT) lands. In dev this
- * component is never rendered, the real StudioPage loads instead.
+ * Shown on the public (GitHub Pages) build when a visitor opens an admin
+ * tool (Content Studio, Measurement dashboard): they need a reachable
+ * backend + admin key, so they're gated to local dev until proper user
+ * auth (JWT) lands. In dev this component is never rendered, the real
+ * pages load instead.
  */
 
 import { useEffect, useRef } from 'react';
@@ -12,9 +13,15 @@ import styles from './LocalOnlyModal.module.css';
 
 interface LocalOnlyModalProps {
   onClose: () => void;
+  title?: string;
+  body?: string;
 }
 
-export const LocalOnlyModal = ({ onClose }: LocalOnlyModalProps) => {
+export const LocalOnlyModal = ({
+  onClose,
+  title = 'Content Studio runs locally',
+  body = "The Content Studio manages your RAG knowledge base and it needs a reachable GenUI backend and an admin key, so for now it's available only when you run the studio on your own machine:",
+}: LocalOnlyModalProps) => {
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -39,13 +46,9 @@ export const LocalOnlyModal = ({ onClose }: LocalOnlyModalProps) => {
       >
         <div className={styles.icon} aria-hidden="true">🔒</div>
         <h2 id="local-only-title" className={styles.title}>
-          Content Studio runs locally
+          {title}
         </h2>
-        <p className={styles.body}>
-          The Content Studio manages your RAG knowledge base and it needs a
-          reachable GenUI backend and an admin key, so for now it's available
-          only when you run the studio on your own machine:
-        </p>
+        <p className={styles.body}>{body}</p>
         <pre className={styles.code}><code>cd studio &amp;&amp; npm run dev</code></pre>
         <p className={styles.note}>
           A hosted version arrives once user authentication (JWT) is in place.

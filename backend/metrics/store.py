@@ -11,12 +11,11 @@ Backends: Redis hashes when configured (shared, persistent), in-memory
 fallback otherwise. Always fails open.
 """
 
-import logging
 from typing import Any, Dict, Optional
 
-from .significance import two_proportion_significance
+from utils.redis_conn import shared_redis
 
-logger = logging.getLogger(__name__)
+from .significance import two_proportion_significance
 
 COUNTED_EVENTS = ("impression", "click")
 
@@ -37,29 +36,14 @@ class MetricsStore:
     ):
         self.key_prefix = key_prefix
 
-        self._redis_url = redis_url
-        self._redis = None
-        self._redis_unavailable = False
+        self._conn = shared_redis(redis_url)
 
         # (tenant, zone_id, arm) -> {event_type: count}
         self._memory: Dict[tuple, Dict[str, int]] = {}
 
     async def _get_redis(self):
-        if not self._redis_url or self._redis_unavailable:
-            return None
-        if self._redis is None:
-            try:
-                import redis.asyncio as aioredis
-
-                self._redis = aioredis.from_url(
-                    self._redis_url, encoding="utf-8", decode_responses=True
-                )
-                await self._redis.ping()
-            except Exception as e:
-                logger.warning("Metrics store: Redis unavailable (%s), using memory", e)
-                self._redis = None
-                self._redis_unavailable = True
-        return self._redis
+        """The shared Redis client, or None while unavailable (fail-open)."""
+        return await self._conn.get()
 
     def _key(self, tenant: str, zone_id: str, arm: str) -> str:
         return f"{self.key_prefix}{tenant}:{zone_id}:{arm}"
@@ -79,7 +63,7 @@ class MetricsStore:
                 await redis.hincrby(self._key(tenant, zone_id, arm), event_type, count)
                 return
             except Exception as e:
-                logger.warning("Metrics store: Redis HINCRBY failed (%s)", e)
+                await self._conn.mark_failure(e)
 
         bucket = self._memory.setdefault((tenant, zone_id, arm), {})
         bucket[event_type] = bucket.get(event_type, 0) + count
@@ -91,7 +75,7 @@ class MetricsStore:
                 raw = await redis.hgetall(self._key(tenant, zone_id, arm))
                 return {k: int(v) for k, v in (raw or {}).items()}
             except Exception as e:
-                logger.warning("Metrics store: Redis HGETALL failed (%s)", e)
+                await self._conn.mark_failure(e)
 
         return dict(self._memory.get((tenant, zone_id, arm), {}))
 

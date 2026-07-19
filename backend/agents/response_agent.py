@@ -2,25 +2,27 @@
 Response Agent Module
 Handles user queries using RAG retrieval and user profile context.
 Generates structured responses suitable for GenUI rendering.
+
+Isolation invariant: the agent instance holds NO conversational state.
+Everything the model sees (profile, history, retrieved context, tenant)
+lives in the single request; two sequential queries can never share
+context, across users or tenants.
 """
 
 import logging
-from contextvars import ContextVar
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 import json
 
-from datapizza.agents import Agent
-from datapizza.tools import tool
-
 from config import settings
-from llm.datapizza_factory import create_datapizza_client
+from llm import create_llm_client
 from rag import create_vector_store, build_context_from_results
 from schemas import component_to_dict, validate_components
+from utils.content_policy import policy_for
+from utils.numeric_guard import NumericGuard
 from utils.url_guard import UrlGuard
 
 logger = logging.getLogger(__name__)
-_current_tenant: ContextVar[Optional[str]] = ContextVar("genui_tenant", default=None)
 
 
 @dataclass
@@ -133,7 +135,12 @@ class AgentResponse:
     sources: List[Dict[str, str]]
     confidence: float
     suggested_actions: List[str]
-    
+    sanitization: Dict[str, Any] = None
+
+    def __post_init__(self):
+        if self.sanitization is None:
+            self.sanitization = {}
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "text_response": self.text_response,
@@ -141,6 +148,7 @@ class AgentResponse:
             "sources": self.sources,
             "confidence": self.confidence,
             "suggested_actions": self.suggested_actions,
+            "sanitization": self.sanitization,
         }
 
 
@@ -253,6 +261,9 @@ Guidelines:
 - For comparisons or data, prefer charts or bento cards
 - For navigation/actions, include buttons
 - Always cite sources when using retrieved information
+- NEVER invent numbers: stat values, prices and chart values must be copied
+  as they appear in the input (same digits, same magnitude). Numbers not
+  present in the input will be removed by the system
 - Set confidence based on how well the context addresses the query
 
 PERSONALIZATION EXAMPLES:
@@ -270,45 +281,42 @@ verifies who someone is before letting them in. This protects your data and ensu
 security regulations. The implementation is handled by your technical team..."
 """
     
+    # Provider-neutral spec for the knowledge-base search tool
+    SEARCH_TOOL = {
+        "name": "search_documents",
+        "description": (
+            "Search the document knowledge base for relevant information. "
+            "Use it when the pre-retrieved documents do not answer the "
+            "user's question (e.g. a follow-up that needs a reformulated search)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The search query"},
+                "top_k": {"type": "integer", "description": "Number of results to retrieve"},
+            },
+            "required": ["query"],
+        },
+    }
+
     def __init__(
         self,
         model: str = None,
         vector_store=None,
+        llm_client=None,
     ):
         """
         Initialize the Response Agent.
-        
+
         Args:
             model: LLM model identifier
             vector_store: QdrantVectorStore instance (created if not provided)
+            llm_client: LLMChatClient instance (created if not provided)
         """
         self.model = model or settings.response_model
         self.vector_store = vector_store or create_vector_store()
+        self.llm = llm_client or create_llm_client(self.model)
 
-        self.client = create_datapizza_client(self.model)
-        
-        self.agent = Agent(
-            name="response_agent",
-            client=self.client,
-            system_prompt=self.SYSTEM_PROMPT,
-            tools=[self._search_documents],
-            stream=True,  # Enable streaming for faster feedback
-        )
-    
-    @tool
-    def _search_documents(self, query: str, top_k: int = 5) -> str:
-        """
-        Search the document knowledge base for relevant information.
-
-        Args:
-            query: The search query
-            top_k: Number of results to retrieve
-        """
-        results = self.vector_store.search(
-            query=query, top_k=top_k, tenant=_current_tenant.get()
-        )
-        return build_context_from_results(results, include_metadata=True)
-    
     def _build_query_prompt(
         self,
         query: str,
@@ -377,9 +385,6 @@ security regulations. The implementation is handled by your technical team..."
         Returns:
             AgentResponse with structured components for GenUI
         """
-        # Scope the RAG search tool to this request's tenant
-        _current_tenant.set(tenant)
-
         # Parse user profile
         profile = UserProfile.from_dict(user_profile) if user_profile else None
 
@@ -387,7 +392,7 @@ security regulations. The implementation is handled by your technical team..."
         logger.info(f"Retrieving context for query: {query[:100]}...")
         search_results = await self.vector_store.search_async(query=query, tenant=tenant)
         retrieved_context = build_context_from_results(search_results)
-        
+
         # Build the full prompt
         full_prompt = self._build_query_prompt(
             query=query,
@@ -395,45 +400,31 @@ security regulations. The implementation is handled by your technical team..."
             conversation_history=conversation_history,
             retrieved_context=retrieved_context,
         )
-        
-        # Run the agent using async a_run
+
+        # Model-invoked searches: tenant is captured from THIS request,
+        # never from shared state. Results are kept so the URL whitelist
+        # also learns the URLs the tool surfaced.
+        tool_contexts: List[str] = []
+
+        async def _run_search_tool(name: str, arguments: Dict[str, Any]) -> str:
+            results = await self.vector_store.search_async(
+                query=str(arguments.get("query", "")),
+                top_k=max(1, min(int(arguments.get("top_k") or 5), 20)),
+                tenant=tenant,
+            )
+            context = build_context_from_results(results, include_metadata=True)
+            tool_contexts.append(context)
+            return context
+
         try:
-            response = await self.agent.a_run(full_prompt)
-            
-            if hasattr(response, 'content'):
-                # response.content might be a string, list of TextBlocks, or other format
-                content = response.content
-                if isinstance(content, str):
-                    response_text = content
-                elif isinstance(content, list):
-                    # Extract text from list of content blocks (e.g., Anthropic's format)
-                    response_text = ""
-                    for block in content:
-                        if hasattr(block, 'text'):
-                            response_text += block.text
-                        elif hasattr(block, 'content'):
-                            response_text += str(block.content)
-                        elif isinstance(block, dict) and 'text' in block:
-                            response_text += block['text']
-                        elif isinstance(block, dict) and 'content' in block:
-                            response_text += str(block['content'])
-                        else:
-                            response_text += str(block)
-                else:
-                    response_text = str(content)
-            else:
-                response_text = str(response)
-            
-            # Clean up the response text - remove "TextBlock(content=" wrapper if present
-            if response_text.startswith('TextBlock(content='):
-                # Extract the actual content from TextBlock wrapper
-                start = response_text.find('{')
-                end = response_text.rfind('}')
-                if start != -1 and end != -1:
-                    response_text = response_text[start:end+1]
-            
-            logger.debug(f"Extracted response text: {response_text[:200]}...")
-            
+            response_text = await self.llm.complete_json_with_tools(
+                system=self.SYSTEM_PROMPT,
+                user=full_prompt,
+                tools=[self.SEARCH_TOOL],
+                tool_handler=_run_search_tool,
+            )
+            logger.debug(f"Response text: {response_text[:200]}...")
+
             parsed = self._parse_response(response_text)
 
             # Extract sources from retrieval results
@@ -450,6 +441,8 @@ security regulations. The implementation is handled by your technical team..."
             guard = UrlGuard(enforce_whitelist=settings.url_whitelist_enabled)
             guard.allow_from_text(query)
             guard.allow_from_text(retrieved_context)
+            for tool_context in tool_contexts:
+                guard.allow_from_text(tool_context)
             for msg in conversation_history or []:
                 guard.allow_from_text(msg.get("content"))
             for r in search_results:
@@ -457,10 +450,41 @@ security regulations. The implementation is handled by your technical team..."
                 guard.allow(metadata.get("url"), metadata.get("image"))
 
             component_dicts, removed_urls = guard.sanitize_components(component_dicts)
-            if dropped or removed_urls:
+
+            # Numeric grounding: displayed numbers (stats, prices, chart
+            # points) must trace to the same input corpus as the URLs
+            numeric_guard = NumericGuard(enforce=settings.numeric_grounding_enabled)
+            numeric_guard.allow_from_text(query)
+            numeric_guard.allow_from_text(retrieved_context)
+            for tool_context in tool_contexts:
+                numeric_guard.allow_from_text(tool_context)
+            for msg in conversation_history or []:
+                numeric_guard.allow_from_text(msg.get("content"))
+            component_dicts, removed_numbers = numeric_guard.sanitize_components(
+                component_dicts
+            )
+
+            # Per-tenant content policy: banned terms drop the component
+            policy = policy_for(tenant, settings.content_policy)
+            component_dicts, policy_violations = policy.sanitize_components(
+                component_dicts
+            )
+
+            # The chat prose gets the same treatment as text components:
+            # invented markdown links collapse, banned terms are redacted
+            text_response = parsed.get("text_response", response_text)
+            text_response = guard.strip_markdown_links(text_response)
+            removed_urls = list(guard.removed_urls)
+            text_response, text_violations = policy.redact(text_response)
+            policy_violations.extend(
+                t for t in text_violations if t not in policy_violations
+            )
+
+            if dropped or removed_urls or removed_numbers or policy_violations:
                 logger.info(
-                    "Response sanitization: dropped_components=%s removed_urls=%s",
-                    dropped, removed_urls,
+                    "Response sanitization: dropped_components=%s removed_urls=%s "
+                    "removed_numbers=%s policy_violations=%s",
+                    dropped, removed_urls, removed_numbers, policy_violations,
                 )
 
             # Model-claimed sources must pass the same URL rules
@@ -471,7 +495,7 @@ security regulations. The implementation is handled by your technical team..."
             ]
 
             return AgentResponse(
-                text_response=parsed.get("text_response", response_text),
+                text_response=text_response,
                 components=[
                     GenUIComponent(
                         type=c["type"],
@@ -483,6 +507,12 @@ security regulations. The implementation is handled by your technical team..."
                 sources=safe_sources,
                 confidence=parsed.get("confidence", 0.5),
                 suggested_actions=parsed.get("suggested_actions", []),
+                sanitization={
+                    "removed_urls": removed_urls,
+                    "dropped_components": dropped,
+                    "removed_numbers": removed_numbers,
+                    "policy_violations": policy_violations,
+                },
             )
             
         except Exception as e:

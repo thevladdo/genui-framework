@@ -190,6 +190,9 @@ public
 # studio assets wrongly swallowed by the backend `public` rule
 !studio/public/
 
+# studio test build artifacts (tsc output for node --test)
+studio/tests/.build/
+
 # vuepress build output
 .vuepress/dist
 
@@ -348,6 +351,9 @@ audit.jsonl
 audit*.jsonl
 *.audit.jsonl
 
+# GenUI deploy
+deploy/customer.env
+
 # Temporary files
 tmp/
 temp/
@@ -363,3 +369,7 @@ temp/
 
 *.md
 !README.md
+!CHANGELOG.md
+# deploy/ docs are product artifacts (isolation statement, bring-up guide)
+!deploy/*.md
+roadmap

@@ -1,0 +1,4 @@
+{
+  "comment": "The studio package is type:module; tsc output in .build/ is CommonJS. This marker keeps node from parsing those .js files as ESM.",
+  "type": "commonjs"
+}

@@ -8,16 +8,21 @@ Events are JSON lines with a stable shape:
     {"ts": ..., "event": ..., "tenant": ..., "user_id": ..., ...payload}
 
 Sink:
-- AUDIT_LOG_PATH set   -> appended to a JSONL file (rotate externally)
-- AUDIT_LOG_PATH empty -> emitted on the "genui.audit" logger (INFO),
-  so any structured-logging pipeline can pick them up.
+- AUDIT_LOG_PATH empty (production default) -> emitted on the
+  "genui.audit" logger (INFO), so the host's structured-logging
+  pipeline ships, retains and indexes the lines (multi-worker safe:
+  every replica feeds the same pipeline).
+- AUDIT_LOG_PATH set -> appended to a JSONL file with stdlib size
+  rotation (AUDIT_LOG_MAX_BYTES / AUDIT_LOG_BACKUP_COUNT). Rotation is
+  per-process: use the file sink only with a single worker, or point
+  each worker at its own file.
 
 The raw API key is never audited, only its fingerprint.
 """
 
 import json
 import logging
-import threading
+import logging.handlers
 import time
 from typing import Any, Dict, List, Optional
 
@@ -25,12 +30,39 @@ logger = logging.getLogger("genui.audit")
 
 
 class AuditLogger:
-    """Append-only audit event writer (JSONL file or standard logger)."""
+    """Append-only audit event writer (rotating JSONL file or standard logger)."""
 
-    def __init__(self, path: Optional[str] = None, enabled: bool = True):
+    def __init__(
+        self,
+        path: Optional[str] = None,
+        enabled: bool = True,
+        max_bytes: int = 0,
+        backup_count: int = 0,
+    ):
         self.path = path or None
         self.enabled = enabled
-        self._lock = threading.Lock()
+        self._file_logger: Optional[logging.Logger] = None
+        if self.path and self.enabled:
+            try:
+                # Eager open: an unwritable path must fail HERE (visible, # with logger fallback).
+                handler = logging.handlers.RotatingFileHandler(
+                    self.path,
+                    maxBytes=max_bytes,
+                    backupCount=backup_count,
+                    encoding="utf-8",
+                )
+                handler.setFormatter(logging.Formatter("%(message)s"))
+                # Constructed directly (not via getLogger): 
+                # each AuditLoggerowns its handler, so instances never stack handlers 
+                # on a shared registry entry and double-write lines.
+                file_logger = logging.Logger("genui.audit.file", level=logging.INFO)
+                file_logger.addHandler(handler)
+                self._file_logger = file_logger
+            except OSError as e:
+                logger.error(
+                    "Audit file sink unavailable (%s); falling back to the "
+                    "'genui.audit' logger", e
+                )
 
     def log(
         self,
@@ -57,14 +89,10 @@ class AuditLogger:
             logger.error("Audit serialization failed: %s", e)
             return
 
-        if self.path:
-            try:
-                with self._lock:
-                    with open(self.path, "a", encoding="utf-8") as f:
-                        f.write(line + "\n")
-                return
-            except OSError as e:
-                logger.error("Audit file write failed (%s); falling back to logger", e)
+        if self._file_logger is not None:
+            # Rotation and locking via stdlib; write errors are reported by logging.Handler.handleError (stderr).
+            self._file_logger.info(line)
+            return
 
         logger.info(line)
 

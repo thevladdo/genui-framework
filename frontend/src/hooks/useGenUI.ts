@@ -49,10 +49,13 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
   const {
     apiUrl,
     apiKey,
+    userToken,
     userId = 'anonymous',
     enablePersistence = true,
     enableBehaviorTracking = true,
     behaviorTrackingOptions,
+    privacy,
+    consent,
     onProfileUpdate,
     onError,
   } = options;
@@ -73,6 +76,8 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
         const tracker = initBehaviorTracker({
           sessionId: sessionIdRef.current,
           userId,
+          privacy,
+          consent,
           ...behaviorTrackingOptions,
         });
         setBehaviorTracker(tracker);
@@ -103,7 +108,7 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
         stopBehaviorTracker();
       }
     };
-  }, [userId, enablePersistence, enableBehaviorTracking]);
+  }, [userId, enablePersistence, enableBehaviorTracking, privacy, consent]);
 
 
   const query = useCallback(async (text: string): Promise<GenUIResponse> => {
@@ -148,6 +153,7 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
         headers: {
           'Content-Type': 'application/json',
           ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+          ...(userToken ? { 'X-User-Token': userToken } : {}),
         },
         body: JSON.stringify(requestBody),
       });
@@ -161,6 +167,7 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
 
       // Transform snake_case to camelCase
       const genUIResponse: GenUIResponse = {
+        contractVersion: data.contract_version,
         text: data.text,
         components: data.components,
         sources: data.sources,
@@ -174,6 +181,23 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
           interactionType: data.meta?.interaction_type ?? 'question',
           topics: data.meta?.topics ?? [],
           sentiment: data.meta?.sentiment ?? 'neutral',
+          behavior: data.meta?.behavior
+            ? {
+                engagementScore: data.meta.behavior.engagement_score ?? 0,
+                userType: data.meta.behavior.user_type ?? 'casual',
+                sessionSummary: data.meta.behavior.session_summary ?? '',
+                insightsCount: data.meta.behavior.insights_count ?? 0,
+                uiAdjustments: data.meta.behavior.ui_adjustments ?? [],
+              }
+            : undefined,
+          sanitization: data.meta?.sanitization
+            ? {
+                removedUrls: data.meta.sanitization.removed_urls ?? [],
+                droppedComponents: data.meta.sanitization.dropped_components ?? [],
+                removedNumbers: data.meta.sanitization.removed_numbers ?? [],
+                policyViolations: data.meta.sanitization.policy_violations ?? [],
+              }
+            : undefined,
         },
       };
 
@@ -215,7 +239,7 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
     } finally {
       setIsLoading(false);
     }
-  }, [apiUrl, apiKey, userId, profile, history, enablePersistence, onProfileUpdate, onError]);
+  }, [apiUrl, apiKey, userToken, userId, profile, history, enablePersistence, onProfileUpdate, onError]);
 
 
   /**
@@ -256,11 +280,13 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
       const tracker = initBehaviorTracker({
         sessionId: sessionIdRef.current,
         userId,
+        privacy,
+        consent,
         ...behaviorTrackingOptions,
       });
       setBehaviorTracker(tracker);
     }
-  }, [enablePersistence, enableBehaviorTracking, userId, behaviorTrackingOptions]);
+  }, [enablePersistence, enableBehaviorTracking, userId, behaviorTrackingOptions, privacy, consent]);
 
 
   /**

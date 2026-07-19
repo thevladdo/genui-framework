@@ -1,8 +1,9 @@
 /**
- * Content Studio API client.
+ * Content Studio + Measurement dashboard API client.
  */
 
 import type { AdminSession } from "./session";
+import type { CacheStats, EventStats, WarmupResult } from "./measure";
 
 export interface KnowledgeDocument {
   source_document: string;
@@ -80,6 +81,36 @@ export const deleteDocument = async (
     `/api/v1/documents/${encodeURIComponent(sourceDocument)}`,
     { method: "DELETE" },
   );
+};
+
+export const eventStats = async (
+  session: AdminSession,
+  zoneId: string,
+): Promise<EventStats> => {
+  const response = await request(
+    session,
+    `/api/v1/events/stats?zone_id=${encodeURIComponent(zoneId)}`,
+  );
+  return (await response.json()) as EventStats;
+};
+
+export const zoneCacheStats = async (
+  session: AdminSession,
+): Promise<CacheStats> => {
+  const response = await request(session, "/api/v1/zone/cache/stats");
+  return (await response.json()) as CacheStats;
+};
+
+export const warmupZones = async (
+  session: AdminSession,
+  zones: unknown[],
+): Promise<WarmupResult> => {
+  const response = await request(session, "/api/v1/zone/warmup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ zones }),
+  });
+  return (await response.json()) as WarmupResult;
 };
 
 export const searchDocuments = async (

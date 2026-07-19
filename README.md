@@ -3,7 +3,7 @@
 # GenUI Framework
 
 **Generative User Interfaces for Intelligent Web Applications**<br />
-_A full-stack framework for building AI-powered, profile-aware, dynamically generated UI components_
+_Not just a full-stack framework, but a complete customization engine for building AI-powered, profile-aware, and dynamically generated UI components_
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![TypeScript](https://img.shields.io/badge/typescript-5.0+-blue.svg)](https://www.typescriptlang.org/) [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![React 18+](https://img.shields.io/badge/react-18+-61dafb.svg)](https://react.dev/)
 [![DOI](https://zenodo.org/badge/1133794652.svg)](https://doi.org/10.5281/zenodo.18237228)
@@ -22,7 +22,7 @@ _A full-stack framework for building AI-powered, profile-aware, dynamically gene
 
 ## 🌟 Overview
 
-GenUI System is a comprehensive framework for building **Generative User Interfaces:** dynamic, AI-driven UI components that adapt to user profiles, behavior, and context. The system combines a React frontend framework with a Python backend to deliver personalized content in real-time.
+GenUI System is a complete customization engine for building **Generative User Interfaces:** dynamic, AI-driven UI components that adapt to user profiles, behavior, and context. The system combines a React frontend framework with a Python backend to deliver personalized content in real-time.
 
 <div align="center">
 
@@ -44,10 +44,12 @@ GenUI System is a comprehensive framework for building **Generative User Interfa
 - **Custom Components**: register _your_ design system — the LLM generates it ([guide](#-custom-components--your-design-system-as-llm-vocabulary))
 - **Premium Components**: Glassmorphism bento grids, 8 button variants, charts, styled text
 - **Progressive Render**: components stream in as the model generates them (SSE)
-- **Behavior Tracking & Events**: clicks, scrolls, impressions — uplift measured automatically
+- **Behavior Tracking & Events**: clicks, scrolls, impressions — uplift measured automatically, with a privacy filter (PII redaction, `data-genui-private`, DNT/consent) on by default
 - **Theme System**: CSS-variable based customization
 - **Pinned Content**: guaranteed display, enforced server-side
-- **SSR-Safe**: importable in Next.js / Remix / Astro without crashes
+- **SSR-Safe**: importable in Next.js / Remix / Astro; the server renders the loading skeleton (no CLS)
+- **Integration-Ready**: dual ESM/CJS packaging, reactive props with fetch abort, charts in a lazy chunk
+- **Accessible**: keyboard-navigable tabs/carousel, `prefers-reduced-motion` respected
 
 </td>
 <td width="50%" valign="top">
@@ -55,14 +57,14 @@ GenUI System is a comprehensive framework for building **Generative User Interfa
 ### 🧠 **Backend Intelligence**
 
 - **Segment Cache**: the LLM runs once per user _segment_, not per request — orders of magnitude cheaper ([how](#-segment-cache--llm-as-an-offline-ranker))
-- **Output Guarantees**: schema validation + URL whitelist — the system guarantees, not the prompt ([how](#️-output-guarantees))
+- **Output Guarantees**: schema validation + URL whitelist + numeric grounding + per-tenant content policy — the system guarantees, not the prompt ([how](#️-output-guarantees))
 - **Auth & Multi-tenancy**: API keys, per-tenant isolation, rate limiting
 - **Server-Side Profiles**: source of truth with GDPR erasure; IndexedDB is just a cache
 - **Holdout & Uplift**: control group + z-test significance — prove personalization works
 - **Audit Log**: what was shown to whom, append-only
 - **Provider-Agnostic LLM**: OpenAI, Anthropic, Gemini, any OpenAI-compatible API — by configuration
 - **RAG Integration**: Qdrant vector store with semantic search
-- **Observability**: OpenTelemetry tracing on renders and LLM calls
+- **Observability**: honest health/readiness, Prometheus `/metrics`, audit sink with rotation, OpenTelemetry tracing
 
 </td>
 </tr>
@@ -72,7 +74,7 @@ GenUI System is a comprehensive framework for building **Generative User Interfa
 
 ## 🎛️ GenUI Studio
 
-**GenUI Studio** is the companion web app for building with the framework — a single SPA (`studio/`, React + Vite) with two tools. Run it locally with `cd studio && npm run dev`.
+**GenUI Studio** is the companion web app for building with the framework: a single SPA (`studio/`, React + Vite) with three tools. Run it locally with `cd studio && npm run dev`.
 
 <div align="center">
   <br />
@@ -100,7 +102,17 @@ Manage the RAG knowledge base that feeds the AI: connect to your backend (URL + 
   <br /><br />
 </div>
 
-> **Note:** the Content Studio requires a reachable backend and an admin key, so for now it runs **locally only** (`npm run dev`). On the public GitHub Pages build it shows an "available locally" notice. A hosted version arrives with proper user auth on the roadmap.
+### 📈 Measurement
+
+The proof that personalization pays, on one page. Enter a `zone_id` and the dashboard reads `GET /events/stats`: CTR per experiment arm (personalized, control holdout, no experiment), the uplift percentage, and the outcome of the two proportion z-test. The verdict is deliberately honest: below 100 impressions per arm the page reports the result as **preliminary noise**, never as "significant", and with a single arm it says uplift is not measurable yet instead of inventing a number. An ops panel on the same page shows the segment cache state (`GET /zone/cache/stats`) and triggers segment warmup (`POST /zone/warmup`) with one zone render request per archetype, filling the same cache keys live traffic reads.
+
+<div align="center">
+  <br />
+  <img src="./studio/screenshots/Studio_Measure.jpg" alt="GenUI Studio — Measurement Dashboard" width="100%" height="auto" />
+  <br /><br />
+</div>
+
+> **Note:** the Content Studio and the Measurement dashboard require a reachable backend and an admin key, so for now they run **locally only** (`npm run dev`). On the public GitHub Pages build they show an "available locally" notice and their code is tree shaken out of the bundle. A hosted version arrives with proper user auth on the roadmap.
 
 ---
 
@@ -138,11 +150,15 @@ pip install -r requirements-dev.txt
 cp .env.example .env
 ```
 
-Open `.env` and set **one** thing to start — your LLM key:
+Open `.env` and set **two** things to start — your LLM key and the dev flag:
 
 ```env
 LLM_PROVIDER=openai            # openai | anthropic | gemini
-OPENAI_API_KEY=sk-...          # the only required value
+OPENAI_API_KEY=sk-...          # required
+
+# Local development without API keys. Without keys the API FAILS CLOSED
+# (403 on every request) unless this is set. Never set it in production.
+GENUI_DEV_OPEN=1
 ```
 
 Everything else has sensible defaults. The values you'll likely touch later:
@@ -151,9 +167,11 @@ Everything else has sensible defaults. The values you'll likely touch later:
 # Cache shared across processes (docker-compose already runs Redis)
 REDIS_URL=redis://localhost:6379/0
 
-# Production: API keys ("key:tenant"). WITHOUT THESE THE API IS OPEN (dev only!)
+# Production: API keys ("key:tenant") — and remove GENUI_DEV_OPEN
 CLIENT_API_KEYS=pk_live_abc:myapp     # browser-side key
 ADMIN_API_KEYS=sk_live_xyz:myapp      # server-to-server key
+# Per-tenant secret for signed user identity (X-User-Token, see Auth section)
+USER_TOKEN_SECRETS=change-me-long-random:myapp
 
 # Measure personalization uplift (10% of users see the generic version)
 HOLDOUT_PERCENT=10
@@ -207,6 +225,8 @@ In your app's entry file (e.g. `main.tsx`):
 import "genui-framework/dist/styles.css";
 ```
 
+The package ships dual **ESM + CJS** builds behind an `exports` map: both `import` and `require('genui-framework')` resolve correctly (Vite, webpack, Jest, Next.js pages router). The stylesheet is declared in `sideEffects`, so bundlers never tree-shake your CSS import away.
+
 Then drop a zone anywhere:
 
 ```tsx
@@ -229,7 +249,28 @@ Open the page: you'll see a loading skeleton, then the generated cards. The `deb
 ```bash
 cd backend
 python3 -m unittest discover -s tests   # or: pytest tests/
+
+cd frontend
+npm test   # vitest: packaging (require/import), SSR skeleton, reactive props, privacy filter
 ```
+
+#### Golden harness — regression signal for prompt/model/engine changes
+
+Uplift measurement (see [Measuring Uplift](#-measuring-uplift--impressions-clicks--holdout)) tells you which variant earns more _after_ shipping. The golden harness answers the question that comes _before_ shipping: after changing a zone prompt, the model, or the BYOK engine, does the output still honor its structural contract on known inputs?
+
+`backend/tests/test_golden_zone.py` replays recorded LLM responses through the full real pipeline (validation → URL whitelist → numeric grounding → content policy → pinned enforcement) and asserts the invariants of each fixture in `backend/tests/golden/`: only allowed component types, pinned content present, no URL outside the input whitelist, no displayed number outside the input grounding, layout coherence. It checks form and invariants, never exact prose. It runs in the default suite: deterministic, no key, no network, no cost. The recorded responses are deliberately adversarial (invented URLs, an invented price, a missing pinned item, an incoherent layout, an unknown type), so the suite goes red if any link of the guarantee chain stops working.
+
+**Adding a fixture**: drop a JSON file in `backend/tests/golden/` with `request` (the `ZoneRenderRequest` fields), `retrieved` (recorded RAG results), `invariants.allowed_types` (optional, defaults to all built-in types) and `llm_response` (the recorded model envelope). No code changes needed; the harness picks it up automatically.
+
+**Live mode (vet a BYOK engine)**: point the harness at the engine configured in your environment (`LLM_PROVIDER`, provider keys, `OPENAI_BASE_URL` for vLLM/local endpoints) and check the same invariants on fresh output before promoting a change:
+
+```bash
+cd backend
+GENUI_GOLDEN_LIVE=1 ./venv/bin/python -m unittest tests.test_golden_zone -v
+# add GENUI_GOLDEN_RECORD=1 to also regenerate each fixture's recorded llm_response
+```
+
+Live mode is optional and opt-in: the default suite never needs it.
 
 ---
 
@@ -268,6 +309,7 @@ interface GenUIZoneProps {
 
   // === Auth ===
   apiKey?: string; // Client API key (X-API-Key); required when CLIENT_API_KEYS is configured
+  userToken?: string; // Signed user identity (X-User-Token); required with userId when USER_TOKEN_SECRETS is configured
 
   // === Prompt Engineering ===
   basePrompt?: string; // What the zone should display
@@ -287,7 +329,7 @@ interface GenUIZoneProps {
   // === Behavior ===
   loadOnMount?: boolean; // Auto-load on mount (default: true)
   refreshInterval?: number; // Auto-refresh in ms (0 = disabled)
-  cacheStrategy?: "segment" | "live"; // 'segment' (default): per-segment cached renders; 'live': always call the LLM
+  cacheStrategy?: "segment" | "live"; // 'segment' (default): per-segment cached renders; 'live': always call the LLM (admin keys only)
   streaming?: boolean; // Progressive render via SSE (components appear as generated)
   trackEvents?: boolean; // Auto impression/click events for uplift measurement (default: true)
 
@@ -310,6 +352,8 @@ interface GenUIZoneProps {
   debug?: boolean; // Shows reasoning, confidence, profile factors
 }
 ```
+
+**Props are reactive**: changing any request-shaping prop (`zoneId`, `userId`, `basePrompt`, `pinnedContent`, ...) on a mounted zone refetches automatically, aborting the inflight request (last issued wins) — a zone reused across SPA routes never shows the previous route's content. Props are compared **by value**, so passing fresh inline literals (`pinnedContent={[...]}`) on every render does not retrigger fetches.
 
 ---
 
@@ -485,6 +529,8 @@ function ChatBot() {
     userId: getUserId(),
     enablePersistence: true,
     enableBehaviorTracking: true,
+    privacy: "balanced", // capture contract — see "Behavior Tracking & Privacy"
+    consent: cmpConsent, // optional CMP hook: false = never track
     behaviorTrackingOptions: {
       trackClicks: true,
       trackScroll: true,
@@ -571,7 +617,9 @@ import { BentoComponent } from "genui-framework";
         badge: "New", // Top-left badge
         link: "/features/one",
         action: {
-          // Optional action button
+          // Optional action button. When present it becomes the card's
+          // interactive element and the card-level link wrapper is skipped
+          // (nested anchors are invalid HTML and break SSR).
           label: "Learn More",
           url: "/features/one",
         },
@@ -665,6 +713,8 @@ import { ChartComponent } from "genui-framework";
   }}
 />;
 ```
+
+> **Bundle note**: the chart engine (recharts, ~230 KB gzip) lives in a **lazy chunk** loaded the first time a chart actually renders — consumers that never show charts never download it. `<ChartComponent />` keeps working as before (the Suspense boundary is built in); a skeleton shows while the chunk loads.
 
 ### TextComponent — Styled Text
 
@@ -848,17 +898,19 @@ The framework's defaults live in `:root` (override them globally to retheme ever
 
 By default, zone renders are **not** generated per user per request. Users are collapsed into a small number of deterministic **segments** (role, top interests, browsing style, engagement), and each `(zone config, segment)` pair is rendered once and cached with **stale-while-revalidate** semantics:
 
-| Cache state                              | Behavior                                                               |
-| ---------------------------------------- | ---------------------------------------------------------------------- |
-| **fresh** (age ≤ `ZONE_CACHE_FRESH_TTL`) | Served from cache, no LLM call                                         |
-| **stale** (age ≤ `ZONE_CACHE_STALE_TTL`) | Served instantly from cache, re-rendered in background (single-flight) |
-| **miss**                                 | Rendered live (cold start), then cached for the whole segment          |
+| Cache state                              | Behavior                                                                                                                                                                                                     |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **fresh** (age ≤ `ZONE_CACHE_FRESH_TTL`) | Served from cache, no LLM call                                                                                                                                                                               |
+| **stale** (age ≤ `ZONE_CACHE_STALE_TTL`) | Served instantly from cache, re-rendered in background (single-flight)                                                                                                                                       |
+| **miss**                                 | Rendered live (cold start), then cached for the whole segment. Single-flight too: concurrent requests for the same key coalesce on one generation (`status: "coalesced"`) instead of each paying an LLM call |
 
 Anonymous users with no profile signals share a single `anon` segment — typically the most-hit cache entry. Changing any zone configuration (prompts, pinned content, constraints) automatically invalidates its cache entries.
 
-Use Redis for a shared, persistent cache across processes (`REDIS_URL=redis://localhost:6379/0`, included in `docker-compose.yml`); without it, an in-memory fallback is used. The cache always fails open: a cache outage degrades to live rendering.
+**Shared renders see the segment archetype, never the raw profile.** The LLM input of a cached render is derived from the cache key itself: role, top interests, browsing style and engagement as short validated tags (slugified, length- and count-capped). Free-length client fields — low-confidence guesses, navigation paths, arbitrary profile text — never reach a render that other users will be served, so the first requester of a segment cannot poison what the whole segment sees for the TTL window. Fine-grained individual personalization belongs to the non-shared path: `cacheStrategy="live"` renders per request from the full (server-authoritative) profile, and is reserved to admin keys (see [Cost controls](#-cost-controls)).
 
-For genuinely dynamic zones, opt out per zone:
+Use Redis for a shared, persistent cache across processes (`REDIS_URL=redis://localhost:6379/0`, included in `docker-compose.yml`); without it, an in-memory fallback is used. The cache always fails open: a cache outage degrades to live rendering. In production Redis is a required dependency — see [Production run](#-production-run--multiple-workers--redis).
+
+For genuinely dynamic zones, opt out per zone. `cacheStrategy="live"` requires an **admin key** (server-side rendering proxy, internal dashboard): a public `pk_` key cannot select it, because "one LLM call per request" is a spending decision that belongs to the operator, not to whoever holds the key shipped with the page. Client keys sending `"live"` receive a 403.
 
 ```tsx
 <GenUIZone zoneId="live-dashboard" apiUrl="..." cacheStrategy="live" />
@@ -887,7 +939,96 @@ Content-Type: application/json
 }
 ```
 
-Each response's `meta.cache` reports `status` (`fresh` | `stale` | `miss` | `bypass`), the `segment` key, and `age_seconds` — visible in the `debug` panel of `GenUIZone`. Cache stats are exposed at `GET /api/v1/zone/cache/stats`.
+Each response's `meta.cache` reports `status` (`fresh` | `stale` | `miss` | `coalesced` | `bypass`), the `segment` key, and `age_seconds` — visible in the `debug` panel of `GenUIZone`. Cache stats are exposed at `GET /api/v1/zone/cache/stats`.
+
+---
+
+## 🗂️ Zone Config Registry — Config as Data
+
+The principle: **anything that must be approved, versioned, or edited by non-developers — marketing editing prompts, legal sign-off, versioning, per-tenant overrides — must be data, not code.** A prompt legal has to sign off cannot live in a JSX prop.
+
+By default the zone configuration (prompts, pinned content, rendering constraints) travels as props from the host page — fine for a developer-owned integration, but structurally invisible to any governance workflow: there is nothing server-side to approve, version, or edit. The **zone config registry** inverts that. It is a server-side store keyed by `(tenant, zone_id)` holding the governed config block:
+
+```python
+from api.deps import get_zone_config_store
+
+await get_zone_config_store().upsert("acme", "homepage-hero", {
+    "base_prompt": "Show our enterprise plans",
+    "context_prompt": "Homepage hero for signed-in agents",
+    "pinned_content": [{"type": "link", "url": "https://…", "title": "Compliance note"}],
+    "preferred_component_type": "bento",
+    "max_items": 4,
+})  # -> {"version": 1, "status": "approved", "config": {...}, "updated_at": ...}
+```
+
+Resolution rules:
+
+- **Registry wins, wholesale.** When an _approved_ entry exists, every render of that zone (sync, streaming, batch, warmup) serves exactly the registry config; host props for the governed fields are ignored, **not merged** — a field-level merge would let the page inject prompt text around what was approved.
+- **Host props are the explicit fallback.** No entry (or a draft-only one) = props behave exactly as before. Existing integrations don't change; migration is per-zone: create an entry when a zone needs governance, delete it to hand control back to the host code.
+- **Per-tenant.** Tenants under the same deployment (e.g. `agente` / `assicurato`) have fully independent entries; the tenant always comes from the API key, never from the body.
+- **Versioned, with status.** Every write increments `version`; renders only ever serve `status: "approved"`. Drafts are stored but invisible to traffic — the hook for the approval workflow and Studio preview.
+- **Cache-coherent.** The resolved config feeds the cache key, so approving a new version invalidates cached renders exactly like a prop change does.
+
+Page context (`current_page`, `page_metadata`) and `custom_components` stay request props: the former is per-request by nature, the latter are bound to React components that only exist in the host bundle. Entries are managed from Python today (`zones.ZoneConfigStore`); CRUD/approval endpoints and the Studio editor are the next phases of `roadmap/strategiche/01`.
+
+---
+
+## 🏭 Production Run — Multiple Workers + Redis
+
+`uvicorn --reload` with no `REDIS_URL` is a **dev** setup. At production volume you run several worker processes, and everything that must be consistent _across_ processes lives in Redis:
+
+```bash
+REDIS_URL=redis://localhost:6379/0   # docker-compose already runs Redis
+uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+**Why Redis is required with more than one worker.** Profiles, rate-limit counters, uplift metrics and the single-flight render lock are cross-process state. Without Redis each worker keeps a private in-memory copy: a user's profile flip-flops depending on which worker serves the request and vanishes on restart, the effective rate limit becomes `limit × workers`, impressions/clicks under-count (the uplift numbers become wrong), and every worker re-renders the same stale segment — the exact LLM cost the cache exists to avoid.
+
+**Degradation semantics (what a Redis blip does).** Store operations never fail closed: on a Redis error the store serves from a bounded in-memory fallback and the process retries the connection with exponential backoff (1s doubling up to 30s), returning to Redis as soon as it answers. A blip degrades the process _briefly and visibly_ — never permanently and never with a 500:
+
+- `GET /health` reports `"redis": "connected" | "reconnecting" | "disabled"` and the overall status turns `degraded` while Redis is unreachable — or not configured outside explicit dev mode (`GENUI_DEV_OPEN=1`).
+- Socket timeouts are capped (~2s), so a hung Redis costs one slow operation, not a hung request.
+- The in-memory fallbacks are bounded (2000 entries for renders and profiles, oldest evicted): a long outage on a multi-worker deployment means _reduced consistency_, not memory exhaustion — but it is a shock absorber for blips, **not an operating mode**. Fix the Redis, don't run on the fallback.
+
+---
+
+## 🚚 Deploying for a Customer
+
+GenUI ships on-prem: **one deployment per customer** — backend, Redis and Qdrant on their VM, with their own LLM key (BYOK) and their own tenants (e.g. insurance: `agente` vs `assicurato`). The `deploy/` folder makes that reproducible:
+
+```bash
+cd deploy
+cp customer.env.example customer.env   # their engine, their tenants, their limits
+docker compose up -d --build
+./smoke.sh                             # health, fail-closed auth, per-tenant scoping
+```
+
+- [`deploy/README.md`](deploy/README.md) — the bring-up, how tenants are declared (three env vars, everything per-tenant follows from the API key), the engine/embedding BYOK matrix, operating notes.
+- [`deploy/TENANT-ISOLATION.md`](deploy/TENANT-ISOLATION.md) — what the tenant boundary guarantees inside one deployment, with the enforcing code reference for every data type. This is the document a customer's security team reviews.
+- [`deploy/OUTPUT-GUARANTEES.md`](deploy/OUTPUT-GUARANTEES.md) — what the generated UI can never contain (invented links, invented numbers, banned terms, broken schemas), enforced vs best-effort stated honestly, with code references and tests. This is the document a customer's legal/compliance team attaches to the contract.
+
+---
+
+## 💸 Cost Controls
+
+With BYOK the LLM bill is on **your** key, and the client `pk_` key is public (it ships with the page). The principle: **a public credential must never convert traffic into LLM spend without a limit.** Cost is controlled where it is born (cache misses and live renders), not downstream:
+
+- **`cacheStrategy="live"` is admin-only.** A request body field must not let any visitor force one LLM call per page load. Client keys sending `"live"` get a 403; the segment cache serves them instead.
+- **Cold misses are single-flight.** When a popular segment expires, concurrent requests coalesce on one generation (the same lock that guards stale refreshes). The extra requests wait briefly and are served the winner's render (`meta.cache.status: "coalesced"`).
+- **Batches are capped and charged for what they spend.** `/zone/batch-render` accepts at most `ZONE_BATCH_MAX` zones (413 above) and a batch of N zones consumes N rate-limit slots, not 1.
+- **Per-tenant LLM budget.** `LLM_BUDGET_PER_HOUR` caps how many LLM generations one tenant can trigger per hour, across all workers (same shared Redis store as the rate limit). Over the cap: cached renders keep being served (stale entries simply stop refreshing), new generations return 429. Admin-triggered renders (warmup, admin `"live"`) are exempt, so pre-warming after a deploy never competes with the abuse cap.
+- **Provider timeout.** `LLM_TIMEOUT_SECONDS` bounds every LLM and embedding call; a slow or cold provider endpoint fails the request instead of holding it (and a worker slot) open for the SDK default of 10 minutes.
+
+| Knob                    | Default   | Meaning                                                           |
+| ----------------------- | --------- | ----------------------------------------------------------------- |
+| `LLM_BUDGET_PER_HOUR`   | `0` (off) | Max LLM generations per tenant per hour; set it in production     |
+| `ZONE_BATCH_MAX`        | `10`      | Max zones per batch-render request                                |
+| `LLM_TIMEOUT_SECONDS`   | `60`      | Per-call provider timeout (LLM + embeddings); empty = SDK default |
+| `RATE_LIMIT_PER_MINUTE` | `120`     | Requests per client key per minute (batches count as N)           |
+
+Sizing `LLM_BUDGET_PER_HOUR`: at steady state generations are rare (misses on new segments plus one refresh per cached key per `ZONE_CACHE_FRESH_TTL` window). Count your zones times your active segments, add headroom for a cold start, and remember the budget is per tenant, not per key. The rate limit protects request volume; the budget protects the LLM wallet. They are independent caps and the stricter one wins.
+
+> The quota exists because "no client `live`" alone is not enough: `page_metadata` is client-controlled and part of the cache key, so a hostile visitor can rotate a nonce to force a miss on every request. The budget caps what any such trick can spend, no matter how the generation was triggered.
 
 ---
 
@@ -897,11 +1038,16 @@ What reaches the frontend is guaranteed by the system, not by prompt obedience:
 
 1. **Provider-native structured output** — the ZoneAgent constrains generation with `response_format` (JSON schema derived from the component schemas, falling back to JSON mode).
 2. **Schema validation** — every generated component is validated against Pydantic schemas (`backend/schemas/`) server-side. Invalid components are dropped individually and reported in `meta.sanitization.dropped_components`; one malformed component never breaks the zone.
-3. **URL whitelist (hard rule)** — a generated URL survives **only if it existed in the input**: pinned content, developer prompts, RAG documents, or page context. Invented links/images are stripped (`meta.sanitization.removed_urls`), buttons left without a valid URL are dropped, markdown links collapse to plain text. Dangerous schemes (`javascript:`, `data:`, …) are always blocked, even with the whitelist disabled (`URL_WHITELIST_ENABLED=false`).
-4. **Pinned content enforcement** — pinned items are verified on the _actual output_ (by URL/title) after generation; missing ones are appended automatically. `pinned_content_included` is computed, not model-claimed.
-5. **Frontend defense in depth** — rendered `href`/`src` pass through `sanitizeUrl()` regardless of origin.
+3. **URL whitelist (hard rule)** — a generated URL survives **only if it existed in the input**: pinned content, developer prompts, RAG documents, or page context. Invented links/images are stripped (`meta.sanitization.removed_urls`), buttons left without a valid URL are dropped, markdown links collapse to plain text — in components _and_ in the `/query` chat prose. Dangerous schemes (`javascript:`, `data:`, …) are always blocked, even with the whitelist disabled (`URL_WHITELIST_ENABLED=false`).
+4. **Numeric grounding (hard rule)** — a number displayed _as_ the content — a `stats_banner` value, a `pricing_cards` price, a `chart` data point — survives **only if its digits trace to a number present in the input** (verbatim modulo formatting: `1,200`, `1200` and `1200.0` all match). Ungrounded stats/plans are removed (`meta.sanitization.removed_numbers`); one ungrounded chart point drops the whole chart. Scope honesty: this guarantees the digits existed in your input, not the semantics of the sentence around them, and numbers inside prose are deliberately not touched. `NUMERIC_GROUNDING_ENABLED=false` opts out.
+5. **Per-tenant content policy** — banned terms configured in `CONTENT_POLICY` (JSON, per tenant + `"*"`) never reach the page: a component containing one is dropped, chat text is redacted, hits are reported in `meta.sanitization.policy_violations`. Term matching is lexical (word-boundary, case-insensitive) — tone constraints remain prompt-level best-effort, and we say so.
+6. **Pinned content enforcement** — pinned items are verified on the _actual output_ (by URL/title) after generation; missing ones are appended automatically. `pinned_content_included` is computed, not model-claimed.
+7. **Frontend defense in depth** — rendered `href`/`src` pass through `sanitizeUrl()` regardless of origin.
+8. **Versioned contract, graceful skew** — every response carries `contract_version` (exposed as `meta.contractVersion`). When an already-deployed frontend bundle meets a newer backend, unknown component types are **skipped silently in production** (a `console.warn` for developers, an inline error box only in dev builds) — a backend deploy never prints internal errors into the end user's page.
 
-> Because URLs must exist in the input, enumerate your content in `contextPrompt` (or `pinnedContent` / RAG) — content the model cannot reference, it cannot link.
+> Because URLs and numbers must exist in the input, enumerate your content in `contextPrompt` (or `pinnedContent` / RAG) — content the model cannot reference, it cannot link or claim.
+
+The full chain (`validate → URL guard → numeric grounding → content policy → pinned`) runs on **every** serving path — sync, SSE streaming, and `/query` — and always _before_ a render is cached. On the React side, `useZone` and `useGenUI` expose the report as `meta.sanitization` (`removedUrls`, `droppedComponents`, `removedNumbers`, `policyViolations`), so a host can observe enforcement without parsing wire data. [`deploy/OUTPUT-GUARANTEES.md`](deploy/OUTPUT-GUARANTEES.md) states each guarantee with its enforcing code reference, its test, and its honest limits — written to be attached to a contract.
 
 ---
 
@@ -916,19 +1062,56 @@ CLIENT_API_KEYS=pk_live_abc123:acme,pk_live_def456:globex   # shipped to the bro
 ADMIN_API_KEYS=sk_live_xyz789:acme                          # server-to-server only
 ```
 
-- **Client keys** identify the calling app/tenant, gate rate limits, and scope cached renders and stored profiles per tenant. Pass them via the `apiKey` prop (sent as `X-API-Key`; `Authorization: Bearer` also works).
+- **Client keys** identify the calling app/tenant, gate rate limits, and scope cached renders and stored profiles per tenant. Pass them via the `apiKey` prop (sent as `X-API-Key`; `Authorization: Bearer` also works). They live in the browser: they identify the _app_, never the _person_.
 - **Admin keys** protect `/documents*`, `/zone/warmup`, and `/zone/cache/stats`.
-- **No keys configured = open API** (dev mode, logged loudly). Always configure keys in production.
-- Rate limiting: `RATE_LIMIT_PER_MINUTE` per client key (default 120, `0` disables).
+- **Fail-closed by default**: with no keys configured the API **refuses every request (403)** and the error explains what to configure. The only way to run open is the explicit dev flag `GENUI_DEV_OPEN=1` — never set it in production.
+- Rate limiting: `RATE_LIMIT_PER_MINUTE` per client key (default 120, `0` disables). A batch-render of N zones counts as N requests, and per-tenant LLM spend has its own cap: see [Cost controls](#-cost-controls).
 
 ```tsx
 <GenUIZone
   apiUrl="..."
   apiKey="pk_live_abc123"
   userId={user.id}
+  userToken={user.genuiToken} // signed identity, see next section
   zoneId="home"
 />
 ```
+
+### Signed user identity (X-User-Token)
+
+A client key alone must never authorize access to a _specific user's_ data — anyone can read it from the browser and swap the `user_id`. Every route that binds a request to a `user_id` (`GET/DELETE /profile/{user_id}`, `POST /profile/sync`, `/zone/render*` and `/query` when they carry a `user_id`) requires proof of identity:
+
+- the caller presents a **signed user token** in the `X-User-Token` header whose subject matches the requested `user_id`, **or**
+- the caller uses an **admin key** (server-to-server).
+
+The token is an HMAC-SHA256 assertion over `{user_id, tenant, exp}`, minted by **your backend** — the party that actually knows who is logged in — with a per-tenant secret:
+
+```env
+# "secret:tenant" entries, same format as the API keys.
+# Multiple entries per tenant are allowed (secret rotation).
+USER_TOKEN_SECRETS=change-me-long-random:acme
+```
+
+```python
+# In YOUR backend, after your own session/login check:
+from auth.identity import sign_user_token
+token = sign_user_token("change-me-long-random", user_id, "acme")  # default TTL 1h
+# hand `token` to the browser; the frontend sends it as X-User-Token
+```
+
+On the React side, pass it as the `userToken` prop (on `GenUIZone`, `useZone`, or `useGenUI`) next to `userId` — the library adds the `X-User-Token` header to every render/stream/query call; omit it and no header is sent.
+
+The identity contract, in one table:
+
+| Configuration                                | Per-user routes                                                                                                      |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `USER_TOKEN_SECRETS` set for the tenant      | Enforced: valid token with matching subject, or admin key (`GENUI_DEV_OPEN` does **not** bypass a configured secret) |
+| No secret for the tenant, `GENUI_DEV_OPEN=1` | Open (explicit dev mode — old behavior)                                                                              |
+| No secret for the tenant, no dev flag        | **403, fail-closed** — the error names the env var to set                                                            |
+
+Shared-secret HMAC is deliberate: for a self-hosted OSS deployment the same operator controls both the host app and the GenUI backend, so asymmetric signing adds key-distribution complexity without adding trust. If your identities come from a third-party IdP, verifying its **JWTs (JWKS)** instead of the HMAC token is the documented upgrade path — the guard (`auth/identity.py:authorize_user_access`) is the single place to swap the verifier.
+
+Anonymous personalization is unaffected: requests without a `user_id` never need a token. Tenant isolation is also unchanged — the tenant always comes from the API key, never from the request body.
 
 ### Server-side profiles (source of truth)
 
@@ -937,7 +1120,7 @@ When `userId` is provided, the **server-side profile store** (Redis, or in-memor
 - An existing server profile **overrides** the client-supplied one.
 - With no server profile yet, the client (IndexedDB) copy seeds the store — IndexedDB is thereby demoted to a cache.
 - Agent-extracted profile updates are merged server-side (higher confidence wins) on every `/query`.
-- Endpoints: `GET /api/v1/profile/{user_id}`, `POST /api/v1/profile/sync`, and `DELETE /api/v1/profile/{user_id}` (GDPR erasure, audit-logged).
+- Endpoints: `GET /api/v1/profile/{user_id}`, `POST /api/v1/profile/sync`, and `DELETE /api/v1/profile/{user_id}` (GDPR erasure, audit-logged). All require the signed `X-User-Token` matching the `user_id` (or an admin key) — see [Signed user identity](#signed-user-identity-x-user-token).
 - Retention: `PROFILE_TTL_SECONDS` (e.g. `7776000` = auto-expire after 90 days of inactivity).
 
 ### Audit log — what was shown to whom
@@ -969,11 +1152,13 @@ With `streaming` enabled, components appear one by one as the model generates th
 <GenUIZone zoneId="live-feed" apiUrl="..." cacheStrategy="live" streaming />
 ```
 
-Under the hood the zone consumes `POST /api/v1/zone/render/stream` (Server-Sent Events): each `component` event is **already validated and URL-sanitized** before being emitted; the final `complete` event carries the authoritative response (including pinned-content enforcement) and replaces the streamed state. Cache hits stream their components in a single burst, so `streaming` is most useful for `cacheStrategy="live"` zones. Holdout, audit log, and caching behave exactly like the non-streaming endpoint.
+Under the hood the zone consumes `POST /api/v1/zone/render/stream` (Server-Sent Events): each `component` event is **already validated and URL-sanitized** before being emitted; the final `complete` event carries the authoritative response (including pinned-content enforcement) and replaces the streamed state. Cache hits stream their components in a single burst, so `streaming` is most useful for `cacheStrategy="live"` zones (admin keys only, see [Cost controls](#-cost-controls)). Holdout, audit log, caching, single-flight and the LLM budget behave exactly like the non-streaming endpoint.
 
 ### SSR-safety
 
-The library can be imported and rendered in server environments (Next.js, Remix, Astro): CSS is shipped as a separate file (no style injection at import time), IndexedDB persistence degrades to a no-op without a browser, and the BehaviorTracker won't attach listeners without a DOM. Zone fetches run in effects, so server-rendered markup shows your `loadingComponent`/skeleton and hydrates normally. A first-class SSR adapter (zone data fetched server-side) is on the roadmap as a separate package.
+The library can be imported and rendered in server environments (Next.js, Remix, Astro): CSS is shipped as a separate file (no style injection at import time), IndexedDB persistence degrades to a no-op without a browser, and the BehaviorTracker won't attach listeners without a DOM.
+
+**What the server actually renders**: zone data is fetched client-side (in effects), so `renderToString` emits the **loading skeleton** — stable markup with the zone's real footprint, no layout shift, and the client's first paint matches it exactly (no hydration mismatch). With `loadOnMount={false}` the server renders nothing. This is the client-boundary contract: personalized content never appears in server HTML by design (it depends on the visitor); in the React App Router, put the zone in a `'use client'` component. A first-class SSR adapter (zone data fetched server-side) is on the roadmap as a separate package.
 
 ---
 
@@ -1028,21 +1213,135 @@ GET /api/v1/events/stats?zone_id=homepage-for-you   (admin key)
 
 ### Observability
 
-Set `TRACING_ENABLED=true` for OpenTelemetry tracing: FastAPI requests, `genui.zone.render` spans (zone, tenant, segment, cache status, experiment arm) and `genui.llm.*` spans (provider, model). Point `OTLP_ENDPOINT` at a collector (Jaeger, Grafana Tempo, ...) or omit it for console output.
+Everything a regulated operator must observe (service health, traffic, LLM spend, "who saw what") is queryable through four surfaces: health endpoints, `/metrics`, the audit sink and OpenTelemetry tracing. This section is the production configuration reference for the SRE and the DPO.
+
+#### Health endpoints
+
+| Endpoint      | Auth | Purpose                                                                                                                                                                                                                                                 |
+| ------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /health` | none | Aggregate dependency health for dashboards and uptime monitors. Always `200`; the body says `healthy` or `degraded`.                                                                                                                                    |
+| `GET /ready`  | none | Readiness for load balancers. `503` only when the process cannot serve at all (LLM provider unconfigured). A degraded dependency keeps `200`: pulling every replica out of rotation for a shared dependency blip would turn degradation into an outage. |
+| `GET /live`   | none | Process liveness: `200` while the event loop answers. Restart the process if this stops responding.                                                                                                                                                     |
+
+```json
+{
+  "status": "degraded",
+  "version": "1.0.0",
+  "qdrant_connected": true,
+  "redis": "reconnecting",
+  "llm": "configured"
+}
+```
+
+The checks are real: `redis` is probed on the same connection handle the stores use (`connected` | `reconnecting` | `disabled`, see [Production run](#-production-run--multiple-workers--redis)), `qdrant_connected` requires the collection to actually answer, and `llm` verifies that the configured provider has a key or a usable endpoint (config check, no network call: provider reachability shows up as error counters in `/metrics`). Health responses carry statuses only. Collection internals (point counts, index state) moved behind the admin key: `GET /api/v1/documents/stats`.
+
+Alert on `status: "degraded"` (scrape `/health` with the blackbox exporter or your uptime monitor); route traffic on `/ready`; restart on `/live`.
+
+#### Metrics (`GET /metrics`, admin key)
+
+Prometheus text format. Requires an admin key because tenant names and traffic volumes are operator data:
+
+```yaml
+scrape_configs:
+  - job_name: genui
+    metrics_path: /metrics
+    authorization: { credentials: "sk_your_admin_key" }
+    static_configs: [{ targets: ["genui-backend:8000"] }]
+```
+
+| Metric                                          | Labels                 | Meaning                                                                                                                  |
+| ----------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `genui_http_requests_total`                     | `method, path, status` | Requests per route template (unmatched paths collapse into `path="unmatched"`)                                           |
+| `genui_http_request_seconds_sum/_count`         | `method, path`         | Request latency (average via `rate(sum)/rate(count)`)                                                                    |
+| `genui_zone_renders_total`                      | `tenant, cache`        | Served renders per cache outcome: `fresh`, `stale`, `miss`, `coalesced`, `bypass`                                        |
+| `genui_llm_generations_total`                   | `tenant, op, outcome`  | LLM generations (`op`: `zone` or `query`; `outcome`: `ok` or `error`). This is the spend meter for the tenant's BYOK key |
+| `genui_llm_generation_seconds_sum/_count`       | `tenant, op`           | Generation latency                                                                                                       |
+| `genui_redis_connected`, `genui_llm_configured` |                        | Dependency gauges computed at scrape time                                                                                |
+
+The counters live in Redis (same shared handle as the stores), so every worker increments the same values and any worker serves a truthful scrape; during a Redis blip counts fall back to process memory and merge into the next scrape. The queries an SRE actually runs:
+
+```promql
+# Cache hit rate (the economic promise of the segment cache)
+sum(rate(genui_zone_renders_total{cache=~"fresh|stale"}[5m]))
+  / sum(rate(genui_zone_renders_total[5m]))
+
+# LLM error rate per tenant
+sum by (tenant) (rate(genui_llm_generations_total{outcome="error"}[5m]))
+  / sum by (tenant) (rate(genui_llm_generations_total[5m]))
+
+# HTTP 5xx ratio
+sum(rate(genui_http_requests_total{status=~"5.."}[5m]))
+  / sum(rate(genui_http_requests_total[5m]))
+```
+
+#### Audit in production
+
+The audit trail answers the DPO question: "what did user X see on day Z?". Every line is JSON with `ts`, `event`, `tenant`, `user_id`, the API key fingerprint (never the raw key) and what was shown (`render_id`, component types, titles, links). Two sinks:
+
+- **Logger sink (production default, `AUDIT_LOG_PATH` unset)**: lines are emitted on the `genui.audit` logger. Ship them with the host's log pipeline (journald, promtail/Loki, Filebeat, CloudWatch agent) by filtering on the logger name. This is the multi-worker configuration: every replica feeds the same pipeline, lines survive redeploys, and retention/indexing is the pipeline's job. A local JSONL file on N replicas cannot answer the DPO question: it fragments across ephemeral disks and disappears on redeploy.
+- **File sink (`AUDIT_LOG_PATH=./audit.jsonl`)**: single-process runs only. Rotation is built in: `AUDIT_LOG_MAX_BYTES` (default 50 MB) and `AUDIT_LOG_BACKUP_COUNT` (default 5), so the file can no longer grow until the disk fills. Rotation is per-process: with multiple workers, use the logger sink or one file per worker.
+
+Answering the DPO from the file sink (from a log pipeline, the same filters apply to the indexed fields):
+
+```bash
+jq -c 'select(.user_id == "user-42" and (.ts | startswith("2026-07-14")))
+       | {ts, event, zone_id, render_id, shown_titles, shown_links}' audit.jsonl*
+```
+
+#### Tracing
+
+Set `TRACING_ENABLED=true` for OpenTelemetry tracing: FastAPI request spans, `genui.zone.render` (zone, tenant, segment, cache status, experiment arm), `genui.query` (tenant) and `genui.llm.*` client spans (provider, model) on every agent call, zones and chat alike. Point `OTLP_ENDPOINT` at a collector (Jaeger, Grafana Tempo, ...) or omit it for console output. The `opentelemetry-*` packages are optional: without them every span is a no-op.
 
 ---
 
-## 🔧 Behavior Tracking
+## 🔧 Behavior Tracking & Privacy
 
-The framework automatically tracks user behavior and sends it to the backend for personalization:
+The framework tracks user behavior (on by default) and sends it to the backend for personalization. An integrator cannot audit every DOM node of their pages, so the tracker ships with a **safe default**: `privacy: 'balanced'`. The full capture contract per level — written so your DPO can sign off on it:
 
-| Event Type     | What's Tracked                          |
-| -------------- | --------------------------------------- |
-| **Clicks**     | Element ID, type, page, coordinates     |
-| **Scrolls**    | Depth percentage, direction, velocity   |
-| **Hovers**     | Element ID, duration, timeout threshold |
-| **Navigation** | Page path, title, timestamp             |
-| **Zone Views** | When GenUI zones enter viewport         |
+| Signal                                                    | `strict`     | `balanced` (default) | `off`                |
+| --------------------------------------------------------- | ------------ | -------------------- | -------------------- |
+| Click coordinates, element tag/id/class, heatmap zones    | ✅           | ✅                   | ✅                   |
+| Scroll depth & direction                                  | ✅           | ✅                   | ✅                   |
+| Hover (tag, id, duration)                                 | ✅           | ✅                   | ✅                   |
+| Navigation paths                                          | PII-redacted | PII-redacted         | raw                  |
+| Page titles & referrer                                    | ❌           | PII-redacted         | raw                  |
+| Clicked element text (max 50 chars)                       | ❌           | PII-redacted         | raw                  |
+| Link `href`s                                              | ❌           | PII-redacted         | raw                  |
+| `trackInteraction` metadata strings (any nesting)         | ❌           | PII-redacted         | raw                  |
+| `<input>`/`<textarea>`/`<select>`/contenteditable content | ❌ never     | ❌ never             | ❌ never             |
+| Elements under `data-genui-private`                       | ❌ never     | ❌ never             | ❌ never             |
+| Elements under `data-genui-redact`                        | shape only   | shape only           | shape only           |
+| Honors `navigator.doNotTrack` / Global Privacy Control    | ✅           | ✅                   | ❌ (explicit choice) |
+
+**PII redaction** replaces emails, IBANs, Italian codici fiscali and runs of 8+ digits (cards, phone numbers, account numbers, birth dates) with `[redacted]` — _before_ truncation, so a cut-off token can never leak. Free-text street addresses are **not** reliably detectable by regex: wrap address blocks in `data-genui-private` instead.
+
+> **Behavior change (2026-07)**: the tracker previously captured clicked text, titles and paths raw. It now defaults to `balanced` and honors DNT/GPC. Raw capture requires an explicit `privacy: 'off'`. `enableBehaviorTracking` still defaults to `true`. See [CHANGELOG](./CHANGELOG.md).
+
+### Marking sensitive DOM
+
+```html
+<!-- never recorded at all: no click, no hover, no text, subtree included -->
+<section data-genui-private>… quote details, medical history …</section>
+
+<!-- recorded as shape (element id + click happened), never its content -->
+<div data-genui-redact id="quote-summary">…</div>
+```
+
+### Privacy level & consent
+
+```tsx
+useGenUI({
+  apiUrl: "http://localhost:8000",
+  privacy: "strict", // 'strict' | 'balanced' (default) | 'off'
+  consent: cmpConsent, // your CMP hook (EU regime)
+});
+```
+
+- `consent: false` — the tracker never starts, at any level. Keep it `false` until your consent banner resolves.
+- `consent: true` — explicit grant from your consent flow; overrides the ambient DNT/GPC signal.
+- `consent` unset — no consent gating; DNT/GPC still honored unless `privacy: 'off'`.
+
+Fine-grained tracker overrides live in `behaviorTrackingOptions` (they win over the top-level shortcuts). Zone impression/click events (`/events`, uplift measurement) capture only the framework's own generated content, never host page data. The auto-captured `current_page` sent by zones follows the same privacy level; an explicit `currentPage` prop is your own choice and is sent as-is.
 
 ### Manual Tracking
 
@@ -1111,7 +1410,25 @@ EXTRACTOR_BACKEND=local      # default: pypdf/docx/bs4 — zero dependencies, da
 
 Routing is per-format: plain text always decodes locally; a backend only handles the formats it excels at (Docling: PDF/DOCX/HTML/images; GLM-OCR: PDF/images) and everything else falls through to the local parsers. Runtime failures of a backend **fall back to local** with a warning; a configured backend with a missing package fails loudly (501) — that's a deployment mistake, not something to hide. The audit log records which extractor produced each document.
 
-> Notes: embeddings always use OpenAI (`text-embedding-3-small`), so `OPENAI_API_KEY` is required for RAG even when `LLM_PROVIDER=anthropic`. Scanned PDFs need `docling` or `glmocr` — the local backend cannot OCR.
+> Note: scanned PDFs need `docling` or `glmocr` — the local backend cannot OCR.
+
+#### Bring your own embedding — your documents embed where you choose
+
+Extraction keeping data in-house would mean little if every chunk then left for a third-party embedding API. Embeddings are pluggable exactly like the LLM client — and by default they **follow the LLM's OpenAI settings**, so a deployment pointing `OPENAI_BASE_URL` at an in-house endpoint keeps embeddings in-house too:
+
+```env
+EMBEDDING_MODEL=text-embedding-3-small
+# EMBEDDING_PROVIDER=openai   # openai (any OpenAI-compatible endpoint) | gemini
+# EMBEDDING_API_KEY=          # defaults to OPENAI_API_KEY (GOOGLE_API_KEY for gemini)
+# EMBEDDING_BASE_URL=         # vLLM / Ollama / TEI / RunPod; defaults to OPENAI_BASE_URL
+# EMBEDDING_DIMENSIONS=       # vector size; unset = derived from the model
+```
+
+Where your data lives, in three rules:
+
+1. **Everything local stays local.** `EMBEDDING_BASE_URL` (or the inherited `OPENAI_BASE_URL`) pointed at your own OpenAI-compatible endpoint means no chunk and no search query ever leaves your infrastructure — the same promise as the self-hosted extraction backends, kept end-to-end.
+2. **Misconfiguration fails loudly.** No embedding config → an operator-readable error (HTTP 503) telling you exactly what to set. There is **no silent fallback** to `api.openai.com`, and no mute "render without RAG" hiding a dead knowledge base.
+3. **The vector size follows the model.** The Qdrant collection dimension derives from the embedding model (known models resolve instantly; unknown ones are probed once, or declare `EMBEDDING_DIMENSIONS`). Switching models over an existing collection raises a clear mismatch error instead of corrupting the index — re-index into a new `QDRANT_COLLECTION` to migrate.
 
 ### POST /api/v1/query — Chat Interface
 
@@ -1236,43 +1553,54 @@ Content-Type: application/json
 genui-framework/
 ├── backend/                              # Python FastAPI backend
 │   ├── agents/                           # AI agent implementations
-│   │   ├── zone_agent.py                 # Zone rendering (validation, URL guard,
-│   │   │                                 # pinned enforcement, streaming)
-│   │   ├── response_agent.py             # Chat response generation (datapizza)
+│   │   ├── zone_agent.py                 # Zone rendering (validation, URL + numeric guard,
+│   │   │                                 # content policy, pinned enforcement, streaming)
+│   │   ├── response_agent.py             # Chat responses (model-invoked RAG tool, isolated)
 │   │   ├── profile_agent.py              # Profile learning & extraction
 │   │   ├── behave_agent.py               # Behavior analysis
 │   │   └── orchestrator.py               # Multi-agent coordination (chat)
 │   ├── api/                              # REST API endpoints
-│   │   ├── main.py                       # FastAPI app, query/documents/profile endpoints
+│   │   ├── main.py                       # FastAPI app, query/documents/profile, health/metrics
 │   │   ├── zone_router.py                # Zone render + stream + warmup + cache stats
 │   │   ├── events_router.py              # UI event ingestion + uplift stats
 │   │   └── deps.py                       # Shared service singletons
-│   ├── auth/                             # API keys, tenants, FastAPI dependencies
-│   ├── llm/                              # Provider abstraction (OpenAI / Anthropic / Gemini)
+│   ├── auth/                             # API keys, tenants, dependencies
+│   │   └── identity.py                   # Signed user identity (HMAC X-User-Token), fail-closed
+│   ├── llm/                              # Provider abstraction (BYOK) + tool-calling loop
+│   │   └── embeddings.py                 # Pluggable embeddings (EMBEDDING_PROVIDER / BASE_URL)
 │   ├── schemas/                          # Component schemas (Pydantic) + custom type registry
-│   ├── segmentation/                     # Deterministic profile -> segment mapping
+│   ├── segmentation/                     # Deterministic profile -> segment + archetype
 │   ├── profiles/                         # Server-side profile store + merge logic
 │   ├── experiments/                      # Holdout arm assignment
-│   ├── metrics/                          # Impression/click counters + z-test significance
+│   ├── metrics/                          # Impression/click counters, z-test, ops.py (HTTP metrics)
 │   ├── rag/                              # Qdrant vector store + chunking
-│   ├── utils/                            # zone_cache (SWR), url_guard, audit, rate_limit,
+│   ├── utils/                            # zone_cache (SWR), redis_conn (reconnect), url_guard,
+│   │                                     # numeric_guard, content_policy, audit, rate_limit,
 │   │                                     # json_stream (SSE parser), tracing
 │   ├── config/settings.py                # All env-driven configuration
-│   ├── tests/                            # 136 unit tests (unittest/pytest compatible)
+│   ├── tests/                            # 363 unit tests (unittest-compatible; opt-in live LLM)
+│   ├── Dockerfile                        # Container image
 │   └── docker-compose.yml                # Qdrant + Redis
 │
-└── frontend/                             # React component library (npm package)
-    ├── src/
-    │   ├── components/                   # GenUIZone, GenUISection, Bento/Buttons/Chart/Text,
-    │   │                                 # ComponentRenderer (with custom-component fallback)
-    │   ├── hooks/                        # useZone (cache/streaming/events), useGenUI (chat)
-    │   ├── registry.ts                   # registerGenUIComponent (custom design systems)
-    │   ├── styles/genui.css              # Glassmorphism theme, animations
-    │   ├── types/                        # TypeScript definitions
-    │   └── utils/                        # indexeddb (SSR-safe), behaviorTracker,
-    │                                     # sanitizeUrl, genuiEvents, sse
-    ├── dist/                             # Built output (+ styles.css)
-    └── rollup.config.js
+├── frontend/                             # React component library (npm package)
+│   ├── src/
+│   │   ├── components/                   # GenUIZone, GenUISection, ComponentRenderer +
+│   │   │                                 # Bento/Buttons/Chart/Text + 7 section components
+│   │   │                                 # (Tabs, Steps, Stats, Testimonial, Pricing, Grid, Hero)
+│   │   ├── hooks/                        # useZone (cache/streaming/events), useGenUI (chat)
+│   │   ├── registry.ts                   # registerGenUIComponent (custom design systems)
+│   │   ├── styles/genui.css              # Themeable tokens, light/dark, reduced-motion
+│   │   ├── types/                        # TypeScript definitions
+│   │   └── utils/                        # indexeddb (SSR-safe), behaviorTracker, privacy,
+│   │                                     # sanitizeUrl, genuiEvents, sse
+│   ├── tests/                            # vitest (packaging, SSR, reactivity, privacy)
+│   ├── dist/                             # Dual ESM/CJS output (+ styles.css)
+│   └── rollup.config.js
+│
+├── deploy/                               # docker-compose, customer.env, OUTPUT-GUARANTEES.md,
+│                                         # TENANT-ISOLATION.md, smoke.sh
+├── studio/                               # Vite SPA: Theme Playground, Content Studio, Measure
+└── CHANGELOG.md
 ```
 
 ## Data Flow
@@ -1323,7 +1651,7 @@ genui-framework/
 │  │         ▼                                                   │        │
 │  │  ┌──────────────┐  ┌──────────────┐                         │        │
 │  │  │ RAG System   │  │   LLM API    │                         │        │
-│  │  │ (Qdrant)     │  │  (OpenAI)    │                         │        │
+│  │  │ (Qdrant)     │  │   (BYOK)     │                         │        │
 │  │  └──────────────┘  └──────────────┘                         │        │
 │  │                                                             │        │
 │  └─────────────────────────────────────────────────────────────┘        │
@@ -1336,48 +1664,49 @@ genui-framework/
 
 ### Zone render pipeline (what actually happens on `/zone/render`)
 
-1. **Auth & rate limit** — the API key resolves the tenant; client keys are rate-limited.
+1. **Auth, identity & rate limit** — the API key resolves the tenant and applies the rate limit. On routes carrying a `user_id`, when `USER_TOKEN_SECRETS` is set for the tenant a signed `X-User-Token` is required (fail-closed; open dev mode only under `GENUI_DEV_OPEN=1`).
 2. **Profile resolution** — with a `user_id`, the server-side profile overrides the client copy (or gets seeded by it).
 3. **Holdout assignment** — with `HOLDOUT_PERCENT` set, a sticky hash sends X% of users to the control arm (signals stripped).
 4. **Segmentation** — profile + behavior collapse into a deterministic segment key (`role=developer|int=ai|eng=high`).
-5. **Cache lookup** — fresh hit: served, no LLM. Stale: served + refreshed in background. Miss: continue.
-6. **Generation** — provider-agnostic LLM call with structured output (prompt includes profile, RAG content, pinned items, custom component schemas).
-7. **Guarantees** — per-component schema validation, URL whitelist, pinned-content enforcement.
-8. **Cache write + audit** — the render is cached for the whole segment and audit-logged (what was shown, to whom, why).
+5. **Cache lookup** — fresh hit: served, no LLM. Stale: served + refreshed in background (single-flight). Miss: continue under a cold-miss single-flight lock, subject to the per-tenant LLM budget.
+6. **Generation** — provider-agnostic LLM call (BYOK) with structured output and a timeout. Cached (segment) renders see the segment **archetype**, never the raw profile, so no single user can poison a segment; only admin-forced `live` renders see the full profile.
+7. **Guarantees** — per-component schema validation, URL whitelist, numeric grounding, per-tenant content policy, pinned-content enforcement (identical on the sync and SSE paths).
+8. **Cache write, audit & metrics** — the render is cached for the whole segment, audit-logged (what was shown, to whom, why), and counted by the `/metrics` middleware.
+
+The **chat pipeline** (`/query`) is separate and isolated: Response/Profile/Behave agents run in parallel per request with no state shared across users or tenants; the model can invoke a tenant-scoped `search_documents` RAG tool; the same guarantee chain applies to its output.
 
 ## Agent Responsibilities
 
 | Agent             | File                | Purpose                                                                                                          |
 | ----------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | **ZoneAgent**     | `zone_agent.py`     | Zone rendering: prompts + profile + RAG → validated, sanitized components (provider-agnostic, streaming-capable) |
-| **ResponseAgent** | `response_agent.py` | Chat responses with optional UI components (datapizza, RAG tools)                                                |
+| **ResponseAgent** | `response_agent.py` | Chat responses with optional UI components (provider-agnostic, model-invoked RAG search tool)                    |
 | **ProfileAgent**  | `profile_agent.py`  | Extracts user preferences from conversations                                                                     |
 | **BehaveAgent**   | `behave_agent.py`   | Analyzes behavior patterns for UI adjustments                                                                    |
 | **Orchestrator**  | `orchestrator.py`   | Runs Response/Profile/Behave agents in parallel for `/query`                                                     |
 
 ## Frontend Module Summary
 
-| Module          | Purpose                     | Key Exports                                                                                                               |
-| --------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| **components/** | React UI components         | `GenUIZone`, `BentoComponent`, `ButtonsComponent`, `ChartComponent`, `TextComponent`, `ComponentRenderer`, `GenUISection` |
-| **hooks/**      | React hooks for state & API | `useGenUI`, `useZone`                                                                                                     |
-| **types/**      | TypeScript definitions      | `GenUITheme`, `BentoCard`, `ButtonDef`, `ButtonVariant`, `UserProfile`, `GenUIResponse`, etc.                             |
-| **utils/**      | Utilities                   | `BehaviorTracker`, profile/history persistence functions                                                                  |
-| **styles/**     | CSS                         | Glassmorphism theme, animations, responsive layouts                                                                       |
+| Module          | Purpose                     | Key Exports                                                                                                                                                                                              |
+| --------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **components/** | React UI components         | `GenUIZone`, `GenUISection`, `ComponentRenderer`, `BentoComponent`, `ButtonsComponent`, `ChartComponent`, `TextComponent`, + 7 section components (Tabs, Steps, Stats, Testimonial, Pricing, Grid, Hero) |
+| **hooks/**      | React hooks for state & API | `useGenUI`, `useZone`                                                                                                                                                                                    |
+| **types/**      | TypeScript definitions      | `GenUITheme`, `BentoCard`, `ButtonDef`, `ButtonVariant`, `UserProfile`, `GenUIResponse`, etc.                                                                                                            |
+| **utils/**      | Utilities                   | `BehaviorTracker` (with privacy filter), `sanitizeUrl`, impression/click events, profile/history persistence                                                                                             |
+| **styles/**     | CSS                         | Glassmorphism theme, animations, responsive layouts                                                                                                                                                      |
 
 ---
 
-## 🍕 Powered by datapizza-ai
+## 🔌 One provider abstraction for every agent
 
-GenUI's **chat pipeline** (ResponseAgent, ProfileAgent, BehaveAgent) is built on top of **[datapizza-ai](https://github.com/datapizza-labs/datapizza-ai)**, a Python framework for building reliable Gen AI solutions without overhead. The ZoneAgent uses its own provider abstraction (`backend/llm/`) for structured output and streaming.
+All agents — ZoneAgent and the chat pipeline (ResponseAgent, ProfileAgent, BehaveAgent) — talk to the internal provider abstraction (`backend/llm/`), never to a vendor SDK directly. `LLM_PROVIDER` selects OpenAI, Anthropic, or any OpenAI-compatible endpoint (Gemini, Azure, vLLM, RunPod, local) — bring your own key and engine.
 
-### Why datapizza-ai?
+The same holds for **embeddings**: the RAG pipeline (chunker, vector store) talks to an `EmbeddingClient` selected by `EMBEDDING_PROVIDER` / `EMBEDDING_BASE_URL` (see [Bring your own embedding](#bring-your-own-embedding--your-documents-embed-where-you-choose)). Generation and embedding are both plugs, not wiring: an operator who says "everything runs in my infrastructure" gets exactly that.
 
-- **Integration with AI Providers**: Seamlessly connect with OpenAI, Google VertexAI, Anthropic, Mistral, and more
-- **Complex workflows, minimal code**: Design, automate, and scale powerful agent workflows without boilerplate
-- **Retrieval-Augmented Generation (RAG)**: Built-in support for Qdrant, Milvus vector stores
-- **Up to 40% less debugging time**: Trace and log every LLM/tool call with inputs/outputs
-- **MCP Support**: Model Context Protocol integration for advanced tool usage
+Chat isolation guarantees:
+
+- **Stateless by construction**: no conversational state lives on the agents; everything the model sees (profile, history, retrieved context) belongs to the single request. Two sequential `/query` calls can never share context — across users or tenants.
+- **Tenant-scoped retrieval**: the model can invoke a `search_documents` tool; each invocation is an async call carrying the requesting tenant, and every URL it surfaces joins the same whitelist that strips invented links.
 
 ---
 

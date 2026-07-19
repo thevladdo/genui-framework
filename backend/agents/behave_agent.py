@@ -8,10 +8,8 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 import json
 
-from datapizza.agents import Agent
-
 from config import settings
-from llm.datapizza_factory import create_datapizza_client
+from llm import create_llm_client
 from utils.cache import cacheable
 
 logger = logging.getLogger(__name__)
@@ -138,22 +136,16 @@ Guidelines:
 - Be conservative with profile updates - only update when confident
 """
     
-    def __init__(self, model: str = None):
+    def __init__(self, model: str = None, llm_client=None):
         """
         Initialize the Behave Agent.
-        
+
         Args:
             model: LLM model identifier (defaults to profile_model from settings)
+            llm_client: LLMChatClient instance (created if not provided)
         """
         self.model = model or settings.profile_model
-        
-        self.client = create_datapizza_client(self.model)
-        
-        self.agent = Agent(
-            name="behave_agent",
-            client=self.client,
-            system_prompt=self.SYSTEM_PROMPT,
-        )
+        self.llm = llm_client or create_llm_client(self.model)
     
     def analyze_behavior(
         self,
@@ -186,37 +178,7 @@ Guidelines:
         prompt = self._build_analysis_prompt(behavior_data, user_profile)
         
         try:
-            response = await self.agent.a_run(prompt)
-            
-            if hasattr(response, 'content'):
-                content = response.content
-                if isinstance(content, str):
-                    response_text = content
-                elif isinstance(content, list):
-                    # Extract text from list of content blocks
-                    response_text = ""
-                    for block in content:
-                        if hasattr(block, 'text'):
-                            response_text += block.text
-                        elif hasattr(block, 'content'):
-                            response_text += str(block.content)
-                        elif isinstance(block, dict) and 'text' in block:
-                            response_text += block['text']
-                        elif isinstance(block, dict) and 'content' in block:
-                            response_text += str(block['content'])
-                        else:
-                            response_text += str(block)
-                else:
-                    response_text = str(content)
-            else:
-                response_text = str(response)
-            
-            if response_text.startswith('TextBlock(content='):
-                start = response_text.find('{')
-                end = response_text.rfind('}')
-                if start != -1 and end != -1:
-                    response_text = response_text[start:end+1]
-            
+            response_text = await self.llm.complete_json(self.SYSTEM_PROMPT, prompt)
             parsed = self._parse_response(response_text)
             
             return BehaviorAnalysisResult(

@@ -16,6 +16,10 @@ Output guarantees (enforced by the system, not by the prompt):
 - URLs in the output must exist in the input (pinned content, developer
   prompts, RAG documents, page context). Invented URLs are stripped
   by the UrlGuard.
+- Numbers displayed as facts (stats_banner values, pricing prices,
+  chart points) must trace to a number present in the input; ungrounded
+  ones are removed by the NumericGuard.
+- Per-tenant banned terms (CONTENT_POLICY) drop the offending component.
 - Pinned content is verified after generation and appended if missing.
 """
 
@@ -28,6 +32,7 @@ from dataclasses import dataclass, field
 
 from config import settings
 from llm import create_llm_client
+from llm.embeddings import EmbeddingConfigError
 from rag import create_vector_store, build_context_from_results
 from schemas import (
     component_to_dict,
@@ -35,7 +40,9 @@ from schemas import (
     validate_components,
     zone_output_json_schema,
 )
+from utils.content_policy import policy_for
 from utils.json_stream import ComponentStreamParser
+from utils.numeric_guard import NumericGuard
 from utils.url_guard import UrlGuard, normalize_url
 
 logger = logging.getLogger(__name__)
@@ -57,6 +64,10 @@ class ZoneRenderRequest:
     custom_components: Optional[List[Dict[str, Any]]] = None
     # Tenant scope for knowledge-base retrieval
     tenant: Optional[str] = None
+    # Canonical audience archetype for SHARED (cached) renders: 
+    # short validated tags parsed from the cache-key segment. 
+    # When set, the router leaves user_profile/behavior_data empty.
+    archetype: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -70,6 +81,8 @@ class ZoneRenderResult:
     profile_factors_used: List[str] = field(default_factory=list)
     removed_urls: List[str] = field(default_factory=list)
     dropped_components: List[str] = field(default_factory=list)
+    removed_numbers: List[str] = field(default_factory=list)
+    policy_violations: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -81,6 +94,8 @@ class ZoneRenderResult:
             "profile_factors_used": self.profile_factors_used,
             "removed_urls": self.removed_urls,
             "dropped_components": self.dropped_components,
+            "removed_numbers": self.removed_numbers,
+            "policy_violations": self.policy_violations,
         }
 
 
@@ -196,7 +211,12 @@ CRITICAL RULES:
    verbatim from the input (pinned content, developer context, or available
    content). URLs not present in the input will be removed by the system.
 
-6. CONTENT RELEVANCE: Use retrieved documents to populate cards with real content
+6. NEVER INVENT NUMBERS: Every stat value, price, and chart value MUST be
+   copied as it appears in the input (same digits, same magnitude - do not
+   convert "10,000,000" into "10M"). Numbers not present in the input will
+   be removed by the system.
+
+7. CONTENT RELEVANCE: Use retrieved documents to populate cards with real content
    from the knowledge base when available.
 """
 
@@ -258,11 +278,15 @@ CRITICAL RULES:
             retrieved = await self._retrieve_results(request)
             prompt = self._build_zone_prompt(request, retrieved, custom_types)
             guard = self._build_url_guard(request, retrieved)
+            numeric_guard = self._build_numeric_guard(request, retrieved)
+            policy = policy_for(request.tenant, settings.content_policy)
 
             parser = ComponentStreamParser()
             emitted: List[Dict[str, Any]] = []
             dropped: List[str] = []
             removed_urls: List[str] = []
+            removed_numbers: List[str] = []
+            policy_violations: List[str] = []
 
             async for delta in self.llm.stream_json(self.SYSTEM_PROMPT, prompt):
                 for raw_component in parser.feed(delta):
@@ -273,6 +297,12 @@ CRITICAL RULES:
                     component = component_to_dict(valid[0])
                     sanitized, removed = guard.sanitize_components([component])
                     removed_urls.extend(removed)
+                    if sanitized:
+                        sanitized, removed = numeric_guard.sanitize_components(sanitized)
+                        removed_numbers.extend(removed)
+                    if sanitized:
+                        sanitized, violations = policy.sanitize_components(sanitized)
+                        policy_violations.extend(violations)
                     if not sanitized:
                         continue
                     emitted.append(sanitized[0])
@@ -299,6 +329,8 @@ CRITICAL RULES:
                     profile_factors_used=list(parsed.get("profile_factors", [])),
                     removed_urls=removed_urls,
                     dropped_components=dropped,
+                    removed_numbers=removed_numbers,
+                    policy_violations=policy_violations,
                 ),
             }
 
@@ -340,7 +372,18 @@ CRITICAL RULES:
         guard = self._build_url_guard(request, retrieved)
         components, removed_urls = guard.sanitize_components(components)
 
-        # 3. Pinned content: verified on the actual output, not on the model's claims; missing items are appended
+        # 3. Numeric grounding: displayed numbers (stats, prices, chart points) 
+        # must trace to a number present in the input
+        numeric_guard = self._build_numeric_guard(request, retrieved)
+        components, removed_numbers = numeric_guard.sanitize_components(components)
+
+        # 4. Per-tenant content policy: banned terms drop the component
+        policy = policy_for(request.tenant, settings.content_policy)
+        components, policy_violations = policy.sanitize_components(components)
+
+        # 5. Pinned content: verified on the actual output, not on the model's claims; 
+        # missing items are appended. 
+        # Runs AFTER the guards: pinneditems are operator-authored input, never model output to distrust.
         components, pinned_included = self._enforce_pinned(
             components, request.pinned_content or [], request.max_items
         )
@@ -354,6 +397,8 @@ CRITICAL RULES:
             profile_factors_used=list(parsed.get("profile_factors", [])),
             removed_urls=removed_urls,
             dropped_components=dropped,
+            removed_numbers=removed_numbers,
+            policy_violations=policy_violations,
         )
 
     def _build_url_guard(
@@ -387,6 +432,26 @@ CRITICAL RULES:
             guard.allow(metadata.get("url"), metadata.get("image"))
             guard.allow_from_text(getattr(result, "content", None))
 
+        return guard
+
+    def _build_numeric_guard(
+        self,
+        request: ZoneRenderRequest,
+        retrieved: List[Any],
+    ) -> NumericGuard:
+        """Ground every number that legitimately exists in the input."""
+        guard = NumericGuard(enforce=settings.numeric_grounding_enabled)
+        guard.allow_from_text(request.base_prompt)
+        guard.allow_from_text(request.context_prompt)
+        for item in request.pinned_content or []:
+            guard.allow_from_text(json.dumps(item, default=str))
+        guard.allow_from_text(request.current_page)
+        guard.allow_from_text(json.dumps(request.page_metadata or {}, default=str))
+        for result in retrieved:
+            guard.allow_from_text(getattr(result, "content", None))
+            guard.allow_from_text(
+                json.dumps(getattr(result, "metadata", None) or {}, default=str)
+            )
         return guard
 
     def _enforce_pinned(
@@ -477,6 +542,8 @@ CRITICAL RULES:
                 top_k=10,
                 tenant=request.tenant,
             )
+        except EmbeddingConfigError:
+            raise
         except Exception as e:
             logger.warning(f"Zone retrieval failed, continuing without RAG: {e}")
             return []
@@ -534,7 +601,11 @@ CRITICAL RULES:
                     parts.append(f"   Description: {item.get('description')}")
             parts.append("</pinned_content>")
 
-        # User profile
+        # Audience archetype (shared renders): tags parsed from the cache key
+        if request.archetype:
+            parts.append(f"<audience_archetype>\n{self._summarize_archetype(request.archetype)}\n</audience_archetype>")
+
+        # User profile (individual, non-shared renders only)
         if request.user_profile:
             profile_summary = self._summarize_profile(request.user_profile)
             parts.append(f"<user_profile>\n{profile_summary}\n</user_profile>")
@@ -562,7 +633,12 @@ CRITICAL RULES:
         if request.context_prompt:
             query_parts.append(request.context_prompt)
 
-        if request.user_profile:
+        if request.archetype:
+            query_parts.extend(request.archetype.get("interests", []))
+            role = request.archetype.get("role")
+            if role:
+                query_parts.append(f"content for {role}")
+        elif request.user_profile:
             interests = request.user_profile.get("interests", {})
             if isinstance(interests, dict):
                 for key, val in list(interests.items())[:3]:
@@ -578,6 +654,31 @@ CRITICAL RULES:
                     query_parts.append(f"content for {role['value']}")
 
         return " ".join(query_parts[:5])
+
+    _ENGAGEMENT_NOTES = {
+        "high": "high (reads content thoroughly)",
+        "mid": "mid",
+        "low": "low (quick scanner, prefers concise content)",
+    }
+
+    def _summarize_archetype(self, archetype: Dict[str, Any]) -> str:
+        """Render the segment archetype as short labeled tags."""
+        parts = [
+            "This render is SHARED by every user in an audience segment. "
+            "Personalize for the segment archetype below, not for an individual:"
+        ]
+        if archetype.get("role"):
+            parts.append(f"Role: {archetype['role']}")
+        if archetype.get("interests"):
+            parts.append(f"Interests: {', '.join(archetype['interests'])}")
+        if archetype.get("user_type"):
+            parts.append(f"Browsing style: {archetype['user_type']}")
+        engagement = archetype.get("engagement")
+        if engagement:
+            parts.append(
+                f"Engagement: {self._ENGAGEMENT_NOTES.get(engagement, engagement)}"
+            )
+        return "\n".join(parts)
 
     def _summarize_profile(self, profile: Dict[str, Any]) -> str:
         """Create a concise profile summary for the prompt."""

@@ -1,0 +1,103 @@
+{
+  "description": "Developer segment on the pricing page: pinned items, no RAG. The recorded response omits one pinned item (append path must restore it), invents a bento card link and a markdown link (both must be stripped by the URL guard), and invents a plan price (the numeric guard must drop that plan, keeping the grounded ones).",
+  "request": {
+    "zone_id": "pricing-zone",
+    "base_prompt": "Present our pricing plans and help the visitor pick one. Starter is $29/month, Scale is $99/month. Plans overview: https://acme.example/pricing - free trial signup: https://acme.example/trial",
+    "context_prompt": "Developer documentation lives at https://acme.example/docs",
+    "pinned_content": [
+      {
+        "type": "link",
+        "title": "Enterprise plan",
+        "url": "https://acme.example/enterprise",
+        "description": "Custom SLAs, SSO and dedicated support"
+      },
+      {
+        "type": "link",
+        "title": "Talk to sales",
+        "url": "https://acme.example/sales",
+        "description": "Book a 30 minute call"
+      }
+    ],
+    "preferred_component_type": null,
+    "max_items": 6,
+    "current_page": "/pricing",
+    "page_metadata": {},
+    "archetype": {
+      "role": "developer",
+      "interests": ["ai", "automation"],
+      "user_type": "deep-reader",
+      "engagement": "high"
+    }
+  },
+  "retrieved": [],
+  "invariants": {
+    "allowed_types": ["pricing_cards", "text", "bento"]
+  },
+  "llm_response": {
+    "components": [
+      {
+        "type": "text",
+        "data": {
+          "content": "Plans built for engineering teams. Read the [docs](https://acme.example/docs) or grab a [limited offer](https://evil.example/phish) before it expires.",
+          "style": "normal"
+        }
+      },
+      {
+        "type": "pricing_cards",
+        "data": {
+          "variant": "compact",
+          "plans": [
+            {
+              "name": "Starter",
+              "price": "$29",
+              "period": "/month",
+              "description": "For side projects",
+              "features": ["1 zone", "Community support"],
+              "cta": {"label": "Start free trial", "url": "https://acme.example/trial"}
+            },
+            {
+              "name": "Scale",
+              "price": "$99",
+              "period": "/month",
+              "description": "For production workloads",
+              "features": ["Unlimited zones", "Priority support"],
+              "cta": {"label": "See full pricing", "url": "https://acme.example/pricing"},
+              "highlighted": true
+            },
+            {
+              "name": "Ultimate",
+              "price": "$499",
+              "period": "/month",
+              "description": "An invented plan with an invented price",
+              "features": ["Everything"]
+            }
+          ]
+        }
+      },
+      {
+        "type": "bento",
+        "data": {
+          "columns": 2,
+          "cards": [
+            {
+              "title": "Enterprise plan",
+              "description": "Custom SLAs, SSO and dedicated support",
+              "link": "https://acme.example/enterprise",
+              "badge": "PINNED"
+            },
+            {
+              "title": "Free migration audit",
+              "description": "We move your workloads for free",
+              "link": "https://scam.example/deal"
+            }
+          ]
+        }
+      }
+    ],
+    "pinned_included": ["https://acme.example/enterprise"],
+    "personalization_applied": true,
+    "confidence": 0.9,
+    "reasoning": "Developer segment: emphasized docs and trial, kept pricing concise.",
+    "profile_factors": ["role", "engagement"]
+  }
+}

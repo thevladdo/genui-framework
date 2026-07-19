@@ -101,7 +101,7 @@ export const Home = () => {
             ?
           </span>
           <span className={styles.cardDescription}>
-            The idea, the potential, and why interfaces that adapt to every
+            The idea, the potential, and why interfaces that adapt<br />to every
             user change how digital products are built.
           </span>
         </span>

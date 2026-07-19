@@ -17,15 +17,29 @@ segments, so the LLM runs once per segment per TTL window:
 - stale hit: served from cache immediately, re-rendered in background
   (single-flight: only one refresh per key runs at a time)
 - miss: rendered live (cold start), then cached for the whole segment
+  (single-flight too: concurrent requests coalesce on one generation)
 
-Set cache_strategy="live" on a request (or zone_cache_enabled=false
-globally) to bypass the cache for genuinely dynamic zones.
+Set cache_strategy="live" on a request (admin keys only) or
+zone_cache_enabled=false globally to bypass the cache for genuinely
+dynamic zones.
+
+Cost model: a public client key must not be able to convert traffic
+into LLM spend without a limit. The LLM only runs where a generation
+is born (cold miss, refresh, cache-off), every such point charges the
+per-tenant LLM budget (LLM_BUDGET_PER_HOUR), "live" is admin-only,
+and batch renders are size-capped and charged proportionally in the
+rate limit.
 
 Security model:
 - All endpoints require an API key (client keys for rendering, admin
   keys for warmup/stats). With no keys configured, auth is open (dev).
 - When user_id is provided, the server-side profile is authoritative;
   the client-supplied profile only seeds the store on first sight.
+- Cached (shared) renders are generated from the segment ARCHETYPE —
+  short tags parsed from the cache key — never from the raw client
+  profile, so one user cannot poison what the whole segment is served.
+  Individual personalization requires the non-shared path
+  (cache_strategy="live").
 - Every render is audit-logged: what was shown, to whom, from which
   segment and cache state.
 """
@@ -33,22 +47,34 @@ Security model:
 import asyncio
 import json
 import logging
+import time
 import uuid
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Security
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from agents.zone_agent import ZoneAgent, ZoneRenderRequest as ZoneAgentRequest, create_zone_agent
-from api.deps import get_profile_store
+from api.deps import get_profile_store, get_zone_config_store
 from auth import AuthContext
-from auth.dependencies import get_audit_logger, require_admin, require_client
+from auth.dependencies import (
+    USER_TOKEN_HEADER,
+    check_user_access,
+    get_audit_logger,
+    get_rate_limiter,
+    require_admin,
+    require_client,
+)
+from auth.identity import AuthError
 from config import settings
 from experiments import ARM_CONTROL, ARM_NONE, assign_arm
-from segmentation import Segment, compute_segment
+from metrics.ops import get_ops_metrics
+from schemas.components import GENUI_CONTRACT_VERSION
+from segmentation import Segment, compute_segment, segment_archetype
 from utils.audit import summarize_shown_components
+from utils.rate_limit import RateLimiter
 from utils.tracing import span
 from utils.zone_cache import (
     ZoneRenderCache,
@@ -171,6 +197,12 @@ class ZoneComponentData(BaseModel):
 class ZoneRenderResponse(BaseModel):
     """Response from zone rendering."""
     zone_id: str
+    contract_version: int = Field(
+        default=GENUI_CONTRACT_VERSION,
+        description="Component contract version of the responding backend; "
+                    "older frontend bundles use it to detect newer contracts "
+                    "and silently skip unknown component types."
+    )
     components: List[ZoneComponentData]
     pinned_content_included: List[str] = Field(
         default_factory=list,
@@ -202,6 +234,7 @@ class ZoneWarmupRequest(BaseModel):
 # Singletons
 _zone_agent: Optional[ZoneAgent] = None
 _zone_cache: Optional[ZoneRenderCache] = None
+_llm_budget: Optional[RateLimiter] = None
 
 
 def get_zone_agent() -> ZoneAgent:
@@ -223,6 +256,26 @@ def get_zone_cache() -> ZoneRenderCache:
             lock_ttl=settings.zone_cache_lock_ttl,
         )
     return _zone_cache
+
+
+def get_llm_budget() -> RateLimiter:
+    """
+    Per-tenant hourly cap on LLM generations (LLM_BUDGET_PER_HOUR).
+
+    Reuses the fixed-window rate limiter on the shared Redis store, so
+    the budget is one counter across workers, exactly like the rate
+    limit (WP-04). Identity = tenant: the cap protects the tenant's
+    BYOK key, not a single client key.
+    """
+    global _llm_budget
+    if _llm_budget is None:
+        _llm_budget = RateLimiter(
+            limit=settings.llm_budget_per_hour,
+            window_seconds=3600,
+            redis_url=settings.redis_url,
+            key_prefix="genui:llmbudget:",
+        )
+    return _llm_budget
 
 
 # Internal helpers
@@ -247,6 +300,33 @@ def _request_config(request: ZoneRenderRequest) -> Dict[str, Any]:
     }
 
 
+async def _apply_registry(request: ZoneRenderRequest, tenant: str) -> None:
+    """
+    Config as data: resolve the governed zone config from the registry.
+
+    When an APPROVED registry entry exists for (tenant, zone_id), it
+    replaces the governed fields WHOLESALE — prompts, pinned content,
+    rendering constraints. Host props for those fields are ignored, not
+    merged: what legal/marketing approved must be exactly what is
+    served, and a field-level merge would let the host page inject
+    prompt text around the approval. No entry (or a draft-only one) =
+    host props work exactly as before (back-compat).
+
+    Must run before the cache key is computed: the resolved config feeds
+    zone_config_hash, so cached renders follow the registry and an
+    approved edit invalidates them like any config change.
+    """
+    record = await get_zone_config_store().get_approved(tenant, request.zone_id)
+    if record is None:
+        return
+    config = record["config"]
+    request.base_prompt = config["base_prompt"]
+    request.context_prompt = config["context_prompt"]
+    request.pinned_content = [PinnedContent(**p) for p in config["pinned_content"]]
+    request.preferred_component_type = config["preferred_component_type"]
+    request.max_items = config["max_items"]
+
+
 def _segment_for(request: ZoneRenderRequest) -> Segment:
     return compute_segment(
         request.user_profile,
@@ -261,17 +341,23 @@ def _cache_key_for(request: ZoneRenderRequest, segment: Segment, tenant: str) ->
     return build_cache_key(f"{tenant}:{request.zone_id}", config_hash, segment.key)
 
 
-async def _resolve_profile(request: ZoneRenderRequest, auth: AuthContext) -> None:
+async def _resolve_profile(
+    request: ZoneRenderRequest, auth: AuthContext, user_token: Optional[str] = None
+) -> None:
     """
     Make the server-side profile authoritative.
 
     When user_id is present:
+    - the caller must prove it IS that user (signed X-User-Token) or be
+      admin — otherwise any pk_ holder reads/seeds someone else's profile
     - an existing server profile replaces the client-supplied one
     - otherwise the client profile (if any) seeds the server store,
       so the IndexedDB copy is demoted to a cache over time.
     """
     if not request.user_id:
         return
+
+    check_user_access(auth, request.user_id, user_token)
 
     store = get_profile_store()
     try:
@@ -283,12 +369,23 @@ async def _resolve_profile(request: ZoneRenderRequest, auth: AuthContext) -> Non
                 auth.tenant, request.user_id, request.user_profile
             )
     except Exception as e:
-        # Profile resolution must never break rendering
         logger.warning("Profile resolution failed for %s: %s", request.user_id, e)
 
 
-def _agent_request(request: ZoneRenderRequest, tenant: str) -> ZoneAgentRequest:
-    """Map the API request to the ZoneAgent request format."""
+def _agent_request(
+    request: ZoneRenderRequest, tenant: str, segment: Optional[Segment] = None
+) -> ZoneAgentRequest:
+    """
+    Map the API request to the ZoneAgent request format.
+
+    With a segment, the render is SHARED (cached and served to everyone
+    in that segment): the prompt must see only the archetype parsed from
+    the cache-key segment, never the raw client profile — otherwise the
+    first requester of a segment shapes what the whole segment is served
+    (cache poisoning). Without a segment (cache_strategy="live" or cache
+    disabled) the render is per-user and the individual profile applies.
+    """
+    shared = segment is not None
     return ZoneAgentRequest(
         zone_id=request.zone_id,
         base_prompt=request.base_prompt,
@@ -296,14 +393,15 @@ def _agent_request(request: ZoneRenderRequest, tenant: str) -> ZoneAgentRequest:
         pinned_content=[p.model_dump() for p in (request.pinned_content or [])],
         preferred_component_type=request.preferred_component_type,
         max_items=request.max_items or 6,
-        user_profile=request.user_profile,
-        behavior_data=request.behavior_data,
+        user_profile=None if shared else request.user_profile,
+        behavior_data=None if shared else request.behavior_data,
         current_page=request.current_page,
         page_metadata=request.page_metadata or {},
         custom_components=[
             c.model_dump() for c in (request.custom_components or [])
         ],
         tenant=tenant,
+        archetype=segment_archetype(segment) if shared else None,
     )
 
 
@@ -323,17 +421,135 @@ def _payload_from_result(result) -> Dict[str, Any]:
             "sanitization": {
                 "removed_urls": result.removed_urls,
                 "dropped_components": result.dropped_components,
+                "removed_numbers": result.removed_numbers,
+                "policy_violations": result.policy_violations,
             },
         },
         "rendered_at": _utc_now(),
     }
 
 
-async def _render_live(request: ZoneRenderRequest, tenant: str) -> Dict[str, Any]:
-    """Run the ZoneAgent and return a cacheable response payload."""
+async def _render_live(
+    request: ZoneRenderRequest, tenant: str, segment: Optional[Segment] = None
+) -> Dict[str, Any]:
+    """
+    Run the ZoneAgent and return a cacheable response payload.
+
+    Single funnel for every non-streaming zone generation (cold miss,
+    bypass, background refresh, warmup), so LLM volume, latency and
+    failures are counted once, here.
+    """
     zone_agent = get_zone_agent()
-    result = await zone_agent.render_zone_async(_agent_request(request, tenant))
+    started = time.perf_counter()
+    try:
+        result = await zone_agent.render_zone_async(_agent_request(request, tenant, segment))
+    except Exception:
+        get_ops_metrics().observe_generation(tenant, "zone", outcome="error")
+        raise
+    get_ops_metrics().observe_generation(tenant, "zone", time.perf_counter() - started)
     return _payload_from_result(result)
+
+
+def _resolve_strategy(request: ZoneRenderRequest, auth: AuthContext) -> Tuple[str, bool]:
+    """
+    Resolve (strategy, cache_bypassed); cache_strategy="live" is admin-only.
+
+    The strategy comes from the request BODY, i.e. from whoever holds the
+    public pk_ shipped with the page. "live" converts every request into
+    an LLM call, so a public credential must not be able to select it:
+    that hands the operator's LLM bill to any visitor.
+    """
+    strategy = request.cache_strategy or "segment"
+    if strategy == "live" and not auth.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="cache_strategy='live' requires an admin key; client keys "
+                   "are always served from the segment cache",
+        )
+    return strategy, strategy == "live" or not settings.zone_cache_enabled
+
+
+def _budget_tenant(auth: AuthContext) -> Optional[str]:
+    """Tenant to charge for a generation; None (exempt) for admin keys."""
+    return None if auth.is_admin else auth.tenant
+
+
+async def _charge_llm_budget(tenant: Optional[str]) -> None:
+    """
+    Charge one LLM generation to the tenant budget; 429 when exhausted.
+
+    Called exactly where a generation is born (cold miss, cache-off
+    render), never on cache hits: the cost is controlled at its source.
+    """
+    if tenant is None:
+        return
+    if not await get_llm_budget().allow(tenant):
+        raise HTTPException(
+            status_code=429,
+            detail=f"LLM budget exceeded (LLM_BUDGET_PER_HOUR="
+                   f"{settings.llm_budget_per_hour}): new generations are "
+                   f"paused for this window; cached renders are unaffected",
+        )
+
+
+# How long a cold-miss waiter polls for the single-flight winner's cache
+# write before rendering on its own (fail-open, e.g. the winner crashed).
+_COLD_WAIT_SECONDS = 15.0
+_COLD_POLL_SECONDS = 0.2
+
+
+async def _await_cold_fill(
+    cache: ZoneRenderCache, cache_key: str
+) -> Tuple[Optional[Any], bool]:
+    """
+    Wait for the single-flight winner of a cold miss to fill the cache.
+
+    Returns (lookup, lock_acquired):
+    - (lookup, False): the winner's payload arrived; serve it.
+    - (None, True): the lock freed without a write (winner failed);
+      the caller takes over as the new single renderer.
+    - (None, False): timed out; the caller renders unlocked (fail-open).
+    """
+    deadline = time.monotonic() + _COLD_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        await asyncio.sleep(_COLD_POLL_SECONDS)
+        lookup = await cache.get(cache_key)
+        if lookup is not None:
+            return lookup, False
+        if await cache.acquire_refresh_lock(cache_key):
+            return None, True
+    return None, False
+
+
+async def _render_cold(
+    request: ZoneRenderRequest,
+    tenant: str,
+    segment: Segment,
+    cache: ZoneRenderCache,
+    cache_key: str,
+    budget_tenant: Optional[str],
+) -> Tuple[Dict[str, Any], str]:
+    """
+    Cold start with single-flight: one generation per cache key.
+
+    Reuses the stale-refresh lock; concurrent requests for the same key
+    coalesce on the winner's cache write instead of each paying an LLM
+    call (a popular segment expiring used to trigger N identical calls).
+    Returns (payload, cache_status: "miss" | "coalesced").
+    """
+    locked = await cache.acquire_refresh_lock(cache_key)
+    if not locked:
+        lookup, locked = await _await_cold_fill(cache, cache_key)
+        if lookup is not None:
+            return lookup.payload, "coalesced"
+    try:
+        await _charge_llm_budget(budget_tenant)
+        payload = await _render_live(request, tenant, segment)
+        await cache.set(cache_key, payload)
+        return payload, "miss"
+    finally:
+        if locked:
+            await cache.release_refresh_lock(cache_key)
 
 
 def _build_response(
@@ -377,6 +593,13 @@ def _audit_render(
     arm: str = ARM_NONE,
 ) -> None:
     """Record what this render actually showed."""
+    # Same choke point as the audit trail: every SERVED render 
+    # (fresh, stale, miss, coalesced, bypass, sync and SSE) passes through here.
+    # Cache hit rate = (fresh + stale) / total.
+    get_ops_metrics().observe(
+        "genui_zone_renders_total",
+        {"tenant": auth.tenant, "cache": str(cache_meta.get("status"))},
+    )
     audit = get_audit_logger()
     audit.log(
         "zone_render",
@@ -393,11 +616,19 @@ def _audit_render(
     )
 
 
-async def _refresh_in_background(request: ZoneRenderRequest, cache_key: str, tenant: str) -> None:
+async def _refresh_in_background(
+    request: ZoneRenderRequest, cache_key: str, tenant: str, segment: Segment
+) -> None:
     """Re-render a stale entry and update the cache (single-flight)."""
     cache = get_zone_cache()
     try:
-        payload = await _render_live(request, tenant)
+        if not await get_llm_budget().allow(tenant):
+            logger.warning(
+                "LLM budget exhausted for tenant %s: skipping refresh of %s "
+                "(stale render keeps being served)", tenant, cache_key
+            )
+            return
+        payload = await _render_live(request, tenant, segment)
         await cache.set(cache_key, payload)
         logger.info("Zone cache refreshed: %s", cache_key)
     except Exception as e:
@@ -406,19 +637,24 @@ async def _refresh_in_background(request: ZoneRenderRequest, cache_key: str, ten
         await cache.release_refresh_lock(cache_key)
 
 
-def _schedule_refresh(request: ZoneRenderRequest, cache_key: str, tenant: str) -> None:
+def _schedule_refresh(
+    request: ZoneRenderRequest, cache_key: str, tenant: str, segment: Segment
+) -> None:
     """Fire-and-forget refresh task; the lock guarantees one refresh per key."""
-    asyncio.create_task(_refresh_in_background(request, cache_key, tenant))
+    asyncio.create_task(_refresh_in_background(request, cache_key, tenant, segment))
 
 
-async def _handle_render(request: ZoneRenderRequest, auth: AuthContext) -> ZoneRenderResponse:
+async def _handle_render(
+    request: ZoneRenderRequest, auth: AuthContext, user_token: Optional[str] = None
+) -> ZoneRenderResponse:
     """Shared render flow used by /render and /batch-render."""
     with span(
         "genui.zone.render",
         zone_id=request.zone_id,
         tenant=auth.tenant,
     ) as render_span:
-        await _resolve_profile(request, auth)
+        await _apply_registry(request, auth.tenant)
+        await _resolve_profile(request, auth, user_token)
 
         # Control users get the NON-personalized render.
         # Stripping the signals makes them fall into the anonymous segment,
@@ -428,8 +664,7 @@ async def _handle_render(request: ZoneRenderRequest, auth: AuthContext) -> ZoneR
             request.user_profile = None
             request.behavior_data = None
 
-        strategy = request.cache_strategy or "segment"
-        cache_bypassed = strategy == "live" or not settings.zone_cache_enabled
+        strategy, cache_bypassed = _resolve_strategy(request, auth)
 
         def _annotate(cache_status: str, segment_key: Optional[str] = None) -> None:
             if render_span is not None:
@@ -439,6 +674,9 @@ async def _handle_render(request: ZoneRenderRequest, auth: AuthContext) -> ZoneR
                     render_span.set_attribute("genui.segment", segment_key)
 
         if cache_bypassed:
+            # Admin "live" is exempt; a client key only lands here when the
+            # operator disabled the cache globally: still their tenant's spend.
+            await _charge_llm_budget(_budget_tenant(auth))
             payload = await _render_live(request, auth.tenant)
             cache_meta = {"status": "bypass", "strategy": strategy}
             _annotate("bypass")
@@ -453,7 +691,7 @@ async def _handle_render(request: ZoneRenderRequest, auth: AuthContext) -> ZoneR
 
         if lookup is not None:
             if lookup.status == "stale" and await cache.acquire_refresh_lock(cache_key):
-                _schedule_refresh(request, cache_key, auth.tenant)
+                _schedule_refresh(request, cache_key, auth.tenant, segment)
 
             cache_meta = {
                 "status": lookup.status,
@@ -465,12 +703,12 @@ async def _handle_render(request: ZoneRenderRequest, auth: AuthContext) -> ZoneR
             _audit_render(auth, request, lookup.payload, cache_meta, arm)
             return _build_response(request.zone_id, lookup.payload, cache_meta, arm)
 
-        # Cold start: first request for this (tenant, zone config, segment)
-        payload = await _render_live(request, auth.tenant)
-        await cache.set(cache_key, payload)
+        payload, cache_status = await _render_cold(
+            request, auth.tenant, segment, cache, cache_key, _budget_tenant(auth)
+        )
 
-        cache_meta = {"status": "miss", "strategy": strategy, "segment": segment.key}
-        _annotate("miss", segment.key)
+        cache_meta = {"status": cache_status, "strategy": strategy, "segment": segment.key}
+        _annotate(cache_status, segment.key)
         _audit_render(auth, request, payload, cache_meta, arm)
         return _build_response(request.zone_id, payload, cache_meta, arm)
 
@@ -480,6 +718,7 @@ async def _handle_render(request: ZoneRenderRequest, auth: AuthContext) -> ZoneR
 async def render_zone(
     request: ZoneRenderRequest,
     auth: AuthContext = Depends(require_client),
+    user_token: Optional[str] = Security(USER_TOKEN_HEADER),
 ):
     """
     Render a GenUI zone with personalized content.
@@ -494,7 +733,9 @@ async def render_zone(
     runs on cold starts, background refreshes, or cache_strategy="live".
     """
     try:
-        return await _handle_render(request, auth)
+        return await _handle_render(request, auth, user_token)
+    except (AuthError, HTTPException):
+        raise
     except Exception as e:
         logger.error(f"Zone rendering failed for {request.zone_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -509,6 +750,7 @@ def _sse(event: str, data: Dict[str, Any]) -> str:
 async def render_zone_stream(
     request: ZoneRenderRequest,
     auth: AuthContext = Depends(require_client),
+    user_token: Optional[str] = Security(USER_TOKEN_HEADER),
 ):
     """
     Render a GenUI zone as a Server-Sent Events stream (progressive render).
@@ -522,39 +764,51 @@ async def render_zone_stream(
 
     Cache hits stream their components immediately and complete in one
     round-trip; the LLM only streams live on cold starts or
-    cache_strategy="live". Holdout, audit, and caching behave exactly
-    like the non-streaming endpoint.
+    cache_strategy="live" (admin keys only). Holdout, audit, caching,
+    single-flight, and the LLM budget behave exactly like the
+    non-streaming endpoint.
     """
-    await _resolve_profile(request, auth)
+    await _apply_registry(request, auth.tenant)
+    await _resolve_profile(request, auth, user_token)
 
     arm = assign_arm(request.user_id, settings.holdout_percent, settings.holdout_salt)
     if arm == ARM_CONTROL:
         request.user_profile = None
         request.behavior_data = None
 
-    strategy = request.cache_strategy or "segment"
-    cache_bypassed = strategy == "live" or not settings.zone_cache_enabled
+    # Raises 403 for client-key "live" before the stream starts
+    strategy, cache_bypassed = _resolve_strategy(request, auth)
 
     async def event_stream():
+        cache = get_zone_cache()
+        locked = False
+        segment = None
+        cache_key = None
+        generation_started = None
+        generation_done = False
         try:
-            cache = get_zone_cache()
-            segment = None
-            cache_key = None
-
             if not cache_bypassed:
                 segment = _segment_for(request)
                 cache_key = _cache_key_for(request, segment, auth.tenant)
                 lookup = await cache.get(cache_key)
+                hit_status = lookup.status if lookup is not None else None
+
+                if lookup is None:
+                    locked = await cache.acquire_refresh_lock(cache_key)
+                    if not locked:
+                        lookup, locked = await _await_cold_fill(cache, cache_key)
+                        if lookup is not None:
+                            hit_status = "coalesced"
 
                 if lookup is not None:
-                    if lookup.status == "stale" and await cache.acquire_refresh_lock(cache_key):
-                        _schedule_refresh(request, cache_key, auth.tenant)
+                    if hit_status == "stale" and await cache.acquire_refresh_lock(cache_key):
+                        _schedule_refresh(request, cache_key, auth.tenant, segment)
 
                     for component in lookup.payload.get("components", []):
                         yield _sse("component", component)
 
                     cache_meta = {
-                        "status": lookup.status,
+                        "status": hit_status,
                         "strategy": strategy,
                         "segment": segment.key,
                         "age_seconds": round(lookup.age_seconds, 1),
@@ -564,9 +818,21 @@ async def render_zone_stream(
                     yield _sse("complete", response.model_dump())
                     return
 
-            # Live streaming render (cold start or bypass)
+            # Live streaming render (cold-start winner or bypass). 
+            # On a cold start (segment set) the result is cached for the whole segment.
+            try:
+                await _charge_llm_budget(_budget_tenant(auth))
+            except HTTPException as e:
+                yield _sse("error", {
+                    "detail": e.detail,
+                    "status": e.status_code,
+                    "zone_id": request.zone_id,
+                })
+                return
+
             zone_agent = get_zone_agent()
-            agent_request = _agent_request(request, auth.tenant)
+            agent_request = _agent_request(request, auth.tenant, segment)
+            generation_started = time.perf_counter()
 
             async for event in zone_agent.render_zone_stream_async(agent_request):
                 if event["type"] == "component":
@@ -574,6 +840,10 @@ async def render_zone_stream(
                     continue
 
                 # complete
+                generation_done = True
+                get_ops_metrics().observe_generation(
+                    auth.tenant, "zone", time.perf_counter() - generation_started
+                )
                 payload = _payload_from_result(event["result"])
 
                 if cache_bypassed:
@@ -591,8 +861,15 @@ async def render_zone_stream(
                 yield _sse("complete", response.model_dump())
 
         except Exception as e:
+            if generation_started is not None and not generation_done:
+                get_ops_metrics().observe_generation(
+                    auth.tenant, "zone", outcome="error"
+                )
             logger.error(f"Zone stream failed for {request.zone_id}: {e}")
             yield _sse("error", {"detail": str(e), "zone_id": request.zone_id})
+        finally:
+            if locked:
+                await cache.release_refresh_lock(cache_key)
 
     return StreamingResponse(
         event_stream(),
@@ -609,17 +886,35 @@ async def render_zone_stream(
 async def batch_render_zones(
     requests: List[ZoneRenderRequest],
     auth: AuthContext = Depends(require_client),
+    user_token: Optional[str] = Security(USER_TOKEN_HEADER),
 ):
     """
     Render multiple zones concurrently in a single request.
 
     Useful for pages with multiple GenUIZone components to reduce
-    network round-trips.
+    network round-trips. Capped at ZONE_BATCH_MAX zones, and each zone
+    counts against the per-key rate limit individually: N renders must
+    cost N slots, not 1, or a single batch amplifies into unlimited
+    LLM calls.
     """
+    if len(requests) > settings.zone_batch_max:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Batch too large: {len(requests)} zones "
+                   f"(max {settings.zone_batch_max}, see ZONE_BATCH_MAX)",
+        )
+
+    # The auth dependency already charged this HTTP request as 1;
+    # charge the remaining N-1 (admin keys are rate-limit exempt).
+    if not auth.is_admin and len(requests) > 1:
+        if not await get_rate_limiter().allow(
+            auth.key_fingerprint, cost=len(requests) - 1
+        ):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     async def _safe_render(request: ZoneRenderRequest) -> Dict[str, Any]:
         try:
-            result = await _handle_render(request, auth)
+            result = await _handle_render(request, auth, user_token)
             return {
                 "zone_id": request.zone_id,
                 "success": True,
@@ -657,10 +952,11 @@ async def warmup_zones(
     cache = get_zone_cache()
 
     async def _warm_one(zone_request: ZoneRenderRequest) -> Dict[str, Any]:
+        await _apply_registry(zone_request, auth.tenant)
         segment = _segment_for(zone_request)
         cache_key = _cache_key_for(zone_request, segment, auth.tenant)
         try:
-            payload = await _render_live(zone_request, auth.tenant)
+            payload = await _render_live(zone_request, auth.tenant, segment)
             await cache.set(cache_key, payload)
             return {
                 "zone_id": zone_request.zone_id,

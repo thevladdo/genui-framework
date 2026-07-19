@@ -77,6 +77,8 @@ export interface BentoCard {
     onClick?: () => void;
     url?: string;
   };
+  /** Opaque host data, passed through verbatim (never camelized) */
+  metadata?: Record<string, unknown>;
 }
 
 /** Bento grid component data */
@@ -353,15 +355,35 @@ export interface BehaviorMeta {
   }>;
 }
 
+/**
+ * What the backend guarantee chain removed from the model's output
+ * (validate → URL whitelist → numeric grounding → content policy).
+ * Same shape for zone renders and /query responses.
+ */
+export interface SanitizationReport {
+  /** URLs stripped because they were not present in the input */
+  removedUrls: string[];
+  /** Human-readable summaries of components dropped by validation */
+  droppedComponents: string[];
+  /** Displayed numbers removed because they did not trace to the input */
+  removedNumbers: string[];
+  /** Banned terms (per-tenant content policy) that were dropped/redacted */
+  policyViolations: string[];
+}
+
 export interface ResponseMeta {
   confidence: number;
   interactionType: "question" | "statement" | "command" | "feedback";
   topics: string[];
   sentiment: "positive" | "neutral" | "negative";
   behavior?: BehaviorMeta;
+  /** Present when the backend reports what its guarantee chain removed */
+  sanitization?: SanitizationReport;
 }
 
 export interface GenUIResponse {
+  /** Component contract version of the responding backend (undefined on older backends) */
+  contractVersion?: number;
   text: string;
   components: GenUIComponent[];
   sources: Array<{ title: string; url: string }>;
@@ -399,6 +421,9 @@ export interface UserProfile {
 // Hook Types
 // ============================================
 
+export type { PrivacyLevel } from "../utils/privacy";
+import type { PrivacyLevel } from "../utils/privacy";
+
 export interface BehaviorTrackerOptions {
   trackClicks?: boolean;
   trackScroll?: boolean;
@@ -408,6 +433,10 @@ export interface BehaviorTrackerOptions {
   scrollDebounce?: number;
   maxEventsPerType?: number;
   enableHeatmapZones?: boolean;
+  /** Capture contract: 'strict' | 'balanced' (default) | 'off' — see README */
+  privacy?: PrivacyLevel;
+  /** false = never track, true = track (overrides DNT/GPC), unset = no consent gating */
+  consent?: boolean;
 }
 
 export interface UseGenUIOptions {
@@ -415,6 +444,12 @@ export interface UseGenUIOptions {
   apiUrl: string;
   /** Client API key (sent as X-API-Key). Required when the backend has CLIENT_API_KEYS configured */
   apiKey?: string;
+  /**
+   * Signed user identity token (sent as X-User-Token). Required alongside
+   * userId when the backend has USER_TOKEN_SECRETS configured; mint it
+   * server-side with sign_user_token() and pass it to the client.
+   */
+  userToken?: string;
   /** User ID for profile management */
   userId?: string;
   /** Enable IndexedDB persistence */
@@ -423,6 +458,17 @@ export interface UseGenUIOptions {
   enableBehaviorTracking?: boolean;
   /** Behavior tracker configuration */
   behaviorTrackingOptions?: BehaviorTrackerOptions;
+  /**
+   * Privacy level of the behavior tracker (default: 'balanced' — text
+   * PII-redacted, form fields never captured, DNT/GPC honored).
+   * 'strict' = structural signals only; 'off' = raw capture (explicit choice).
+   */
+  privacy?: PrivacyLevel;
+  /**
+   * Consent hook for your CMP: pass false until the user consents (nothing is
+   * tracked), true once granted (overrides DNT/GPC). Unset = no consent gating.
+   */
+  consent?: boolean;
   /** Callback when profile is updated */
   onProfileUpdate?: (profile: UserProfile) => void;
   /** Callback on API error */

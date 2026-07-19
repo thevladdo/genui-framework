@@ -198,10 +198,10 @@ class UrlGuard:
         data = component.get("data", {})
         content = data.get("content")
         if isinstance(content, str):
-            data["content"] = self._strip_markdown_links(content)
+            data["content"] = self.strip_markdown_links(content)
         return component
 
-    def _strip_markdown_links(self, content: str) -> str:
+    def strip_markdown_links(self, content: str) -> str:
         """Collapse markdown links to their text when the URL is not allowed."""
         def _replace(match: re.Match) -> str:
             text, url = match.group(1), match.group(2)
@@ -254,5 +254,5 @@ class UrlGuard:
         if stripped.startswith(("http://", "https://")):
             return self.check(value)
         if "](" in value:
-            return self._strip_markdown_links(value)
+            return self.strip_markdown_links(value)
         return value

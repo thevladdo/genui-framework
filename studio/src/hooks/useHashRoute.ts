@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export type RoutePath = "/" | "/playground" | "/studio" | "/about";
+export type RoutePath = "/" | "/playground" | "/studio" | "/measure" | "/about";
 
 export interface HashRoute {
   path: RoutePath;
@@ -15,7 +15,10 @@ const parseHash = (): HashRoute => {
   const hash = window.location.hash.replace(/^#/, "") || "/";
   const [rawPath, query = ""] = hash.split("?");
   const path: RoutePath =
-    rawPath === "/playground" || rawPath === "/studio" || rawPath === "/about"
+    rawPath === "/playground" ||
+      rawPath === "/studio" ||
+      rawPath === "/measure" ||
+      rawPath === "/about"
       ? rawPath
       : "/";
   return { path, query };

@@ -11,7 +11,13 @@ enough that adding a provider is one file.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any, Awaitable, Callable, AsyncIterator, Dict, List, Optional
+
+# Provider-neutral tool spec: {"name", "description", "parameters": <json schema>}
+ToolSpec = Dict[str, Any]
+# Async callback the client invokes when the model calls a tool:
+# (tool_name, arguments) -> tool result as text
+ToolHandler = Callable[[str, Dict[str, Any]], Awaitable[str]]
 
 
 class LLMChatClient(ABC):
@@ -38,6 +44,24 @@ class LLMChatClient(ABC):
         Returns:
             The raw response text (expected to be JSON).
         """
+
+    async def complete_json_with_tools(
+        self,
+        system: str,
+        user: str,
+        tools: List[ToolSpec],
+        tool_handler: ToolHandler,
+        max_tool_rounds: int = 3,
+    ) -> str:
+        """
+        Like complete_json, but the model may call the given tools; the
+        client runs the tool loop and returns the final JSON text.
+
+        Default: providers without a tool loop ignore the tools and
+        answer from the prompt alone (callers always pre-fetch context
+        into the prompt, so this degrades quality, not correctness).
+        """
+        return await self.complete_json(system, user)
 
     @abstractmethod
     def stream_json(

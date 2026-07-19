@@ -50,6 +50,36 @@ def resolve_provider_config(
     return ProviderConfig("openai", openai_api_key, openai_base_url)
 
 
+def provider_configured(config: ProviderConfig) -> bool:
+    """
+    Whether this ProviderConfig can actually be called: a key, or a
+    keyless OpenAI-compatible endpoint (local vLLM/Ollama). Gemini's
+    fixed Google base_url does not count as keyless-capable.
+    """
+    if config.api_key:
+        return True
+    return config.provider == "openai" and bool(config.base_url)
+
+
+def llm_configured() -> bool:
+    """
+    Config-level health signal for /health and /ready: no network call,
+    no spend. Actual provider reachability shows up as
+    genui_llm_generations_total{outcome="error"} in /metrics.
+    """
+    from config import settings
+
+    return provider_configured(
+        resolve_provider_config(
+            provider=settings.llm_provider,
+            openai_api_key=settings.openai_api_key,
+            anthropic_api_key=settings.anthropic_api_key,
+            google_api_key=settings.google_api_key,
+            openai_base_url=settings.openai_base_url,
+        )
+    )
+
+
 def create_llm_client(model: str) -> LLMChatClient:
     """Create the configured LLM client for a given model."""
     from config import settings
@@ -64,7 +94,11 @@ def create_llm_client(model: str) -> LLMChatClient:
 
     if config.provider == "anthropic":
         from .anthropic_client import AnthropicChatClient
-        return AnthropicChatClient(api_key=config.api_key, model=model)
+        return AnthropicChatClient(
+            api_key=config.api_key,
+            model=model,
+            timeout=settings.llm_timeout_seconds,
+        )
 
     from .openai_client import OpenAIChatClient
     return OpenAIChatClient(
@@ -72,4 +106,5 @@ def create_llm_client(model: str) -> LLMChatClient:
         model=model,
         base_url=config.base_url,
         provider_name=config.provider,
+        timeout=settings.llm_timeout_seconds,
     )

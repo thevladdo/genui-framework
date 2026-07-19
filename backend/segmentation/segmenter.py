@@ -146,6 +146,40 @@ def _extract_engagement(behavior_data: Optional[Dict[str, Any]]) -> Optional[str
     return "low"
 
 
+# Segment-key prefixes -> archetype field names
+_ARCHETYPE_FIELDS = {
+    "role": "role",
+    "int": "interests",
+    "type": "user_type",
+    "eng": "engagement",
+}
+
+
+def segment_archetype(segment: Segment) -> Dict[str, Any]:
+    """
+    Parse a segment key back into its canonical audience archetype.
+
+    The archetype is the ONLY user-derived input allowed into the prompt
+    of a shared (cached) render. It is parsed from the KEY itself — not
+    from the profile that produced it — so the prompt input of a cached
+    render is a pure function of its cache key: whatever the first
+    requester of a segment put in their raw profile cannot reach a
+    render served to everyone else. Values are slugs by construction
+    ([a-z0-9-], length- and count-capped at segmentation time).
+    """
+    if segment.is_anonymous:
+        return {}
+
+    archetype: Dict[str, Any] = {}
+    for part in segment.key.split("|"):
+        prefix, _, value = part.partition("=")
+        name = _ARCHETYPE_FIELDS.get(prefix)
+        if not name or not value:
+            continue
+        archetype[name] = value.split("+") if name == "interests" else value
+    return archetype
+
+
 def compute_segment(
     user_profile: Optional[Dict[str, Any]],
     behavior_data: Optional[Dict[str, Any]] = None,

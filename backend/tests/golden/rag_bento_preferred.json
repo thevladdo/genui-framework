@@ -1,0 +1,88 @@
+{
+  "description": "Marketer segment with RAG results and a forced component type. The recorded response includes an unknown component type (must be dropped) and builds cards from knowledge-base URLs; the pinned guide must appear.",
+  "request": {
+    "zone_id": "kb-highlights",
+    "base_prompt": "Highlight the most helpful guides from our knowledge base.",
+    "context_prompt": null,
+    "pinned_content": [
+      {
+        "type": "guide",
+        "title": "Getting started guide",
+        "url": "https://kb.acme.example/start",
+        "description": "First steps with GenUI"
+      }
+    ],
+    "preferred_component_type": "bento",
+    "max_items": 4,
+    "current_page": "/resources",
+    "page_metadata": {},
+    "archetype": {
+      "role": "marketer",
+      "interests": ["analytics", "growth"],
+      "user_type": "quick-scanner",
+      "engagement": "low"
+    }
+  },
+  "retrieved": [
+    {
+      "content": "Funnel analytics explains where visitors drop off. Full guide: https://kb.acme.example/funnel",
+      "metadata": {
+        "url": "https://kb.acme.example/funnel",
+        "image": "https://cdn.acme.example/img/funnel.png",
+        "source_document": "funnel.md"
+      },
+      "score": 0.82,
+      "chunk_id": "c1"
+    },
+    {
+      "content": "Attribution modeling for multi-channel campaigns.",
+      "metadata": {
+        "url": "https://kb.acme.example/attribution",
+        "source_document": "attribution.md"
+      },
+      "score": 0.74,
+      "chunk_id": "c2"
+    }
+  ],
+  "invariants": {
+    "allowed_types": ["bento"]
+  },
+  "llm_response": {
+    "components": [
+      {
+        "type": "spinny_carousel",
+        "data": {"slides": ["a", "b"]}
+      },
+      {
+        "type": "bento",
+        "data": {
+          "columns": 3,
+          "cards": [
+            {
+              "title": "Getting started guide",
+              "description": "First steps with GenUI",
+              "link": "https://kb.acme.example/start",
+              "badge": "START HERE"
+            },
+            {
+              "title": "Funnel analytics",
+              "description": "See where visitors drop off.",
+              "link": "https://kb.acme.example/funnel",
+              "image": "https://cdn.acme.example/img/funnel.png"
+            },
+            {
+              "title": "Attribution modeling",
+              "description": "Multi-channel campaign credit.",
+              "link": "https://kb.acme.example/attribution"
+            }
+          ]
+        }
+      }
+    ],
+    "pinned_included": ["https://kb.acme.example/start"],
+    "personalization_applied": true,
+    "confidence": 0.85,
+    "reasoning": "Quick-scanner marketer: compact cards on analytics guides.",
+    "profile_factors": ["role", "interests"]
+  }
+}

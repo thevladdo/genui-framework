@@ -1,14 +1,12 @@
-# AI Framework
-datapizza-ai>=0.0.9
-
 # LLM Providers
 openai>=1.0.0
 # anthropic>=0.40.0 
 # (LLM_PROVIDER=gemini uses the OpenAI-compatible endpoint, no extra package)
 
-# RAG Components
+# RAG Components (chunking/reading only; embeddings go through the
+# `openai` package above / BYOK: any OpenAI-compatible endpoint via
+# EMBEDDING_BASE_URL, so documents embed where you choose)
 llama-index>=0.10.0
-llama-index-embeddings-openai>=0.1.0
 llama-index-readers-file>=0.1.0
 
 # Vector Store

@@ -4,7 +4,6 @@
  */
 
 import React from "react";
-import { motion } from "framer-motion";
 import type { BentoComponentData, BentoCard } from "../types";
 import { sanitizeUrl } from "../utils/sanitizeUrl";
 
@@ -18,9 +17,11 @@ interface CardProps {
 }
 
 const Card: React.FC<CardProps> = ({ card }) => {
-  const { title, description, badge } = card;
+  const { title, description, badge, action } = card;
   const link = sanitizeUrl(card.link);
   const image = sanitizeUrl(card.image);
+  const actionHref = sanitizeUrl(action?.url);
+  const hasAction = Boolean(action && (actionHref || action.onClick));
 
   const content = (
     <>
@@ -41,15 +42,28 @@ const Card: React.FC<CardProps> = ({ card }) => {
         {description && (
           <p className="genui-bento-card__description">{description}</p>
         )}
+        {hasAction &&
+          (actionHref ? (
+            <a
+              href={actionHref}
+              className="genui-bento-card__action"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {action!.label}
+            </a>
+          ) : (
+            <button
+              type="button"
+              className="genui-bento-card__action"
+              onClick={action!.onClick}
+            >
+              {action!.label}
+            </button>
+          ))}
       </div>
     </>
   );
-
-  const motionProps = {
-    initial: { scale: 1 },
-    whileHover: { scale: 1.02 },
-    transition: { duration: 0.3, ease: [0.4, 0, 0.2, 1] as const },
-  };
 
   // The default grid flows cards into the N-column layout
   // (genui-bento--cols-*). The named-area "complex" layout is opt-in via
@@ -60,25 +74,20 @@ const Card: React.FC<CardProps> = ({ card }) => {
   // accent-tinted gradient (CSS) instead of an empty dark box
   const cardClass = `genui-bento-card ${image ? '' : 'genui-bento-card--text-only'}`.trim();
 
-  if (link) {
+  if (link && !hasAction) {
     return (
-      <motion.a
+      <a
         href={link}
         className={cardClass}
         target="_blank"
         rel="noopener noreferrer"
-        {...motionProps}
       >
         {content}
-      </motion.a>
+      </a>
     );
   }
 
-  return (
-    <motion.div className={cardClass} {...motionProps}>
-      {content}
-    </motion.div>
-  );
+  return <div className={cardClass}>{content}</div>;
 };
 
 export const BentoComponent: React.FC<BentoComponentProps> = ({

@@ -304,11 +304,13 @@
   text-decoration: none;
   color: inherit;
   cursor: pointer;
-  transition: box-shadow var(--genui-transition-normal);
+  transition: box-shadow var(--genui-transition-normal),
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .genui-bento-card:hover {
   box-shadow: var(--genui-shadow-glow), var(--genui-glass-shadow);
+  transform: scale(1.02);
 }
 
 
@@ -396,6 +398,8 @@
 }
 
 .genui-bento-card__action {
+  display: inline-block;
+  align-self: flex-start;
   margin-top: var(--genui-spacing-md);
   padding: var(--genui-spacing-sm) var(--genui-spacing-md);
   background: var(--genui-accent-color);
@@ -1892,4 +1896,19 @@ a.genui-contentgrid__card:hover {
 
 [data-theme='light'] .genui-text--note {
   background-color: rgba(0, 0, 0, 0.03);
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+  [class^='genui-'],
+  [class*=' genui-'],
+  [class^='genui-']::before,
+  [class*=' genui-']::before,
+  [class^='genui-']::after,
+  [class*=' genui-']::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -1,7 +1,26 @@
 /**
  * BehaviorTracker
- * Collects user behavior data for analysis by the BehaveAgent
+ * Collects user behavior data for analysis by the BehaveAgent.
+ *
+ * Privacy contract (see README "Behavior Tracking & Privacy"): every captured
+ * string goes through utils/privacy. Elements under data-genui-private are
+ * never recorded; under data-genui-redact only their shape is; form field
+ * content never leaves at any level.
  */
+
+import {
+  PrivacyLevel,
+  NavigatorLike,
+  isPrivateElement,
+  isRedactedElement,
+  isFormField,
+  redactPII,
+  sanitizeText,
+  sanitizeValue,
+  trackingAllowed,
+} from "./privacy";
+
+export type { PrivacyLevel } from "./privacy";
 
 export interface ClickEvent {
   x: number;
@@ -17,7 +36,7 @@ export interface ClickEvent {
 export interface ScrollEvent {
   scrollY: number;
   scrollDepthPercent: number;
-  direction: 'up' | 'down';
+  direction: "up" | "down";
   timestamp: number;
 }
 
@@ -40,7 +59,7 @@ export interface HoverEvent {
 export interface ElementInteraction {
   elementId: string;
   elementType: string;
-  interactionType: 'click' | 'hover' | 'focus' | 'scroll-into-view';
+  interactionType: "click" | "hover" | "focus" | "scroll-into-view";
   timestamp: number;
   metadata?: Record<string, unknown>;
 }
@@ -77,11 +96,30 @@ export interface BehaviorTrackerOptions {
   scrollDebounce?: number; // ms debounce for scroll events
   maxEventsPerType?: number; // prevent memory issues
   enableHeatmapZones?: boolean;
+  /**
+   * Capture contract (default 'balanced'):
+   * - 'strict': structural signals only — no free text, hrefs, titles or referrers
+   * - 'balanced': text captured with PII patterns redacted; honors DNT/GPC
+   * - 'off': raw capture, DNT ignored — an explicit integrator choice
+   */
+  privacy?: PrivacyLevel;
+  /**
+   * Consent hook for the host's CMP: false = never track (any level),
+   * true = track (overrides DNT/GPC), unset = no consent gating.
+   */
+  consent?: boolean;
 }
 
-type HeatmapZone = 'top-left' | 'top-center' | 'top-right' | 
-                   'middle-left' | 'middle-center' | 'middle-right' |
-                   'bottom-left' | 'bottom-center' | 'bottom-right';
+type HeatmapZone =
+  | "top-left"
+  | "top-center"
+  | "top-right"
+  | "middle-left"
+  | "middle-center"
+  | "middle-right"
+  | "bottom-left"
+  | "bottom-center"
+  | "bottom-right";
 
 const DEFAULT_OPTIONS: Partial<BehaviorTrackerOptions> = {
   trackClicks: true,
@@ -92,6 +130,7 @@ const DEFAULT_OPTIONS: Partial<BehaviorTrackerOptions> = {
   scrollDebounce: 150,
   maxEventsPerType: 100,
   enableHeatmapZones: true,
+  privacy: "balanced",
 };
 
 export class BehaviorTracker {
@@ -103,7 +142,7 @@ export class BehaviorTracker {
   private hoverHandler: ((e: MouseEvent) => void) | null = null;
   private mouseOutHandler: ((e: MouseEvent) => void) | null = null;
   private visibilityHandler: (() => void) | null = null;
-  
+
   // Tracking state
   private lastScrollY: number = 0;
   private scrollTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -114,6 +153,17 @@ export class BehaviorTracker {
   constructor(options: BehaviorTrackerOptions) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.record = this.createEmptyRecord();
+  }
+
+  // `|| 'balanced'` (not just the DEFAULT_OPTIONS entry): an explicit
+  // `privacy: undefined` spread over the defaults must not disable the filter
+  private get level(): PrivacyLevel {
+    return this.options.privacy || "balanced";
+  }
+
+  /** Active privacy level — for callers that ship captured data (useZone) */
+  getPrivacyLevel(): PrivacyLevel {
+    return this.level;
   }
 
   private createEmptyRecord(): BehaviorRecord {
@@ -144,35 +194,50 @@ export class BehaviorTracker {
   start(): void {
     if (this.isTracking) return;
     // SSR guard: there is nothing to track without a DOM
-    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    if (typeof window === "undefined" || typeof document === "undefined")
+      return;
+    // Privacy gate: explicit consent denial, or DNT/GPC unless privacy is 'off'
+    const nav =
+      typeof navigator !== "undefined" ? (navigator as NavigatorLike) : null;
+    if (
+      !trackingAllowed(
+        { privacy: this.level, consent: this.options.consent },
+        nav,
+      )
+    )
+      return;
 
     this.isTracking = true;
     this.record.startTime = Date.now();
-    
+
     // Track clicks
     if (this.options.trackClicks) {
       this.clickHandler = this.handleClick.bind(this);
-      document.addEventListener('click', this.clickHandler, { passive: true });
+      document.addEventListener("click", this.clickHandler, { passive: true });
     }
-    
+
     // Track scroll
     if (this.options.trackScroll) {
       this.scrollHandler = this.handleScroll.bind(this);
-      window.addEventListener('scroll', this.scrollHandler, { passive: true });
+      window.addEventListener("scroll", this.scrollHandler, { passive: true });
     }
-    
+
     // Track hover
     if (this.options.trackHover) {
       this.hoverHandler = this.handleMouseOver.bind(this);
       this.mouseOutHandler = this.handleMouseOut.bind(this);
-      document.addEventListener('mouseover', this.hoverHandler, { passive: true });
-      document.addEventListener('mouseout', this.mouseOutHandler, { passive: true });
+      document.addEventListener("mouseover", this.hoverHandler, {
+        passive: true,
+      });
+      document.addEventListener("mouseout", this.mouseOutHandler, {
+        passive: true,
+      });
     }
-    
+
     // Track page visibility changes
     this.visibilityHandler = this.handleVisibilityChange.bind(this);
-    document.addEventListener('visibilitychange', this.visibilityHandler);
-    
+    document.addEventListener("visibilitychange", this.visibilityHandler);
+
     // Initialize page visit tracking
     if (this.options.trackPageVisits) {
       this.trackPageEnter();
@@ -184,30 +249,30 @@ export class BehaviorTracker {
    */
   stop(): void {
     if (!this.isTracking) return;
-    
+
     this.isTracking = false;
-    
+
     // Complete current page visit
     if (this.currentPage) {
       this.completePageVisit();
     }
 
     if (this.clickHandler) {
-      document.removeEventListener('click', this.clickHandler);
+      document.removeEventListener("click", this.clickHandler);
     }
     if (this.scrollHandler) {
-      window.removeEventListener('scroll', this.scrollHandler);
+      window.removeEventListener("scroll", this.scrollHandler);
     }
     if (this.hoverHandler) {
-      document.removeEventListener('mouseover', this.hoverHandler);
+      document.removeEventListener("mouseover", this.hoverHandler);
     }
     if (this.mouseOutHandler) {
-      document.removeEventListener('mouseout', this.mouseOutHandler);
+      document.removeEventListener("mouseout", this.mouseOutHandler);
     }
     if (this.visibilityHandler) {
-      document.removeEventListener('visibilitychange', this.visibilityHandler);
+      document.removeEventListener("visibilitychange", this.visibilityHandler);
     }
-    
+
     if (this.scrollTimeout) {
       clearTimeout(this.scrollTimeout);
     }
@@ -237,7 +302,7 @@ export class BehaviorTracker {
     navigationPath: string[];
   } {
     this.updateMetrics();
-    
+
     return {
       sessionId: this.record.sessionId,
       userId: this.record.userId,
@@ -265,10 +330,10 @@ export class BehaviorTracker {
    * Track a custom element interaction
    */
   trackInteraction(
-    elementId: string, 
-    elementType: string, 
-    interactionType: ElementInteraction['interactionType'],
-    metadata?: Record<string, unknown>
+    elementId: string,
+    elementType: string,
+    interactionType: ElementInteraction["interactionType"],
+    metadata?: Record<string, unknown>,
   ): void {
     this.addElementInteraction({
       elementId,
@@ -289,14 +354,14 @@ export class BehaviorTracker {
     this.trackPageEnter(path, title);
   }
 
-
-
-
   // Private handlers
 
   private handleClick(e: MouseEvent): void {
     const target = e.target as HTMLElement;
-    
+
+    // data-genui-private: the event must not be recorded at all
+    if (isPrivateElement(target)) return;
+
     const clickEvent: ClickEvent = {
       x: e.clientX,
       y: e.clientY,
@@ -307,21 +372,28 @@ export class BehaviorTracker {
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
     };
-    
+
     this.addClick(clickEvent);
     this.record.lastActivity = Date.now();
-    
+
     // Track as element interaction if it has an ID or data attribute
     if (target.id || target.dataset.trackId) {
+      const contentAllowed = !isRedactedElement(target) && !isFormField(target);
+      const text = contentAllowed
+        ? sanitizeText(target.textContent?.slice(0, 300), this.level)?.slice(
+            0,
+            50,
+          )
+        : undefined;
+      const href = contentAllowed
+        ? sanitizeText((target as HTMLAnchorElement).href, this.level)
+        : undefined;
       this.addElementInteraction({
         elementId: target.id || target.dataset.trackId || target.tagName,
         elementType: target.tagName.toLowerCase(),
-        interactionType: 'click',
+        interactionType: "click",
         timestamp: Date.now(),
-        metadata: {
-          text: target.textContent?.slice(0, 50),
-          href: (target as HTMLAnchorElement).href,
-        },
+        metadata: { text, href },
       });
     }
   }
@@ -330,19 +402,21 @@ export class BehaviorTracker {
     if (this.scrollTimeout) {
       clearTimeout(this.scrollTimeout);
     }
-    
+
     this.scrollTimeout = setTimeout(() => {
       const scrollY = window.scrollY;
-      const docHeight = document.documentElement.scrollHeight - window.innerHeight;
-      const scrollDepthPercent = docHeight > 0 ? (scrollY / docHeight) * 100 : 0;
-      
+      const docHeight =
+        document.documentElement.scrollHeight - window.innerHeight;
+      const scrollDepthPercent =
+        docHeight > 0 ? (scrollY / docHeight) * 100 : 0;
+
       const scrollEvent: ScrollEvent = {
         scrollY,
         scrollDepthPercent: Math.round(scrollDepthPercent),
-        direction: scrollY > this.lastScrollY ? 'down' : 'up',
+        direction: scrollY > this.lastScrollY ? "down" : "up",
         timestamp: Date.now(),
       };
-      
+
       this.addScrollEvent(scrollEvent);
       this.lastScrollY = scrollY;
       this.record.lastActivity = Date.now();
@@ -351,32 +425,32 @@ export class BehaviorTracker {
 
   private handleMouseOver(e: MouseEvent): void {
     const target = e.target as HTMLElement;
-    
+
     // Only track hover on significant elements
-    if (!this.isSignificantElement(target)) return;
-    
+    if (!this.isSignificantElement(target) || isPrivateElement(target)) return;
+
     this.hoverTarget = target;
     this.hoverStartTime = Date.now();
   }
 
   private handleMouseOut(e: MouseEvent): void {
     if (!this.hoverTarget || e.target !== this.hoverTarget) return;
-    
+
     const duration = Date.now() - this.hoverStartTime;
-    
+
     if (duration >= (this.options.hoverThreshold || 500)) {
       const target = this.hoverTarget as HTMLElement;
-      
+
       const hoverEvent: HoverEvent = {
         target: target.tagName.toLowerCase(),
         targetId: target.id || undefined,
         duration,
         timestamp: this.hoverStartTime,
       };
-      
+
       this.addHoverEvent(hoverEvent);
     }
-    
+
     this.hoverTarget = null;
     this.hoverStartTime = 0;
   }
@@ -390,35 +464,49 @@ export class BehaviorTracker {
   }
 
   private isSignificantElement(el: HTMLElement): boolean {
-    const significantTags = ['a', 'button', 'input', 'select', 'img', 'video'];
-    const hasInteractiveRole = el.getAttribute('role') === 'button' || el.getAttribute('role') === 'link';
+    const significantTags = ["a", "button", "input", "select", "img", "video"];
+    const hasInteractiveRole =
+      el.getAttribute("role") === "button" ||
+      el.getAttribute("role") === "link";
     const hasDataTrack = !!el.dataset.trackId;
-    
-    return significantTags.includes(el.tagName.toLowerCase()) || hasInteractiveRole || hasDataTrack || !!el.id;
+
+    return (
+      significantTags.includes(el.tagName.toLowerCase()) ||
+      hasInteractiveRole ||
+      hasDataTrack ||
+      !!el.id
+    );
   }
 
   private trackPageEnter(path?: string, title?: string): void {
+    const rawPath =
+      path || (typeof window !== "undefined" ? window.location.pathname : "");
+    const rawTitle =
+      title || (typeof document !== "undefined" ? document.title : "");
+    const rawReferrer =
+      (typeof document !== "undefined" && document.referrer) || undefined;
+
     this.currentPage = {
-      path: path || (typeof window !== 'undefined' ? window.location.pathname : ''),
-      title: title || (typeof document !== 'undefined' ? document.title : ''),
+      // paths are structural signals: kept at every level, PII-redacted unless 'off'
+      path: this.level === "off" ? rawPath : redactPII(rawPath),
+      title: sanitizeText(rawTitle, this.level) || "",
       enterTime: Date.now(),
-      referrer: (typeof document !== 'undefined' && document.referrer) || undefined,
+      referrer: rawReferrer ? sanitizeText(rawReferrer, this.level) : undefined,
     };
-    
+
     this.record.metrics.navigationPattern.push(this.currentPage.path);
   }
 
   private completePageVisit(): void {
     if (!this.currentPage) return;
-    
+
     this.currentPage.exitTime = Date.now();
-    this.currentPage.duration = this.currentPage.exitTime - this.currentPage.enterTime;
-    
+    this.currentPage.duration =
+      this.currentPage.exitTime - this.currentPage.enterTime;
+
     this.addPageVisit(this.currentPage);
     this.currentPage = null;
   }
-
-
 
   // Data management with limits
 
@@ -428,7 +516,7 @@ export class BehaviorTracker {
     }
     this.record.clicks.push(click);
     this.record.metrics.totalClicks++;
-    
+
     // Update heatmap zones
     if (this.options.enableHeatmapZones) {
       this.updateHeatmapZone(click);
@@ -436,11 +524,13 @@ export class BehaviorTracker {
   }
 
   private addScrollEvent(event: ScrollEvent): void {
-    if (this.record.scrollEvents.length >= (this.options.maxEventsPerType || 100)) {
+    if (
+      this.record.scrollEvents.length >= (this.options.maxEventsPerType || 100)
+    ) {
       this.record.scrollEvents.shift();
     }
     this.record.scrollEvents.push(event);
-    
+
     // Update metrics
     if (event.scrollDepthPercent > this.record.metrics.maxScrollDepth) {
       this.record.metrics.maxScrollDepth = event.scrollDepthPercent;
@@ -448,21 +538,34 @@ export class BehaviorTracker {
   }
 
   private addPageVisit(visit: PageVisit): void {
-    if (this.record.pageVisits.length >= (this.options.maxEventsPerType || 100)) {
+    if (
+      this.record.pageVisits.length >= (this.options.maxEventsPerType || 100)
+    ) {
       this.record.pageVisits.shift();
     }
     this.record.pageVisits.push(visit);
   }
 
   private addHoverEvent(event: HoverEvent): void {
-    if (this.record.hoverEvents.length >= (this.options.maxEventsPerType || 100)) {
+    if (
+      this.record.hoverEvents.length >= (this.options.maxEventsPerType || 100)
+    ) {
       this.record.hoverEvents.shift();
     }
     this.record.hoverEvents.push(event);
   }
 
   private addElementInteraction(interaction: ElementInteraction): void {
-    if (this.record.elementInteractions.length >= (this.options.maxEventsPerType || 100)) {
+    if (interaction.metadata) {
+      interaction.metadata = sanitizeValue(
+        interaction.metadata,
+        this.level,
+      ) as Record<string, unknown>;
+    }
+    if (
+      this.record.elementInteractions.length >=
+      (this.options.maxEventsPerType || 100)
+    ) {
       this.record.elementInteractions.shift();
     }
     this.record.elementInteractions.push(interaction);
@@ -470,14 +573,16 @@ export class BehaviorTracker {
 
   private updateHeatmapZone(click: ClickEvent): void {
     const zone = this.getHeatmapZone(click);
-    
-    const existingZone = this.record.metrics.mostClickedAreas.find(z => z.zone === zone);
+
+    const existingZone = this.record.metrics.mostClickedAreas.find(
+      (z) => z.zone === zone,
+    );
     if (existingZone) {
       existingZone.count++;
     } else {
       this.record.metrics.mostClickedAreas.push({ zone, count: 1 });
     }
-    
+
     // Keep sorted by count
     this.record.metrics.mostClickedAreas.sort((a, b) => b.count - a.count);
   }
@@ -485,45 +590,52 @@ export class BehaviorTracker {
   private getHeatmapZone(click: ClickEvent): HeatmapZone {
     const xPercent = (click.x / click.viewportWidth) * 100;
     const yPercent = (click.y / click.viewportHeight) * 100;
-    
-    let horizontal: 'left' | 'center' | 'right';
-    let vertical: 'top' | 'middle' | 'bottom';
-    
-    if (xPercent < 33) horizontal = 'left';
-    else if (xPercent < 66) horizontal = 'center';
-    else horizontal = 'right';
-    
-    if (yPercent < 33) vertical = 'top';
-    else if (yPercent < 66) vertical = 'middle';
-    else vertical = 'bottom';
-    
+
+    let horizontal: "left" | "center" | "right";
+    let vertical: "top" | "middle" | "bottom";
+
+    if (xPercent < 33) horizontal = "left";
+    else if (xPercent < 66) horizontal = "center";
+    else horizontal = "right";
+
+    if (yPercent < 33) vertical = "top";
+    else if (yPercent < 66) vertical = "middle";
+    else vertical = "bottom";
+
     return `${vertical}-${horizontal}` as HeatmapZone;
   }
 
   private updateMetrics(): void {
     // Calculate average time per page
-    const completedVisits = this.record.pageVisits.filter(v => v.duration);
+    const completedVisits = this.record.pageVisits.filter((v) => v.duration);
     if (completedVisits.length > 0) {
-      const totalTime = completedVisits.reduce((sum, v) => sum + (v.duration || 0), 0);
-      this.record.metrics.averageTimePerPage = Math.round(totalTime / completedVisits.length);
+      const totalTime = completedVisits.reduce(
+        (sum, v) => sum + (v.duration || 0),
+        0,
+      );
+      this.record.metrics.averageTimePerPage = Math.round(
+        totalTime / completedVisits.length,
+      );
     }
-    
+
     // Calculate total scroll distance
     let totalScrollDistance = 0;
     for (let i = 1; i < this.record.scrollEvents.length; i++) {
       totalScrollDistance += Math.abs(
-        this.record.scrollEvents[i].scrollY - this.record.scrollEvents[i - 1].scrollY
+        this.record.scrollEvents[i].scrollY -
+          this.record.scrollEvents[i - 1].scrollY,
       );
     }
     this.record.metrics.totalScrollDistance = totalScrollDistance;
   }
 }
 
-
 // Singleton instance management
 let trackerInstance: BehaviorTracker | null = null;
 
-export const initBehaviorTracker = (options: BehaviorTrackerOptions): BehaviorTracker => {
+export const initBehaviorTracker = (
+  options: BehaviorTrackerOptions,
+): BehaviorTracker => {
   if (trackerInstance) {
     trackerInstance.stop();
   }

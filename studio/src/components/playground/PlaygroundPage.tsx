@@ -39,7 +39,7 @@ export const PlaygroundPage = ({ query, replaceQuery }: PlaygroundPageProps) => 
   }, [theme, query, replaceQuery]);
 
   return (
-    <main className={styles.page}>
+    <main className={styles.page} style={{ marginTop: "3rem" }}>
       <Controls theme={theme} onChange={onChange} onSave={() => setExportOpen(true)} />
       <Preview theme={theme} />
       {exportOpen && <ExportPanel theme={theme} onClose={() => setExportOpen(false)} />}

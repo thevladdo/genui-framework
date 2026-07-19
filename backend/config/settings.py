@@ -30,13 +30,38 @@ class Settings(BaseSettings):
     # Model Selection
     response_model: str = Field(default="gpt-4o-mini", description="Model for response generation")
     profile_model: str = Field(default="gpt-4o-mini", description="Model for profile analysis")
+
+    # Embeddings (BYOK, like the LLM: documents embed where YOU choose)
     embedding_model: str = Field(default="text-embedding-3-small", description="Model for embeddings")
-    
+    embedding_provider: str = Field(
+        default="openai",
+        description="Embedding provider: openai (covers any OpenAI-compatible "
+                    "endpoint via EMBEDDING_BASE_URL) or gemini. Independent of "
+                    "LLM_PROVIDER; misconfiguration fails loudly, never falls "
+                    "back to another provider"
+    )
+    embedding_api_key: Optional[str] = Field(
+        default=None,
+        description="Key for the embedding endpoint; falls back to the "
+                    "provider's LLM key (OPENAI_API_KEY / GOOGLE_API_KEY)"
+    )
+    embedding_base_url: Optional[str] = Field(
+        default=None,
+        description="OpenAI-compatible embedding endpoint (vLLM, Ollama, TEI, "
+                    "RunPod); falls back to OPENAI_BASE_URL so an all-local "
+                    "deployment keeps embeddings local too"
+    )
+    embedding_dimensions: Optional[int] = Field(
+        default=None,
+        description="Vector size of the embedding model; unset = derived from "
+                    "the model (known models, or a one-time probe). Replaces "
+                    "the old QDRANT_VECTOR_SIZE constant"
+    )
+
     # Qdrant Configuration
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
     qdrant_collection: str = "genui_documents"
-    qdrant_vector_size: int = 1536  # OpenAI text-embedding-3-small dimension
     
     # RAG Configuration
     chunk_size: int = 512
@@ -105,6 +130,20 @@ class Settings(BaseSettings):
                     "(pinned content, prompts, RAG documents, page context). "
                     "Dangerous schemes (javascript:, data:) are always stripped."
     )
+    numeric_grounding_enabled: bool = Field(
+        default=True,
+        description="Remove displayed numbers (stats_banner values, pricing "
+                    "prices, chart points) that do not trace to a number "
+                    "present in the input. Same model as the URL whitelist: "
+                    "check the output, don't trust the instruction."
+    )
+    content_policy: str = Field(
+        default="",
+        description='Per-tenant banned terms, enforced post-generation. JSON: '
+                    '{"*": {"banned_terms": [...]}, "<tenant>": {"banned_terms": '
+                    '[...]}}. A component containing a banned term is dropped; '
+                    'chat text is redacted. Empty = disabled.'
+    )
 
     # Authentication (comma-separated "key" or "key:tenant" entries).
     # No keys configured = auth disabled.
@@ -117,8 +156,47 @@ class Settings(BaseSettings):
         description="Server-to-server keys: documents, warmup, cache stats"
     )
 
+    # Explicit dev mode: the ONLY way to run without keys (fail-open).
+    # Default is fail-closed: no keys configured = privileged routes refuse.
+    genui_dev_open: bool = Field(
+        default=False,
+        description="Explicitly allow running with no API keys / no user-token "
+                    "secrets (open, dev only). Never set in production."
+    )
+
+    # Signed user identity ("secret:tenant" entries, like the API keys).
+    user_token_secrets: Union[list[str], str] = Field(
+        default_factory=list,
+        description="Per-tenant HMAC secrets for user identity tokens; "
+                    "required for /profile and personalized renders in production"
+    )
+
     # Rate Limiting (per client key, per minute; 0 = disabled)
     rate_limit_per_minute: int = 120
+
+    # Cost controls (protect the tenant's BYOK LLM key from public-key traffic)
+    llm_timeout_seconds: Optional[float] = Field(
+        default=60.0,
+        description="Per-call timeout for LLM and embedding provider requests. "
+                    "A slow provider (cold RunPod endpoint, hung gateway) must "
+                    "never hold requests open for the SDK default of 10 minutes. "
+                    "Empty = SDK default"
+    )
+    llm_budget_per_hour: int = Field(
+        default=0,
+        description="Per-tenant cap on LLM generations per hour (cold misses, "
+                    "stale refreshes, renders with the cache disabled). Over "
+                    "the cap: cached renders keep being served, new generations "
+                    "return 429. Admin-triggered renders (warmup, admin 'live') "
+                    "are exempt. Shares the rate-limit Redis store, so the cap "
+                    "is consistent across workers. 0 = disabled"
+    )
+    zone_batch_max: int = Field(
+        default=10,
+        description="Max zones per /zone/batch-render request (413 above). "
+                    "Each zone in a client batch also counts individually "
+                    "against the per-key rate limit"
+    )
 
     # Audit Log
     audit_log_enabled: bool = Field(
@@ -127,7 +205,19 @@ class Settings(BaseSettings):
     )
     audit_log_path: Optional[str] = Field(
         default=None,
-        description="JSONL file path; empty = emit on the 'genui.audit' logger"
+        description="JSONL file path; empty (production default) = emit on the "
+                    "'genui.audit' logger for the host's log pipeline"
+    )
+    audit_log_max_bytes: int = Field(
+        default=50 * 1024 * 1024,
+        description="Rotate the audit file at this size (0 = never rotate). "
+                    "Rotation is per-process: the file sink is for single-worker "
+                    "runs; multi-worker deployments use the logger sink"
+    )
+    audit_log_backup_count: int = Field(
+        default=5,
+        description="Rotated audit files to keep (audit.jsonl.1 ... .N); "
+                    "older ones are deleted"
     )
 
     # Server-side Profiles
@@ -175,6 +265,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"
 
 
 @lru_cache()
