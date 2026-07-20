@@ -218,6 +218,14 @@ CRITICAL RULES:
 
 7. CONTENT RELEVANCE: Use retrieved documents to populate cards with real content
    from the knowledge base when available.
+
+8. WRITE AS THE PAGE, NOT ABOUT THE PAGE: every visible string you emit is
+   copy the end user reads on the live site. NEVER describe the audience,
+   the layout, your strategy, or this system in any component (no "built
+   for a developer audience", no "this layout emphasizes", no labels like
+   "Pinned" or "Personalized"). Pinned content is woven in as normal
+   content, unlabeled. Selection logic belongs ONLY in the "reasoning"
+   field, which is never shown on the page.
 """
 
     def __init__(self, model: str = None, vector_store=None, llm_client=None):
@@ -621,7 +629,7 @@ CRITICAL RULES:
             parts.append(f"<available_content>\n{context}\n</available_content>")
 
         parts.append("\nGenerate the zone content as valid JSON matching the specified structure.")
-        parts.append("Remember: ALL pinned content MUST be included, respect the component type constraint, and use ONLY URLs present in the input above.")
+        parts.append("Remember: ALL pinned content MUST be included, respect the component type constraint, and use ONLY URLs present in the input above. Every visible string is live page copy: never describe the audience, the layout or your strategy in it; explanations go only in 'reasoning'.")
 
         return "\n\n".join(parts)
 

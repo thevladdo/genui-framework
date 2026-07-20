@@ -71,3 +71,40 @@ test('card with both link and action keeps a single non-nested anchor', async ()
 
   act(() => root.unmount());
 });
+
+test('columns are capped by card count (1 card never gets a 3-col grid)', async () => {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <BentoComponent data={{ cards: [{ title: 'Only card' }], columns: 3 }} />,
+    );
+  });
+
+  const grid = container.querySelector('.genui-bento');
+  expect(grid!.className).toContain('genui-bento--cols-1');
+  expect(grid!.className).not.toContain('genui-bento--cols-3');
+
+  act(() => root.unmount());
+});
+
+test('columns stay as requested when there are enough cards', async () => {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <BentoComponent
+        data={{
+          cards: [{ title: 'A' }, { title: 'B' }, { title: 'C' }],
+          columns: 3,
+        }}
+      />,
+    );
+  });
+
+  expect(container.querySelector('.genui-bento')!.className).toContain(
+    'genui-bento--cols-3',
+  );
+
+  act(() => root.unmount());
+});

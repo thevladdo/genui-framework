@@ -96,8 +96,12 @@ export const BentoComponent: React.FC<BentoComponentProps> = ({
 }) => {
   const { cards, columns = 3, gap } = data;
 
+  // A grid with more columns than cards squeezes the cards into a
+  // fraction of the zone (1 card + columns:3 = a 1/3-width sliver).
+  const cols = Math.max(1, Math.min(columns, 4, cards?.length || 1));
+
   const colClass =
-    `genui-bento genui-bento--cols-${columns} ${className}`.trim();
+    `genui-bento genui-bento--cols-${cols} ${className}`.trim();
 
   const style: React.CSSProperties = gap ? { gap: `${gap}px` } : {};
 

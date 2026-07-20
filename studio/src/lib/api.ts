@@ -4,6 +4,7 @@
 
 import type { AdminSession } from "./session";
 import type { CacheStats, EventStats, WarmupResult } from "./measure";
+import type { PreviewRenderResponse } from "./segment";
 
 export interface KnowledgeDocument {
   source_document: string;
@@ -49,7 +50,15 @@ const request = async (
 };
 
 export const verifySession = async (session: AdminSession): Promise<void> => {
-  await request(session, "/api/v1/documents/stats");
+  const response = await request(session, "/api/v1/documents/stats");
+  try {
+    await response.json();
+  } catch {
+    throw new Error(
+      "That URL answered, but not like a GenUI backend (non-JSON response). " +
+        "It looks like a web app, not the API: check the backend URL and port.",
+    );
+  }
 };
 
 export const listDocuments = async (
@@ -111,6 +120,31 @@ export const warmupZones = async (
     body: JSON.stringify({ zones }),
   });
   return (await response.json()) as WarmupResult;
+};
+
+export const renderZone = async (
+  session: AdminSession,
+  payload: Record<string, unknown>,
+): Promise<PreviewRenderResponse> => {
+  const response = await request(session, "/api/v1/zone/render", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return (await response.json()) as PreviewRenderResponse;
+};
+
+export interface BackendHealth {
+  status?: string;
+  llm?: string;
+  redis?: string;
+}
+
+export const backendHealth = async (
+  session: AdminSession,
+): Promise<BackendHealth> => {
+  const response = await request(session, "/health");
+  return (await response.json()) as BackendHealth;
 };
 
 export const searchDocuments = async (

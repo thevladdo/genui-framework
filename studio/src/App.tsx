@@ -27,6 +27,9 @@ const StudioPage = import.meta.env.DEV
 const MeasurePage = import.meta.env.DEV
   ? lazy(() => import('./components/measure/MeasurePage'))
   : null;
+const PreviewPage = import.meta.env.DEV
+  ? lazy(() => import('./components/preview/PreviewPage'))
+  : null;
 
 const App = () => {
   const { path, query, replaceQuery, navigate } = useHashRoute();
@@ -105,6 +108,23 @@ const App = () => {
           <>
             <Home />
             <LocalOnlyModal onClose={() => navigate('/')} />
+          </>
+        )
+      )}
+
+      {path === '/preview' && (
+        PreviewPage ? (
+          <Suspense fallback={<p style={{ padding: 32 }}>Loading Segment Preview…</p>}>
+            <PreviewPage />
+          </Suspense>
+        ) : (
+          <>
+            <Home />
+            <LocalOnlyModal
+              onClose={() => navigate('/')}
+              title="Segment Preview runs locally"
+              body="The Segment Preview renders zones live against your GenUI backend with an admin key, so for now it's available only when you run the studio on your own machine:"
+            />
           </>
         )
       )}

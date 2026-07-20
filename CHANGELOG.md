@@ -5,6 +5,25 @@ Entries are grouped by date until versioned releases exist.
 
 ## 2026-07-20
 
+### Container-responsive zones
+
+Every component breakpoint was viewport-based (`@media`), so a zone embedded in a narrow container of a wide page (sidebar, column, preview panel) laid out as if it owned the whole viewport: 3-column bento grids squeezed into 400px, hero headlines at 52px inside a card. Zones are embeddable fragments, so they now respond to their own width:
+
+- `.genui-section` (the wrapper every `GenUIZone`/`GenUISection` renders) is a size container (`container-type: inline-size`), and the viewport grid rules gained `@container` mirrors at the same thresholds, measured on the zone instead of the window. The `@media` rules remain as the fallback for browsers without container queries. `.genui-layout-complex` (host opt-in class, never emitted by a zone render) is deliberately not mirrored.
+- In narrow containers the hero headline scales with the zone (`cqw`), bento cards drop the 320px forced min-height to 220px, and long single words in bento titles/hero headlines wrap instead of clipping.
+- **Fixed**: `BentoComponent` emitted the LLM-requested column count even with fewer cards, so one card with `columns: 3` rendered as a third-of-the-zone sliver. Columns are now capped by card count (`genui-bento--cols-1` styled explicitly).
+
+Additive: full-width zones on wide viewports render identically to before.
+
+---
+
+### Zone copy voice and bento caption polish
+
+- **Prompt rule (backend, quality lever)**: the ZoneAgent was free to emit meta-commentary as visible content ("Built for a developer audience...", cards badged "Pinned"): a description of the curation instead of page copy. New system rule 8 "write as the page, not about the page": audience/layout/strategy talk and internal labels are banned from components; selection logic goes only in the `reasoning` field. Prompt-level (best effort, like tone), not mechanically enforceable.
+- **Fixed (CSS)**: `.genui-bento-card__content` carried the photo-caption scrim (dark background, blur, top border) into text-only cards, painting a visible box whose backdrop-filter layer ignored the card's border radius (WebKit/Blink compositing). Text-only content is now transparent; the with-image caption bar rounds its own bottom corners (`border-bottom-*-radius: inherit`) so the blur layer follows the card shape.
+
+---
+
 ### Frontend/Backend contract fidelity
 
 Cross-cutting audit of the FE/BE contract (`roadmap/incongruenze-fe-be/`): three cases where the backend produced data the frontend type declared but the runtime silently dropped, never rendered, or mutated.

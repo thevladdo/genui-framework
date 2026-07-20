@@ -11,6 +11,7 @@ interface NavProps {
 
 const TABS: Array<{ path: RoutePath; label: string }> = [
   { path: '/playground', label: 'Theme Playground' },
+  { path: '/preview', label: 'Segment Preview' },
   { path: '/studio', label: 'Content Studio' },
   { path: '/measure', label: 'Measurement' },
 ];

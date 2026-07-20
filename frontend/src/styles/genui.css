@@ -370,6 +370,8 @@
   backdrop-filter: blur(var(--genui-glass-blur));
   -webkit-backdrop-filter: blur(var(--genui-glass-blur));
   border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
 }
 
 .genui-bento-card__title {
@@ -1057,6 +1059,10 @@
   flex-direction: column;
   justify-content: center;
   gap: var(--genui-spacing-sm);
+  background: transparent;
+  border-top: 0;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .genui-bento-card--text-only .genui-bento-card__title {
@@ -1910,5 +1916,96 @@ a.genui-contentgrid__card:hover {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+.genui-section {
+  container-type: inline-size;
+}
+
+.genui-bento-card__title,
+.genui-hero__headline {
+  overflow-wrap: anywhere;
+}
+
+.genui-bento--cols-1 {
+  grid-template-columns: 1fr;
+}
+
+@container (max-width: 900px) {
+  .genui-pricing {
+    grid-template-columns: 1fr;
+  }
+
+  .genui-contentgrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@container (max-width: 768px) {
+
+  .genui-bento--cols-3,
+  .genui-bento--cols-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .genui-zone-skeleton--bento {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .genui-tabpanel {
+    grid-template-columns: 1fr;
+  }
+
+  .genui-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .genui-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .genui-hero--split {
+    grid-template-columns: 1fr;
+    padding: var(--genui-spacing-xl);
+  }
+
+  .genui-hero__headline {
+    font-size: clamp(26px, 6cqw, 44px);
+  }
+}
+
+@container (max-width: 560px) {
+  .genui-contentgrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container (max-width: 480px) {
+
+  .genui-bento--cols-2,
+  .genui-bento--cols-3,
+  .genui-bento--cols-4 {
+    grid-template-columns: 1fr;
+  }
+
+  .genui-zone-skeleton--bento {
+    grid-template-columns: 1fr;
+  }
+
+  .genui-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .genui-bento-card {
+    min-height: 220px;
+  }
+
+  .genui-hero__headline {
+    font-size: clamp(22px, 8cqw, 32px);
+  }
+
+  .genui-hero--centered {
+    padding: var(--genui-spacing-xl) var(--genui-spacing-lg);
   }
 }

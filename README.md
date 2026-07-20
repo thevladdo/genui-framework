@@ -46,6 +46,7 @@ GenUI System is a complete customization engine for building **Generative User I
 - **Progressive Render**: components stream in as the model generates them (SSE)
 - **Behavior Tracking & Events**: clicks, scrolls, impressions — uplift measured automatically, with a privacy filter (PII redaction, `data-genui-private`, DNT/consent) on by default
 - **Theme System**: CSS-variable based customization
+- **Container-Responsive**: zones adapt to their own width via container queries — a sidebar embed lays out like a sidebar, not like the page
 - **Pinned Content**: guaranteed display, enforced server-side
 - **SSR-Safe**: importable in Next.js / Remix / Astro; the server renders the loading skeleton (no CLS)
 - **Integration-Ready**: dual ESM/CJS packaging, reactive props with fetch abort, charts in a lazy chunk
@@ -74,7 +75,7 @@ GenUI System is a complete customization engine for building **Generative User I
 
 ## 🎛️ GenUI Studio
 
-**GenUI Studio** is the companion web app for building with the framework: a single SPA (`studio/`, React + Vite) with three tools. Run it locally with `cd studio && npm run dev`.
+**GenUI Studio** is the companion web app for building with the framework: a single SPA (`studio/`, React + Vite) with four tools. Run it locally with `cd studio && npm run dev`.
 
 <div align="center">
   <br />
@@ -89,6 +90,16 @@ Configure the entire `--genui-*` token dictionary in real time and watch **every
 <div align="center">
   <br />
   <img src="./studio/screenshots/Studio_ThemePlayground.png" alt="GenUI Studio — Theme Playground with live component preview and token controls" width="100%" height="auto" />
+  <br /><br />
+</div>
+
+### 👥 Segment Preview
+
+Watch GenUI do the thing it exists for: the LLM curating a zone per audience, live. Compose up to four audiences (role, interests, browsing style, engagement: the exact factors that form a segment key) and one ad-hoc zone config (prompts plus pinned content), then render them side by side against your real `/zone/render` with `cache_strategy: "live"` (admin only, never written to the cache real users are served). Each column shows the segment key the audience falls into, the cache state, and everything the guarantee chain removed before serving (`meta.sanitization`: stripped URLs, dropped components, ungrounded numbers, policy violations). A backend with no LLM engine configured degrades to a clearly labelled pinned-only fallback instead of a cryptic error.
+
+<div align="center">
+  <br />
+  <img src="./studio/screenshots/Studio_Segment_Preview.png" alt="GenUI Studio — Segment Preview to see GenUI doing its thing" width="100%" height="auto" />
   <br /><br />
 </div>
 
@@ -112,7 +123,7 @@ The proof that personalization pays, on one page. Enter a `zone_id` and the dash
   <br /><br />
 </div>
 
-> **Note:** the Content Studio and the Measurement dashboard require a reachable backend and an admin key, so for now they run **locally only** (`npm run dev`). On the public GitHub Pages build they show an "available locally" notice and their code is tree shaken out of the bundle. A hosted version arrives with proper user auth on the roadmap.
+> **Note:** the Segment Preview, the Content Studio and the Measurement dashboard require a reachable backend and an admin key, so for now they run **locally only** (`npm run dev`). On the public GitHub Pages build they show an "available locally" notice and their code is tree shaken out of the bundle. A hosted version arrives with proper user auth on the roadmap.
 
 ---
 

@@ -4,7 +4,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export type RoutePath = "/" | "/playground" | "/studio" | "/measure" | "/about";
+export type RoutePath =
+  | "/"
+  | "/playground"
+  | "/studio"
+  | "/measure"
+  | "/preview"
+  | "/about";
 
 export interface HashRoute {
   path: RoutePath;
@@ -18,6 +24,7 @@ const parseHash = (): HashRoute => {
     rawPath === "/playground" ||
       rawPath === "/studio" ||
       rawPath === "/measure" ||
+      rawPath === "/preview" ||
       rawPath === "/about"
       ? rawPath
       : "/";
