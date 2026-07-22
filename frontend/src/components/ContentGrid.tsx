@@ -39,9 +39,8 @@ const Card: React.FC<{ item: ContentGridItem }> = ({ item }) => {
     </>
   );
 
-  const cardClass = `genui-contentgrid__card ${
-    imageUrl ? '' : 'genui-contentgrid__card--text-only'
-  }`.trim();
+  const cardClass = `genui-contentgrid__card ${imageUrl ? '' : 'genui-contentgrid__card--text-only'
+    }`.trim();
 
   if (href) {
     return (
@@ -58,10 +57,12 @@ export const ContentGrid: React.FC<ContentGridProps> = ({ data, className = '' }
 
   if (!Array.isArray(items) || items.length === 0) return null;
 
+  const cols = Math.max(1, Math.min(columns, 4, items.length));
+
   return (
     <section
       className={`genui-contentgrid ${className}`.trim()}
-      style={{ ['--genui-content-cols' as string]: columns }}
+      style={{ ['--genui-content-cols' as string]: cols }}
     >
       {items.map((item, i) => (
         <Card key={`${item.title}-${i}`} item={item} />

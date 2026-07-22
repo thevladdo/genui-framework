@@ -465,6 +465,61 @@ def component_to_dict(component: ValidatedComponent) -> Dict[str, Any]:
     return component.model_dump(exclude_none=True)
 
 
+def downgrade_image_variants(
+    components: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Re-cohere components whose image was removed by the URL guard.
+
+    A component can be generated as an image variant (hero "split",
+    steps / tabs / content-grid "with-image"), pass validation because
+    an image_url was present, then have that URL stripped by the guard
+    (it was a link, not an image). That would leave an image-shaped hole.
+    Here the variant is degraded to its text-only form in place instead,
+    so the render stays coherent. Runs after the guard on both paths.
+    """
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        data = component.get("data")
+        if not isinstance(data, dict):
+            continue
+        ctype = component.get("type")
+
+        if ctype == "hero_banner":
+            if data.get("variant") == "split" and not data.get("image_url"):
+                data["variant"] = "centered"
+
+        elif ctype == "steps_section":
+            steps = data.get("steps") or []
+            has_image = any(
+                isinstance(s, dict) and s.get("image_url") for s in steps
+            )
+            if data.get("layout") == "with-image" and not has_image:
+                data["layout"] = "text-only"
+
+        elif ctype == "content_grid":
+            for item in data.get("items") or []:
+                if (
+                    isinstance(item, dict)
+                    and item.get("layout") == "with-image"
+                    and not item.get("image_url")
+                ):
+                    item["layout"] = "text-only"
+
+        elif ctype == "tabs_feature":
+            for tab in data.get("tabs") or []:
+                content = tab.get("content") if isinstance(tab, dict) else None
+                if (
+                    isinstance(content, dict)
+                    and content.get("layout") == "with-image"
+                    and not content.get("image_url")
+                ):
+                    content["layout"] = "text-only"
+
+    return components
+
+
 def zone_output_json_schema(
     custom_types: Optional[Dict[str, ComponentTypeDef]] = None,
 ) -> Dict[str, Any]:

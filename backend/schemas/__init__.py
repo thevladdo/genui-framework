@@ -14,6 +14,7 @@ from .components import (
     TextData,
     ZoneAgentOutput,
     component_to_dict,
+    downgrade_image_variants,
     validate_components,
     zone_output_json_schema,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "TextData",
     "ZoneAgentOutput",
     "component_to_dict",
+    "downgrade_image_variants",
     "get_registered_types",
     "merge_custom_types",
     "register_component_type",

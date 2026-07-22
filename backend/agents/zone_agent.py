@@ -36,6 +36,7 @@ from llm.embeddings import EmbeddingConfigError
 from rag import create_vector_store, build_context_from_results
 from schemas import (
     component_to_dict,
+    downgrade_image_variants,
     merge_custom_types,
     validate_components,
     zone_output_json_schema,
@@ -43,7 +44,7 @@ from schemas import (
 from utils.content_policy import policy_for
 from utils.json_stream import ComponentStreamParser
 from utils.numeric_guard import NumericGuard
-from utils.url_guard import UrlGuard, normalize_url
+from utils.url_guard import UrlGuard, is_image_field, normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +150,9 @@ COMPONENT TYPES:
        "columns": 2-4
    }
 
-2. "text" - Introductory or explanatory text
+2. "text" - Short body copy the visitor reads (a section intro or lede),
+   never a description of the page, the audience, or your choices - that
+   goes in "reasoning". "style" is purely visual, not a cue to explain.
    data: { "content": "markdown text", "style": "normal|emphasis|note|heading" }
 
 3. "chart" - Data visualization (use sparingly in zones)
@@ -210,6 +213,11 @@ CRITICAL RULES:
 5. NEVER INVENT URLS: Every link or image URL in your output MUST be copied
    verbatim from the input (pinned content, developer context, or available
    content). URLs not present in the input will be removed by the system.
+   A link is not an image: never put a page/link URL in an image_url or src
+   field. Only choose an image variant/layout (hero "split", "with-image")
+   when the input actually contains an image URL; otherwise use the
+   text-only variant. A link used as an image is removed and the image
+   breaks.
 
 6. NEVER INVENT NUMBERS: Every stat value, price, and chart value MUST be
    copied as it appears in the input (same digits, same magnitude - do not
@@ -226,6 +234,12 @@ CRITICAL RULES:
    "Pinned" or "Personalized"). Pinned content is woven in as normal
    content, unlabeled. Selection logic belongs ONLY in the "reasoning"
    field, which is never shown on the page.
+
+9. NOT EVERYTHING IS A LINK: do not attach a URL to every card, CTA and
+   button. Link only where it genuinely leads somewhere. If the input has
+   just one link, use it once where it matters (a single clear CTA), and
+   leave the other cards as informative content with no link, rather than
+   pointing every element at the same URL, which reads as broken.
 """
 
     def __init__(self, model: str = None, vector_store=None, llm_client=None):
@@ -304,6 +318,7 @@ CRITICAL RULES:
                         continue
                     component = component_to_dict(valid[0])
                     sanitized, removed = guard.sanitize_components([component])
+                    sanitized = downgrade_image_variants(sanitized)
                     removed_urls.extend(removed)
                     if sanitized:
                         sanitized, removed = numeric_guard.sanitize_components(sanitized)
@@ -376,11 +391,14 @@ CRITICAL RULES:
         )
         components = [component_to_dict(c) for c in valid_models]
 
-        # 2. URL whitelist: only URLs that existed in the input survive
+        # 2. URL whitelist: only URLs that existed in the input survive.
+        # Stripping an <img src> that was a link leaves an image-shaped hole,
+        # so degrade image variants (hero split, with-image) to text-only.
         guard = self._build_url_guard(request, retrieved)
         components, removed_urls = guard.sanitize_components(components)
+        components = downgrade_image_variants(components)
 
-        # 3. Numeric grounding: displayed numbers (stats, prices, chart points) 
+        # 3. Numeric grounding: displayed numbers (stats, prices, chart points)
         # must trace to a number present in the input
         numeric_guard = self._build_numeric_guard(request, retrieved)
         components, removed_numbers = numeric_guard.sanitize_components(components)
@@ -421,23 +439,32 @@ CRITICAL RULES:
         guard.allow_from_text(request.base_prompt)
         guard.allow_from_text(request.context_prompt)
 
-        # Pinned content
+        # Pinned content. A pinned item declared as an image can back an
+        # <img src>; a pinned link cannot (it would render as a broken image).
         for item in request.pinned_content or []:
-            guard.allow(item.get("url"), item.get("id"))
+            if str(item.get("type", "")).lower() == "image":
+                guard.allow_image(item.get("url"))
+            else:
+                guard.allow(item.get("url"))
+            guard.allow(item.get("id"))
             for value in (item.get("metadata") or {}).values():
                 if isinstance(value, str):
                     guard.allow_from_text(value)
 
-        # Page context
+        # Page context: image-named keys seed the image whitelist
         guard.allow(request.current_page)
-        for value in (request.page_metadata or {}).values():
+        for key, value in (request.page_metadata or {}).items():
             if isinstance(value, str):
-                guard.allow_from_text(value)
+                if is_image_field(key):
+                    guard.allow_image(value)
+                else:
+                    guard.allow_from_text(value)
 
         # Retrieved documents (content + metadata)
         for result in retrieved:
             metadata = getattr(result, "metadata", None) or {}
-            guard.allow(metadata.get("url"), metadata.get("image"))
+            guard.allow(metadata.get("url"))
+            guard.allow_image(metadata.get("image"))
             guard.allow_from_text(getattr(result, "content", None))
 
         return guard

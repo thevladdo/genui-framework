@@ -34,12 +34,39 @@ _SAFE_SCHEMES = ("http://", "https://", "mailto:", "tel:")
 _URL_FIELD_NAMES = {"url", "link", "href", "src", "image"}
 _URL_FIELD_SUFFIXES = ("_url", "_link", "_href", "_src", "_image")
 
+# Of the URL carriers above, which ones expect an IMAGE (src) rather than a link (href). 
+# An image URL and a link URL are whitelisted separately, so a pinned link can never be reused as an <img src> (a broken image), 
+# and only URLs that genuinely came from an image source can.
+_IMAGE_FIELD_NAMES = {"src", "image", "avatar", "photo", "logo", "thumbnail", "picture"}
+_IMAGE_FIELD_SUFFIXES = ("_src", "_image", "_photo", "_avatar", "_thumbnail", "_picture")
+_IMAGE_FIELD_SUBSTRINGS = ("image", "avatar", "photo", "thumbnail", "picture")
+
+_IMAGE_EXTENSIONS = (
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif", ".bmp", ".ico",
+)
+
 _TRAILING_PUNCTUATION = ".,;:!?'\""
 
 
 def normalize_url(url: str) -> str:
     """Normalize a URL for comparison: trim spaces and trailing punctuation."""
     return url.strip().rstrip(_TRAILING_PUNCTUATION).rstrip("/") or "/"
+
+
+def is_image_field(key: str) -> bool:
+    """Whether a URL-carrying field name expects an image (src) not a link."""
+    lowered = key.lower()
+    if lowered in _IMAGE_FIELD_NAMES or lowered.endswith(_IMAGE_FIELD_SUFFIXES):
+        return True
+    return any(sub in lowered for sub in _IMAGE_FIELD_SUBSTRINGS)
+
+
+def looks_like_image_url(url: Optional[str]) -> bool:
+    """Whether a URL points at an image, judged by file extension."""
+    if not url:
+        return False
+    path = str(url).split("?", 1)[0].split("#", 1)[0].lower().rstrip("/")
+    return path.endswith(_IMAGE_EXTENSIONS)
 
 
 # Internal alias
@@ -73,25 +100,46 @@ class UrlGuard:
         self,
         allowed_urls: Optional[Iterable[str]] = None,
         enforce_whitelist: bool = True,
+        allowed_image_urls: Optional[Iterable[str]] = None,
     ):
         self.enforce_whitelist = enforce_whitelist
-        self._allowed: Set[str] = {
-            _clean_url(u) for u in (allowed_urls or []) if u and str(u).strip()
-        }
+        self._allowed: Set[str] = set()
+        # Image src whitelist is a strict subset of _allowed: every image is
+        # also a valid link target, but a plain link is not a valid image.
+        self._allowed_images: Set[str] = set()
         self.removed_urls: List[str] = []
+        self.allow(*(allowed_urls or []))
+        self.allow_image(*(allowed_image_urls or []))
 
     def allow(self, *urls: Optional[str]) -> None:
-        """Add input URLs to the whitelist."""
+        """Add input URLs to the link whitelist (and image whitelist if they
+        look like images by extension)."""
         for url in urls:
             if url and str(url).strip():
-                self._allowed.add(_clean_url(str(url)))
+                cleaned = _clean_url(str(url))
+                self._allowed.add(cleaned)
+                if looks_like_image_url(url):
+                    self._allowed_images.add(cleaned)
+
+    def allow_image(self, *urls: Optional[str]) -> None:
+        """Whitelist URLs that came from an image source (RAG image metadata,
+        pinned images), usable as both an <img src> and a link."""
+        for url in urls:
+            if url and str(url).strip():
+                cleaned = _clean_url(str(url))
+                self._allowed.add(cleaned)
+                self._allowed_images.add(cleaned)
 
     def allow_from_text(self, text: Optional[str]) -> None:
         """Extract and whitelist every URL found in input text."""
-        self._allowed.update(extract_urls(text))
+        self.allow(*extract_urls(text))
 
-    def is_allowed(self, url: Optional[str]) -> bool:
-        """Check a generated URL against scheme rules and the whitelist."""
+    def is_allowed(self, url: Optional[str], as_image: bool = False) -> bool:
+        """Check a generated URL against scheme rules and the whitelist.
+
+        With as_image=True the URL must be in the image whitelist: a link
+        URL cannot satisfy an <img src>.
+        """
         if not url or not str(url).strip():
             return False
 
@@ -109,13 +157,14 @@ class UrlGuard:
         if not self.enforce_whitelist:
             return True
 
-        return _clean_url(candidate) in self._allowed
+        whitelist = self._allowed_images if as_image else self._allowed
+        return _clean_url(candidate) in whitelist
 
-    def check(self, url: Optional[str]) -> Optional[str]:
+    def check(self, url: Optional[str], as_image: bool = False) -> Optional[str]:
         """Return the URL if allowed, otherwise record and drop it."""
         if url is None:
             return None
-        if self.is_allowed(url):
+        if self.is_allowed(url, as_image=as_image):
             return url
         self.removed_urls.append(str(url))
         return None
@@ -173,7 +222,7 @@ class UrlGuard:
         for card in data.get("cards", []):
             for field in ("link", "image"):
                 if field in card and card[field] is not None:
-                    checked = self.check(card[field])
+                    checked = self.check(card[field], as_image=(field == "image"))
                     if checked is None:
                         card.pop(field, None)
             action = card.get("action")
@@ -245,7 +294,7 @@ class UrlGuard:
         """
         lowered_key = key.lower()
         if lowered_key in _URL_FIELD_NAMES or lowered_key.endswith(_URL_FIELD_SUFFIXES):
-            return self.check(value)
+            return self.check(value, as_image=is_image_field(key))
 
         stripped = value.strip().lower()
         if any(stripped.startswith(s) for s in _DANGEROUS_SCHEMES):

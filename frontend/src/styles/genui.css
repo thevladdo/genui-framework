@@ -1924,7 +1924,16 @@ a.genui-contentgrid__card:hover {
 }
 
 .genui-bento-card__title,
-.genui-hero__headline {
+.genui-hero__headline,
+.genui-contentgrid__title,
+.genui-pricing__name,
+.genui-stats__value,
+.genui-testimonials__quote,
+.genui-testimonials__name,
+.genui-tabsfeature__heading,
+.genui-tabpanel__title,
+.genui-steps__title,
+.genui-chart__title {
   overflow-wrap: anywhere;
 }
 

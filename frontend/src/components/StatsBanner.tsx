@@ -16,7 +16,7 @@ export const StatsBanner: React.FC<StatsBannerProps> = ({ data, className = '' }
 
   if (!Array.isArray(stats) || stats.length === 0) return null;
 
-  const cols = columns ?? Math.min(stats.length, 4);
+  const cols = Math.max(1, Math.min(columns ?? stats.length, stats.length, 4));
 
   return (
     <section
