@@ -20,9 +20,8 @@ const Card: React.FC<{ plan: PricingPlan }> = ({ plan }) => {
 
   return (
     <article
-      className={`genui-pricing__card ${
-        plan.highlighted ? 'genui-pricing__card--highlighted' : ''
-      }`.trim()}
+      className={`genui-pricing__card ${plan.highlighted ? 'genui-pricing__card--highlighted' : ''
+        }`.trim()}
     >
       {plan.highlighted && (
         <span className="genui-pricing__flag">{plan.flag ?? 'Recommended'}</span>
@@ -34,14 +33,16 @@ const Card: React.FC<{ plan: PricingPlan }> = ({ plan }) => {
       </p>
       {plan.description && <p className="genui-pricing__blurb">{plan.description}</p>}
 
-      <ul className="genui-pricing__features">
-        {(plan.features ?? []).map((feature, i) => (
-          <li key={i} className="genui-pricing__feature">
-            <span className="genui-pricing__check" aria-hidden="true">✓</span>
-            {feature}
-          </li>
-        ))}
-      </ul>
+      {(plan.features ?? []).length > 0 && (
+        <ul className="genui-pricing__features">
+          {(plan.features ?? []).map((feature, i) => (
+            <li key={i} className="genui-pricing__feature">
+              <span className="genui-pricing__check" aria-hidden="true">✓</span>
+              {feature}
+            </li>
+          ))}
+        </ul>
+      )}
 
       {plan.cta?.label && ctaUrl && (
         <a className="genui-pricing__cta" href={ctaUrl}>
@@ -57,9 +58,9 @@ export const PricingCards: React.FC<PricingCardsProps> = ({ data, className = ''
 
   if (!Array.isArray(plans) || plans.length === 0) return null;
 
-  // Union of features, in first-seen order, for the comparison table
+  // Union of features, in first-seen order, for the comparison table.
   const allFeatures =
-    variant === 'detailed'
+    variant === 'detailed' && plans.length > 1
       ? [...new Set(plans.flatMap((plan) => plan.features ?? []))]
       : [];
 

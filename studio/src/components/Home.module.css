@@ -103,6 +103,14 @@
   font-size: 14px;
   line-height: 1.6;
   max-width: 42ch;
+
+  @media (max-width: 525px) {
+    max-width: 80%;
+
+    br {
+      display: none;
+    }
+  }
 }
 
 .cardArrow {

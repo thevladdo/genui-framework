@@ -2018,3 +2018,365 @@ a.genui-contentgrid__card:hover {
     padding: var(--genui-spacing-xl) var(--genui-spacing-lg);
   }
 }
+
+/* ======================================================================
+ * CaseStudies - editorial project/case studies
+ * ==================================================================== */
+
+.genui-cases {
+  width: 100%;
+}
+
+.genui-cases__header {
+  max-width: 640px;
+  margin: 0 auto calc(var(--genui-spacing-2xl) * 1.5);
+  text-align: center;
+}
+
+.genui-cases__heading {
+  margin: 0 0 var(--genui-spacing-md);
+  font-size: clamp(28px, 4cqw, 44px);
+  font-weight: var(--genui-font-weight-heading);
+  line-height: 1.15;
+  color: var(--genui-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.genui-cases__subheading {
+  margin: 0;
+  color: var(--genui-text-secondary);
+  font-size: var(--genui-font-size-lg);
+  line-height: var(--genui-line-height);
+}
+
+.genui-cases__list {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--genui-spacing-2xl) * 1.5);
+}
+
+.genui-cases__case {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--genui-spacing-2xl);
+  align-items: center;
+  padding-bottom: calc(var(--genui-spacing-2xl) * 1.25);
+  border-bottom: 1px solid var(--genui-border-subtle);
+}
+
+.genui-cases__list>.genui-cases__case:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.genui-cases__case:not(:has(.genui-cases__metrics)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.genui-cases__main {
+  display: flex;
+  gap: var(--genui-spacing-xl);
+  align-items: stretch;
+  min-width: 0;
+  border-right: 1px solid var(--genui-border-subtle);
+  padding-right: var(--genui-spacing-2xl);
+}
+
+.genui-cases__case:not(:has(.genui-cases__metrics)) .genui-cases__main {
+  border-right: 0;
+  padding-right: 0;
+}
+
+.genui-cases__case--reversed {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+}
+
+.genui-cases__case--reversed .genui-cases__main {
+  order: 2;
+  border-right: 0;
+  padding-right: 0;
+  border-left: 1px solid var(--genui-border-subtle);
+  padding-left: var(--genui-spacing-2xl);
+}
+
+.genui-cases__case--reversed .genui-cases__metrics {
+  order: 1;
+}
+
+.genui-cases__media {
+  flex: 0 0 auto;
+  width: min(240px, 42%);
+  border-radius: var(--genui-radius-md);
+  overflow: hidden;
+  background: var(--genui-surface-2);
+  border: 1px solid var(--genui-border-subtle);
+}
+
+.genui-cases__media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  aspect-ratio: 29 / 35;
+  object-fit: cover;
+}
+
+.genui-cases__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--genui-spacing-xl);
+  min-width: 0;
+}
+
+.genui-cases__title {
+  margin: 0 0 var(--genui-spacing-sm);
+  font-size: var(--genui-font-size-xl);
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--genui-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.genui-cases__summary {
+  margin: 0;
+  color: var(--genui-text-secondary);
+  font-size: var(--genui-font-size-lg);
+  line-height: 1.55;
+}
+
+.genui-cases__attribution {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+
+.genui-cases__name {
+  color: var(--genui-text-primary);
+  font-weight: 600;
+}
+
+.genui-cases__role {
+  color: var(--genui-text-tertiary);
+  font-size: var(--genui-font-size-sm);
+}
+
+.genui-cases__metrics {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: calc(var(--genui-spacing-2xl) * 0.85);
+  padding: var(--genui-spacing-lg) 0;
+}
+
+.genui-cases__metric-value {
+  margin: 0 0 var(--genui-spacing-sm);
+  font-size: clamp(28px, 3.4cqw, 40px);
+  font-weight: var(--genui-font-weight-heading);
+  line-height: 1;
+  color: var(--genui-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.genui-cases__metric-label {
+  margin: 0;
+  color: var(--genui-text-primary);
+  font-weight: 600;
+}
+
+.genui-cases__metric-desc {
+  margin: 4px 0 0;
+  color: var(--genui-text-tertiary);
+  font-size: var(--genui-font-size-sm);
+}
+
+@container (max-width: 720px) {
+
+  .genui-cases__case,
+  .genui-cases__case--reversed,
+  .genui-cases__case:not(:has(.genui-cases__metrics)) {
+    grid-template-columns: 1fr;
+    gap: var(--genui-spacing-xl);
+  }
+
+  .genui-cases__main,
+  .genui-cases__case--reversed .genui-cases__main {
+    order: 0;
+    flex-direction: column;
+    border-left: 0;
+    border-right: 0;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .genui-cases__case--reversed .genui-cases__metrics {
+    order: 0;
+  }
+
+  .genui-cases__media {
+    width: 100%;
+  }
+
+  .genui-cases__media img {
+    aspect-ratio: 16 / 9;
+  }
+
+  .genui-cases__metrics {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: var(--genui-spacing-xl);
+    padding: 0;
+  }
+}
+
+
+/* ======================================================================
+ * QuoteBlock - single editorial quote / manifesto
+ * ==================================================================== */
+
+.genui-quote {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--genui-spacing-xl) 0;
+  text-align: center;
+}
+
+.genui-quote__logo {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--genui-spacing-sm);
+  margin-bottom: var(--genui-spacing-lg);
+}
+
+.genui-quote__logo img {
+  height: 28px;
+  width: auto;
+  object-fit: contain;
+}
+
+.genui-quote__logo-label {
+  color: var(--genui-text-secondary);
+  font-weight: 500;
+  font-size: var(--genui-font-size-lg);
+}
+
+.genui-quote__text {
+  margin: 0;
+  font-size: clamp(var(--genui-font-size-xl), 4cqw, var(--genui-font-size-2xl));
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--genui-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.genui-quote__attribution {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--genui-spacing-md);
+  margin-top: var(--genui-spacing-lg);
+}
+
+.genui-quote__avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--genui-radius-full);
+  object-fit: cover;
+  border: 1px solid var(--genui-border-subtle);
+}
+
+.genui-quote__meta {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+.genui-quote__author {
+  color: var(--genui-text-primary);
+  font-weight: 600;
+  font-style: normal;
+}
+
+.genui-quote__role {
+  color: var(--genui-text-tertiary);
+  font-size: var(--genui-font-size-sm);
+}
+
+
+/* ======================================================================
+ * LogoWall - grid of logos (clients, technologies, partners)
+ * ==================================================================== */
+
+.genui-logowall {
+  width: 100%;
+  text-align: center;
+}
+
+.genui-logowall__heading {
+  margin: 0 0 var(--genui-spacing-lg);
+  color: var(--genui-text-tertiary);
+  font-size: var(--genui-font-size-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.genui-logowall__inner {
+  position: relative;
+}
+
+.genui-logowall__grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--genui-spacing-lg) var(--genui-spacing-xl);
+  max-width: 720px;
+  margin: 0 auto;
+  transition: opacity var(--genui-transition-normal), filter var(--genui-transition-normal);
+}
+
+.genui-logowall__item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.genui-logowall__logo {
+  height: 28px;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  opacity: 0.75;
+  transition: opacity var(--genui-transition-fast);
+}
+
+.genui-logowall__item:hover .genui-logowall__logo {
+  opacity: 1;
+}
+
+.genui-logowall__cta {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  opacity: 0;
+  color: var(--genui-text-primary);
+  font-weight: 500;
+  text-decoration: none;
+  transition: opacity var(--genui-transition-normal);
+}
+
+.genui-logowall--reveal:hover .genui-logowall__cta,
+.genui-logowall--reveal:focus-within .genui-logowall__cta {
+  opacity: 1;
+}
+
+.genui-logowall--reveal:hover .genui-logowall__grid,
+.genui-logowall--reveal:focus-within .genui-logowall__grid {
+  opacity: 0.35;
+  filter: blur(2px);
+}

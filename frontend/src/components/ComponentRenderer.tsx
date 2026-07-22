@@ -22,6 +22,9 @@ import { TestimonialCarousel } from './TestimonialCarousel';
 import { PricingCards } from './PricingCards';
 import { ContentGrid } from './ContentGrid';
 import { HeroBanner } from './HeroBanner';
+import { CaseStudies } from './CaseStudies';
+import { QuoteBlock } from './QuoteBlock';
+import { LogoWall } from './LogoWall';
 import { ComponentErrorBoundary } from './ErrorBoundary';
 import { getRegisteredGenUIComponent } from '../registry';
 
@@ -118,6 +121,15 @@ const renderSingleComponent = (
 
       case 'hero_banner':
         return <HeroBanner data={data} />;
+
+      case 'case_studies':
+        return <CaseStudies data={data} />;
+
+      case 'quote':
+        return <QuoteBlock data={data} />;
+
+      case 'logo_wall':
+        return <LogoWall data={data} />;
 
       default: {
         // Host-registered custom components (see registerGenUIComponent).

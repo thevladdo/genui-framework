@@ -31,9 +31,9 @@ export interface GenUITheme {
   /** Glassmorphism backdrop blur, e.g. '20px' (default from CSS: 20px) */
   glassBlur?: string;
   /** Spacing scale: multiplies every --genui-spacing-* token (default: 'base') */
-  spacingScale?: 'sm' | 'base' | 'lg';
+  spacingScale?: "sm" | "base" | "lg";
   /** Color mode: emits data-theme on the section (default: dark via :root) */
-  mode?: 'light' | 'dark';
+  mode?: "light" | "dark";
   /** Surface hierarchy overrides (page -> card -> raised element) */
   surface1?: string;
   surface2?: string;
@@ -49,8 +49,6 @@ export interface GenUITheme {
   /** Heading font weight for section components (default: 700) */
   fontWeightHeading?: string;
 }
-
-
 
 // ============================================
 // Component Data Types
@@ -156,8 +154,6 @@ export interface ButtonsComponentData {
   /** Gap between buttons in pixels */
   gap?: number;
 }
-
-
 
 // ============================================
 // Enterprise section components
@@ -282,6 +278,49 @@ export interface HeroBannerData {
   imageUrl?: string;
 }
 
+export interface CaseStudyMetric {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+export interface CaseStudyItem {
+  title: string;
+  summary?: string;
+  name?: string;
+  role?: string;
+  imageUrl?: string;
+  metrics?: CaseStudyMetric[];
+}
+
+export interface CaseStudiesData {
+  heading?: string;
+  subheading?: string;
+  cases: CaseStudyItem[];
+}
+
+export interface QuoteData {
+  quote: string;
+  author?: string;
+  role?: string;
+  avatarUrl?: string;
+  logoUrl?: string;
+  logoLabel?: string;
+}
+
+export interface LogoItem {
+  imageUrl: string;
+  alt: string;
+  url?: string;
+}
+
+export interface LogoWallData {
+  heading?: string;
+  logos: LogoItem[];
+  ctaLabel?: string;
+  ctaUrl?: string;
+}
+
 // ============================================
 // Generic Component Type
 // ============================================
@@ -297,7 +336,10 @@ export type ComponentType =
   | "testimonial_carousel"
   | "pricing_cards"
   | "content_grid"
-  | "hero_banner";
+  | "hero_banner"
+  | "case_studies"
+  | "quote"
+  | "logo_wall";
 
 export type ComponentData =
   | TextComponentData
@@ -310,7 +352,10 @@ export type ComponentData =
   | TestimonialCarouselData
   | PricingCardsData
   | ContentGridData
-  | HeroBannerData;
+  | HeroBannerData
+  | CaseStudiesData
+  | QuoteData
+  | LogoWallData;
 
 export interface GenUIComponent {
   type: ComponentType;
@@ -323,8 +368,6 @@ export interface GenUIComponent {
     padding?: string;
   };
 }
-
-
 
 // ============================================
 // API Response Types
@@ -392,8 +435,6 @@ export interface GenUIResponse {
   meta: ResponseMeta;
 }
 
-
-
 // ============================================
 // User Profile Types
 // ============================================
@@ -414,8 +455,6 @@ export interface UserProfile {
   createdAt: string;
   updatedAt: string;
 }
-
-
 
 // ============================================
 // Hook Types
@@ -499,13 +538,11 @@ export interface UseGenUIReturn {
     elementId: string,
     elementType: string,
     interactionType: "click" | "hover" | "focus" | "scroll-into-view",
-    metadata?: Record<string, unknown>
+    metadata?: Record<string, unknown>,
   ) => void;
   /** Track navigation to a new page/route */
   trackNavigation: (path: string, title?: string) => void;
 }
-
-
 
 // ============================================
 // Provider Props

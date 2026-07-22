@@ -36,6 +36,15 @@ export type { ContentGridProps } from './ContentGrid';
 export { HeroBanner } from './HeroBanner';
 export type { HeroBannerProps } from './HeroBanner';
 
+export { CaseStudies } from './CaseStudies';
+export type { CaseStudiesProps } from './CaseStudies';
+
+export { QuoteBlock } from './QuoteBlock';
+export type { QuoteBlockProps } from './QuoteBlock';
+
+export { LogoWall } from './LogoWall';
+export type { LogoWallProps } from './LogoWall';
+
 export { GenUISection } from './GenUISection';
 export { GenUISection as default } from './GenUISection';
 

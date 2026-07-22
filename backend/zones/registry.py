@@ -56,6 +56,7 @@ class ZoneConfig(BaseModel):
     pinned_content: List[Dict[str, Any]] = Field(default_factory=list)
     preferred_component_type: Optional[str] = None
     max_items: int = 6
+    max_components: Optional[int] = None
 
 
 class ZoneConfigStore:

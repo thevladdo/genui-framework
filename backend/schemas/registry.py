@@ -27,6 +27,7 @@ BUILTIN_TYPES = (
     "bento", "chart", "text", "buttons",
     "tabs_feature", "steps_section", "stats_banner",
     "testimonial_carousel", "pricing_cards", "content_grid", "hero_banner",
+    "case_studies", "quote", "logo_wall",
 )
 
 _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")

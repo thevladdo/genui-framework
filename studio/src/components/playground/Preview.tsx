@@ -6,11 +6,14 @@
 import {
   BentoComponent,
   ButtonsComponent,
+  CaseStudies,
   ChartComponent,
   ContentGrid,
   GenUISection,
   HeroBanner,
+  LogoWall,
   PricingCards,
+  QuoteBlock,
   StatsBanner,
   StepsSection,
   TabsFeature,
@@ -26,6 +29,12 @@ import stepsImg from '../../../stock-img/egor-litvinov-t0OY8pONcf8-unsplash.jpg'
 import gridImgA from '../../../stock-img/3d-render-lv_WRGCQJVc-unsplash.jpg';
 import gridImgB from '../../../stock-img/brotherhood-studio--psmFP4VC8A-unsplash.jpg';
 import avatarImg from '../../../stock-img/kir-3WUiwmyoNEw-unsplash.jpg';
+import logo1 from '../../../logo-img/logo-1.svg?no-inline';
+import logo2 from '../../../logo-img/logo-2.svg?no-inline';
+import logo3 from '../../../logo-img/logo-3.svg?no-inline';
+import logo4 from '../../../logo-img/logo-4.svg?no-inline';
+import logo5 from '../../../logo-img/logo-5.svg?no-inline';
+import logo6 from '../../../logo-img/logo-6.svg?no-inline';
 
 const BUTTON_VARIANTS = [
   'primary', 'secondary', 'outline', 'ghost',
@@ -233,6 +242,89 @@ export const Preview = ({ theme }: { theme: StudioTheme }) => {
                 { layout: 'with-image', category: 'Product', title: 'Designing for generated content', excerpt: 'Why image-optional is the default, not the edge case.', imageUrl: gridImgA, url: '#', date: 'Jun 2026' },
                 { layout: 'with-image', category: 'Engineering', title: 'One render per segment', excerpt: 'How the SWR cache cuts LLM costs by orders of magnitude.', imageUrl: gridImgB, url: '#', date: 'Jun 2026' },
                 { layout: 'text-only', category: 'Opinion', title: 'The text-only card is a design, not a fallback', excerpt: 'Accent rail, colored category, typography doing the work.', url: '#', date: 'Jun 2026' },
+              ],
+            }}
+          />
+        </section>
+
+        <section className={sectionClass}>
+          <p className="st-code-label">{'// case studies: with image + metrics vs text-first (degrades)'}</p>
+          <CaseStudies
+            data={{
+              heading: 'Selected work',
+              subheading: 'A few projects, and what changed for the people who run them.',
+              cases: [
+                {
+                  title: 'A design system that ships itself',
+                  summary: 'We rebuilt the component layer so product teams compose, not copy. Releases stopped waiting on design.',
+                  name: 'Elena Rossi',
+                  role: 'Head of Product',
+                  imageUrl: gridImgA,
+                  metrics: [
+                    { value: '40%', label: 'Faster delivery', description: 'Feature lead time' },
+                    { value: '3.5x', label: 'Reuse', description: 'Components across apps' },
+                  ],
+                },
+                {
+                  title: 'Analytics people actually read',
+                  summary: 'One narrative dashboard replaced nine reports. No image needed: the case is text-first and the layout reflows around it.',
+                  name: 'Marco Bianchi',
+                  role: 'Operations Lead',
+                  metrics: [
+                    { value: '-82%', label: 'Reporting time', description: 'Weekly ops' },
+                    { value: '99.9%', label: 'Data uptime', description: 'Last 12 months' },
+                  ],
+                },
+              ],
+            }}
+          />
+        </section>
+
+        <section className={sectionClass}>
+          <p className="st-code-label">{'// quote / manifesto: full attribution vs statement-only (degrades)'}</p>
+          <QuoteBlock
+            data={{
+              quote: 'Good software feels obvious in hindsight. Our job is to get to the obvious before anyone else does.',
+              author: 'Giulia Conti',
+              role: 'Creative Director',
+              avatarUrl: avatarImg,
+              logoUrl: logo1,
+              logoLabel: 'Northwind',
+            }}
+          />
+          <div style={{ height: 48 }} />
+          <QuoteBlock
+            data={{
+              quote: 'We do not sell hours. We sell the difference between before and after.',
+            }}
+          />
+        </section>
+
+        <section className={sectionClass}>
+          <p className="st-code-label">{'// logo wall: clients (hover reveal) vs technologies (plain grid)'}</p>
+          <LogoWall
+            data={{
+              heading: 'Selected clients',
+              ctaLabel: 'See all clients',
+              ctaUrl: '#',
+              logos: [
+                { imageUrl: logo1, alt: 'Northwind', url: '#' },
+                { imageUrl: logo2, alt: 'Vertex', url: '#' },
+                { imageUrl: logo3, alt: 'Lumen', url: '#' },
+                { imageUrl: logo4, alt: 'Fjord', url: '#' },
+                { imageUrl: logo5, alt: 'Cobalt', url: '#' },
+                { imageUrl: logo6, alt: 'Aster', url: '#' },
+              ],
+            }}
+          />
+          <div style={{ height: 48 }} />
+          <LogoWall
+            data={{
+              heading: 'Our stack',
+              logos: [
+                { imageUrl: logo2, alt: 'Vertex' },
+                { imageUrl: logo4, alt: 'Fjord' },
+                { imageUrl: logo6, alt: 'Aster' },
               ],
             }}
           />

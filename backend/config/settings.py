@@ -198,6 +198,14 @@ class Settings(BaseSettings):
                     "against the per-key rate limit"
     )
 
+    zone_max_components: int = Field(
+        default=2,
+        description="Default component budget per zone render. A zone is one "
+                    "band of a host page, not a page: extra components are "
+                    "cut after validation and reported in meta.sanitization. "
+                    "Overridable per request/registry via max_components"
+    )
+
     # Audit Log
     audit_log_enabled: bool = Field(
         default=True,

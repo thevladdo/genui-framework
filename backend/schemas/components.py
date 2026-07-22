@@ -257,6 +257,67 @@ class HeroBannerData(_SchemaModel):
         return self
 
 
+class CaseStudyMetric(_SchemaModel):
+    """One result figure of a case (value is numeric-grounded downstream)."""
+    value: str = Field(..., min_length=1, max_length=24)
+    label: str = Field(..., min_length=1)
+    description: Optional[str] = None
+
+
+class CaseStudyItem(_SchemaModel):
+    """
+    A project/case. Everything but the title is optional and degrades on
+    its own: no image, no figures, no named reference are all valid.
+    """
+    title: str = Field(..., min_length=1)
+    summary: Optional[str] = None
+    name: Optional[str] = None
+    role: Optional[str] = None
+    image_url: Optional[str] = None
+    metrics: List[CaseStudyMetric] = Field(default_factory=list, max_length=4)
+
+
+class CaseStudiesData(_SchemaModel):
+    """Editorial project/case studies: image + summary + optional figures."""
+    heading: Optional[str] = None
+    subheading: Optional[str] = None
+    cases: List[CaseStudyItem] = Field(..., min_length=1, max_length=6)
+
+
+class QuoteData(_SchemaModel):
+    """
+    A single editorial quote / manifesto. Author, role, avatar and the
+    top logo are each optional and omitted when absent (never invented,
+    no initials fallback: the statement is the point).
+    """
+    quote: str = Field(..., min_length=1)
+    author: Optional[str] = None
+    role: Optional[str] = None
+    avatar_url: Optional[str] = None
+    logo_url: Optional[str] = None
+    logo_label: Optional[str] = None
+
+
+class LogoItem(_SchemaModel):
+    """One logo: an image plus its accessible name, optionally linked."""
+    image_url: str = Field(..., min_length=1)
+    alt: str = Field(..., min_length=1)
+    url: Optional[str] = None
+
+
+class LogoWallData(_SchemaModel):
+    """
+    A grid of logos (clients, technologies, partners). Not client-specific:
+    `heading` labels the wall ("Selected clients", "Our stack"). The overall
+    cta (label + url) drives the hover reveal; without cta_url the grid is
+    a plain static wall.
+    """
+    heading: Optional[str] = None
+    logos: List[LogoItem] = Field(..., min_length=1, max_length=16)
+    cta_label: Optional[str] = None
+    cta_url: Optional[str] = None
+
+
 # Components (discriminated by "type")
 class _ComponentBase(_SchemaModel):
     layout: Optional[Dict[str, Any]] = None
@@ -317,6 +378,21 @@ class HeroBannerComponentModel(_ComponentBase):
     data: HeroBannerData
 
 
+class CaseStudiesComponentModel(_ComponentBase):
+    type: Literal["case_studies"]
+    data: CaseStudiesData
+
+
+class QuoteComponentModel(_ComponentBase):
+    type: Literal["quote"]
+    data: QuoteData
+
+
+class LogoWallComponentModel(_ComponentBase):
+    type: Literal["logo_wall"]
+    data: LogoWallData
+
+
 GenUIComponentModel = Annotated[
     Union[
         TextComponentModel,
@@ -330,6 +406,9 @@ GenUIComponentModel = Annotated[
         PricingCardsComponentModel,
         ContentGridComponentModel,
         HeroBannerComponentModel,
+        CaseStudiesComponentModel,
+        QuoteComponentModel,
+        LogoWallComponentModel,
     ],
     Field(discriminator="type"),
 ]
@@ -518,6 +597,28 @@ def downgrade_image_variants(
                     content["layout"] = "text-only"
 
     return components
+
+
+def apply_component_budget(
+    components: List[Dict[str, Any]],
+    limit: Optional[int],
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """
+    Keep at most `limit` components; report what the budget cut.
+
+    A zone is one band of a host page, not a page: the model is told the
+    budget in the prompt, and this enforces it after validation (order
+    preserved, first components win). Pinned enforcement runs AFTER the
+    budget on purpose: the pinned guarantee may exceed it rather than be
+    silently dropped. limit None/<=0 disables the budget.
+    """
+    if not limit or limit <= 0 or len(components) <= limit:
+        return components, []
+    dropped = [
+        f"{c.get('type', 'component')}: over the zone component budget ({limit})"
+        for c in components[limit:]
+    ]
+    return components[:limit], dropped
 
 
 def zone_output_json_schema(

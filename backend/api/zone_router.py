@@ -141,6 +141,15 @@ class ZoneRenderRequest(BaseModel):
         default=6,
         description="Maximum number of items to display"
     )
+    max_components: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="Component budget for this zone (default "
+                    "ZONE_MAX_COMPONENTS=2). A zone is one band of a host "
+                    "page: extra components are cut after validation and "
+                    "reported in meta.sanitization.dropped_components"
+    )
 
     # User context (from frontend)
     user_id: Optional[str] = Field(
@@ -292,6 +301,7 @@ def _request_config(request: ZoneRenderRequest) -> Dict[str, Any]:
         "pinned_content": [p.model_dump() for p in (request.pinned_content or [])],
         "preferred_component_type": request.preferred_component_type,
         "max_items": request.max_items or 6,
+        "max_components": request.max_components or settings.zone_max_components,
         "current_page": request.current_page,
         "page_metadata": request.page_metadata or {},
         "custom_components": [
@@ -325,6 +335,7 @@ async def _apply_registry(request: ZoneRenderRequest, tenant: str) -> None:
     request.pinned_content = [PinnedContent(**p) for p in config["pinned_content"]]
     request.preferred_component_type = config["preferred_component_type"]
     request.max_items = config["max_items"]
+    request.max_components = config.get("max_components")
 
 
 def _segment_for(request: ZoneRenderRequest) -> Segment:
@@ -393,6 +404,7 @@ def _agent_request(
         pinned_content=[p.model_dump() for p in (request.pinned_content or [])],
         preferred_component_type=request.preferred_component_type,
         max_items=request.max_items or 6,
+        max_components=request.max_components or settings.zone_max_components,
         user_profile=None if shared else request.user_profile,
         behavior_data=None if shared else request.behavior_data,
         current_page=request.current_page,

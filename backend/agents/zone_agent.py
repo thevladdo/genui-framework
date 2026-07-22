@@ -35,6 +35,7 @@ from llm import create_llm_client
 from llm.embeddings import EmbeddingConfigError
 from rag import create_vector_store, build_context_from_results
 from schemas import (
+    apply_component_budget,
     component_to_dict,
     downgrade_image_variants,
     merge_custom_types,
@@ -65,10 +66,13 @@ class ZoneRenderRequest:
     custom_components: Optional[List[Dict[str, Any]]] = None
     # Tenant scope for knowledge-base retrieval
     tenant: Optional[str] = None
-    # Canonical audience archetype for SHARED (cached) renders: 
-    # short validated tags parsed from the cache-key segment. 
+    # Canonical audience archetype for SHARED (cached) renders:
+    # short validated tags parsed from the cache-key segment.
     # When set, the router leaves user_profile/behavior_data empty.
     archetype: Optional[Dict[str, Any]] = None
+    # Component budget for this zone (a zone is one band of a page, not
+    # a page). None = no budget (direct agent callers, golden fixtures).
+    max_components: Optional[int] = None
 
 
 @dataclass
@@ -120,7 +124,7 @@ You MUST output valid JSON with this structure:
 {
     "components": [
         {
-            "type": "bento|chart|text|buttons|tabs_feature|steps_section|stats_banner|testimonial_carousel|pricing_cards|content_grid|hero_banner",
+            "type": "bento|chart|text|buttons|tabs_feature|steps_section|stats_banner|testimonial_carousel|pricing_cards|content_grid|hero_banner|case_studies|quote|logo_wall",
             "data": { ... component-specific data ... },
             "layout": { ... optional layout hints ... }
         }
@@ -189,6 +193,23 @@ COMPONENT TYPES:
      "primary_cta?": {"label","url"}, "secondary_cta?": {"label","url"}, "image_url?" }
    ("split" REQUIRES image_url; use "centered" or "minimal" without an image)
 
+12. "case_studies" - Editorial project/case studies (studios, agencies, portfolios)
+   data: { "heading?", "subheading?", "cases": [{"title", "summary?", "name?",
+     "role?", "image_url?", "metrics?": [{"value","label","description?"}]}] }
+   Only include what the input gives: no image, no metrics, no name/role are all
+   fine and degrade cleanly. Never invent figures, names or roles.
+
+13. "quote" - A single large editorial quote / manifesto
+   data: { "quote", "author?", "role?", "avatar_url?", "logo_url?", "logo_label?" }
+   Author, role, avatar and top logo are each optional; omit any you were not
+   given rather than inventing it.
+
+14. "logo_wall" - A grid of logos (clients, technologies, partners)
+   data: { "heading?", "logos": [{"image_url", "alt", "url?"}], "cta_label?", "cta_url?" }
+   Label the wall for what it shows ("Selected clients", "Our stack"), not always
+   "clients". Each logo needs a real image URL from the input; drop logos with no
+   image. Only set cta_label + cta_url when there is a real overview link.
+
 IMAGE RULE: every layout/variant "with-image" REQUIRES the matching image URL,
 and that URL must come from the input. No image available? Use "text-only" /
 "centered" / "minimal" - these variants are designed to look complete without images.
@@ -240,6 +261,13 @@ CRITICAL RULES:
    just one link, use it once where it matters (a single clear CTA), and
    leave the other cards as informative content with no link, rather than
    pointing every element at the same URL, which reads as broken.
+
+10. OMIT WHAT YOU DO NOT HAVE: every optional field is genuinely optional.
+   A hero can carry one CTA or none; a case study can have no figures and
+   no named reference; a quote can stand without an author; a plan without
+   a feature list; two stats instead of four. Components are DESIGNED to
+   degrade: an omitted field renders as a deliberate layout, while invented
+   filler is a lie on the page. Never pad a component to look complete.
 """
 
     def __init__(self, model: str = None, vector_store=None, llm_client=None):
@@ -328,6 +356,15 @@ CRITICAL RULES:
                         policy_violations.extend(violations)
                     if not sanitized:
                         continue
+                    if (
+                        request.max_components
+                        and len(emitted) >= request.max_components
+                    ):
+                        dropped.append(
+                            f"{sanitized[0].get('type', 'component')}: over the "
+                            f"zone component budget ({request.max_components})"
+                        )
+                        continue
                     emitted.append(sanitized[0])
                     yield {"type": "component", "component": sanitized[0]}
 
@@ -407,7 +444,14 @@ CRITICAL RULES:
         policy = policy_for(request.tenant, settings.content_policy)
         components, policy_violations = policy.sanitize_components(components)
 
-        # 5. Pinned content: verified on the actual output, not on the model's claims; 
+        # 4b. Component budget: a zone is one band of a host page. 
+        # Extra components are cut (first ones win) and reported. 
+        components, over_budget = apply_component_budget(
+            components, request.max_components
+        )
+        dropped.extend(over_budget)
+
+        # 5. Pinned content: verified on the actual output, not on the model's claims;
         # missing items are appended. 
         # Runs AFTER the guards: pinneditems are operator-authored input, never model output to distrust.
         components, pinned_included = self._enforce_pinned(
@@ -622,6 +666,13 @@ CRITICAL RULES:
         # Constraints
         parts.append("<constraints>")
         parts.append(f"Max Items: {request.max_items}")
+        if request.max_components:
+            parts.append(
+                f"Component budget: at most {request.max_components} component"
+                f"{'s' if request.max_components != 1 else ''}. A zone is ONE "
+                "band of a host page, not a page: one focused component "
+                "usually wins. Components beyond the budget are cut."
+            )
         if request.preferred_component_type:
             parts.append(f"REQUIRED Component Type: {request.preferred_component_type}")
         parts.append("</constraints>")

@@ -11,6 +11,7 @@ import { About } from './components/about/About';
 import { Home } from './components/Home';
 import { LocalOnlyModal } from './components/LocalOnlyModal';
 import { Nav } from './components/Nav';
+import { RouteVeil } from './components/RouteVeil';
 import { PlaygroundPage } from './components/playground/PlaygroundPage';
 import { useHashRoute } from './hooks/useHashRoute';
 import SideRays from './components/side-rays/SideRays';
@@ -74,16 +75,18 @@ const App = () => {
     <>
       <DotGrid
         dotSize={1}
-        gap={50}
-        baseColor="#ffffffbd"
-        proximity={120}
-        shockRadius={250}
-        shockStrength={5}
+        gap={40}
+        baseColor={path === '/' ? "#ffffffa8" : "#ffffff6e"}
+        activeColor="#ffffff3e"
+        proximity={100}
+        shockRadius={200}
+        shockStrength={8}
         resistance={750}
         returnDuration={1.5}
       />
 
       <Nav path={path} />
+      <RouteVeil />
 
       {path === '/' && (
         <>
@@ -100,7 +103,7 @@ const App = () => {
 
       {path === '/studio' && (
         StudioPage ? (
-          <Suspense fallback={<p style={{ padding: 32 }}>Loading Content Studio…</p>}>
+          <Suspense fallback={<p data-route-loading="" style={{ padding: 32 }}>Loading Content Studio…</p>}>
             <StudioPage />
           </Suspense>
         ) : (
@@ -114,7 +117,7 @@ const App = () => {
 
       {path === '/preview' && (
         PreviewPage ? (
-          <Suspense fallback={<p style={{ padding: 32 }}>Loading Segment Preview…</p>}>
+          <Suspense fallback={<p data-route-loading="" style={{ padding: 32 }}>Loading Segment Preview…</p>}>
             <PreviewPage />
           </Suspense>
         ) : (
@@ -131,7 +134,7 @@ const App = () => {
 
       {path === '/measure' && (
         MeasurePage ? (
-          <Suspense fallback={<p style={{ padding: 32 }}>Loading Measurement…</p>}>
+          <Suspense fallback={<p data-route-loading="" style={{ padding: 32 }}>Loading Measurement…</p>}>
             <MeasurePage />
           </Suspense>
         ) : (

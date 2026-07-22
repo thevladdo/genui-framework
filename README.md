@@ -3,7 +3,7 @@
 # GenUI Framework
 
 **Generative User Interfaces for Intelligent Web Applications**<br />
-_Not just a full-stack framework, but a complete customization engine for building AI-powered, profile-aware, and dynamically generated UI components_
+_Complete customization engine for building AI-powered, profile-aware, and dynamically generated UI components_
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![TypeScript](https://img.shields.io/badge/typescript-5.0+-blue.svg)](https://www.typescriptlang.org/) [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![React 18+](https://img.shields.io/badge/react-18+-61dafb.svg)](https://react.dev/)
 [![DOI](https://zenodo.org/badge/1133794652.svg)](https://doi.org/10.5281/zenodo.18237228)
@@ -744,17 +744,20 @@ import { TextComponent } from "genui-framework";
 
 ### Enterprise Section Components
 
-Seven section-level components for editorial, e-commerce, insurance, SaaS and corporate portals — same token system, same validation pipeline, all **image-optional by design**: every image-bearing variant declares `layout: "with-image" | "text-only"` (or a hero `variant`), the backend schema enforces coherence (`with-image` without an `image_url` is rejected), and the text-only shape is a _designed_ alternative (accent gradients, emphasized typography), never a card with a hole.
+Ten section-level components for editorial, e-commerce, insurance, SaaS, agency/studio and corporate portals — same token system, same validation pipeline, all **image-optional by design**: every image-bearing variant declares `layout: "with-image" | "text-only"` (or a hero `variant`), the backend schema enforces coherence (`with-image` without an `image_url` is rejected), and the text-only shape is a _designed_ alternative (accent gradients, emphasized typography), never a card with a hole.
 
-| Type                   | Use case                                                      | Image-optional           |
-| ---------------------- | ------------------------------------------------------------- | ------------------------ |
-| `tabs_feature`         | plan comparison, SaaS highlights, product categories          | per-tab `content.layout` |
-| `steps_section`        | onboarding, how-it-works, purchase flow (autoplay + progress) | section `layout`         |
-| `stats_banner`         | numeric metrics ("10M users") — populate from RAG facts       | text-only by design      |
-| `testimonial_carousel` | quotes with avatar → initials fallback                        | avatar optional          |
-| `pricing_cards`        | plan grid; `variant: "detailed"` adds a comparison table      | text-only by design      |
-| `content_grid`         | blog/news cards                                               | per-item `layout`        |
-| `hero_banner`          | hero: `split` (requires image) · `centered` · `minimal`       | variant chain fallback   |
+| Type                   | Use case                                                       | Image-optional           |
+| ---------------------- | -------------------------------------------------------------- | ------------------------ |
+| `tabs_feature`         | plan comparison, SaaS highlights, product categories           | per-tab `content.layout` |
+| `steps_section`        | onboarding, how-it-works, purchase flow (autoplay + progress)  | section `layout`         |
+| `stats_banner`         | numeric metrics ("10M users") — populate from RAG facts        | text-only by design      |
+| `testimonial_carousel` | quotes with avatar → initials fallback                         | avatar optional          |
+| `pricing_cards`        | plan grid; `variant: "detailed"` adds a comparison table       | text-only by design      |
+| `content_grid`         | blog/news cards                                                | per-item `layout`        |
+| `hero_banner`          | hero: `split` (requires image) · `centered` · `minimal`        | variant chain fallback   |
+| `case_studies`         | studio/agency projects: summary + grounded metrics (count-up)  | image + metrics optional |
+| `quote`                | a single large editorial quote / manifesto                     | logo + avatar optional   |
+| `logo_wall`            | clients / technologies / partners; hover reveal on overall cta | logos drop if imageless  |
 
 ```json
 {
@@ -1512,6 +1515,7 @@ Content-Type: application/json
   ],
   "preferred_component_type": "bento",
   "max_items": 6,
+  "max_components": 2,
   "user_profile": { ... },
   "behavior_data": { ... },
   "current_page": "/",

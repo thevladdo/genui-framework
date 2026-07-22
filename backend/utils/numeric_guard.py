@@ -136,5 +136,10 @@ class NumericGuard:
             elif ctype == "chart":
                 if not all(self._check(p.get("value")) for p in data.get("data", [])):
                     continue
+            elif ctype == "case_studies":
+                for case in data.get("cases", []):
+                    case["metrics"] = [
+                        m for m in case.get("metrics", []) if self._check(m.get("value"))
+                    ]
             kept.append(component)
         return kept, list(self.removed_numbers)

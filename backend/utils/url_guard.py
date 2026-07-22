@@ -38,8 +38,8 @@ _URL_FIELD_SUFFIXES = ("_url", "_link", "_href", "_src", "_image")
 # An image URL and a link URL are whitelisted separately, so a pinned link can never be reused as an <img src> (a broken image), 
 # and only URLs that genuinely came from an image source can.
 _IMAGE_FIELD_NAMES = {"src", "image", "avatar", "photo", "logo", "thumbnail", "picture"}
-_IMAGE_FIELD_SUFFIXES = ("_src", "_image", "_photo", "_avatar", "_thumbnail", "_picture")
-_IMAGE_FIELD_SUBSTRINGS = ("image", "avatar", "photo", "thumbnail", "picture")
+_IMAGE_FIELD_SUFFIXES = ("_src", "_image", "_photo", "_avatar", "_thumbnail", "_picture", "_logo")
+_IMAGE_FIELD_SUBSTRINGS = ("image", "avatar", "photo", "thumbnail", "picture", "logo")
 
 _IMAGE_EXTENSIONS = (
     ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif", ".bmp", ".ico",
