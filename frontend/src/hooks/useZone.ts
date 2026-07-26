@@ -59,6 +59,14 @@ export interface UseZoneOptions {
   preferredComponentType?: 'bento' | 'chart' | 'text' | 'buttons' | (string & {});
   /** Maximum number of items to display */
   maxItems?: number;
+  /**
+   * Component budget for this zone (1..10). A zone is one band of a host
+   * page, not a page: extra components are cut server-side after
+   * validation and reported in meta.sanitization.dropped_components.
+   * Unset = the backend default (ZONE_MAX_COMPONENTS, 2), or the zone's
+   * approved registry config when it sets one.
+   */
+  maxComponents?: number;
   /** User ID for profile lookup */
   userId?: string;
   /** Current page path */
@@ -160,6 +168,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
     customComponents,
     preferredComponentType,
     maxItems = 6,
+    maxComponents,
     userId = 'anonymous',
     currentPage,
     pageMetadata,
@@ -253,6 +262,9 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
         })),
         preferred_component_type: preferredComponentType,
         max_items: maxItems,
+        // Omitted when unset: the backend then falls back to the zone's
+        // registry config or ZONE_MAX_COMPONENTS
+        max_components: maxComponents,
         user_profile: userProfile,
         behavior_data: behaviorData,
         current_page: pagePath,
@@ -383,6 +395,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
     customComponents,
     preferredComponentType,
     maxItems,
+    maxComponents,
     userId,
     currentPage,
     pageMetadata,
@@ -436,6 +449,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
     customComponents,
     preferredComponentType,
     maxItems,
+    maxComponents,
     userId,
     currentPage,
     pageMetadata,

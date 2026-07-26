@@ -29,6 +29,13 @@
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+.themeNote {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--st-text-faint);
 }
 
 .warnBanner {

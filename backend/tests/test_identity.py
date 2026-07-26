@@ -1,7 +1,7 @@
 """
 Tests for signed user identity (HMAC tokens) and fail-closed auth.
 
-Covers the two failures WP-01 prevents:
+Covers two failures:
 (a) a client-key holder reading/deleting/poisoning ANOTHER user's profile
     by changing the user_id (authorize_user_access);
 (b) a deployment with no keys configured silently serving everyone as

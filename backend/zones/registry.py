@@ -2,7 +2,7 @@
 Zone Config Registry
 Server-side store for governable zone configuration, keyed by (tenant, zone_id).
 
-The architectural inversion (roadmap S1): zone config used to exist only
+The architectural inversion: zone config used to exist only
 as request props wired into the host page's code. Anything that must be
 approved, versioned, or edited by non-developers (marketing editing
 prompts, legal sign-off, per-tenant overrides) must be DATA, not code —
@@ -13,9 +13,8 @@ integrations that pass props keep working unchanged.
 Record shape:
     {"version": N, "status": "draft"|"approved", "config": {...}, "updated_at": iso}
 
-version increments on every upsert. Renders only ever serve
-status="approved"; drafts are the hook for the approval workflow and
-preview (phase 2).
+version increments on every write. Renders only ever serve
+status="approved".
 
 Backends follow the profile store pattern: Redis when configured (shared
 across workers, survives restarts), in-memory fallback otherwise, always
@@ -24,7 +23,7 @@ failing open — a registry outage degrades to host props, never to a 500.
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from pydantic import BaseModel, Field
 
@@ -33,6 +32,12 @@ from utils.redis_conn import shared_redis
 STATUS_DRAFT = "draft"
 STATUS_APPROVED = "approved"
 _STATUSES = (STATUS_DRAFT, STATUS_APPROVED)
+_DRAFT_SUFFIX = ":draft"
+_OBSERVED_MAX = 1000
+
+
+class VersionConflict(Exception):
+    """Optimistic-concurrency failure: the caller edited a stale version."""
 
 
 class ZoneConfig(BaseModel):
@@ -64,16 +69,21 @@ class ZoneConfigStore:
 
     def __init__(self, redis_url: Optional[str] = None, key_prefix: str = "genui:zonecfg:"):
         self.key_prefix = key_prefix
+        self.observed_prefix = "genui:zoneobs:"
         self._conn = shared_redis(redis_url)
         self._memory: Dict[str, Dict[str, Any]] = {}
+        self._memory_observed: Dict[str, Set[str]] = {}
 
     def _key(self, tenant: str, zone_id: str) -> str:
         return f"{self.key_prefix}{tenant}:{zone_id}"
 
-    async def get(self, tenant: str, zone_id: str) -> Optional[Dict[str, Any]]:
-        """The full record regardless of status (CRUD/preview), or None."""
-        key = self._key(tenant, zone_id)
+    def _draft_key(self, tenant: str, zone_id: str) -> str:
+        return self._key(tenant, zone_id) + _DRAFT_SUFFIX
 
+    def _observed_key(self, tenant: str) -> str:
+        return f"{self.observed_prefix}{tenant}"
+
+    async def _read(self, key: str) -> Optional[Dict[str, Any]]:
         redis = await self._conn.get()
         if redis is not None:
             try:
@@ -87,6 +97,14 @@ class ZoneConfigStore:
                     return None  # corrupt entry = no config; next upsert rewrites it
 
         return self._memory.get(key)
+
+    async def get(self, tenant: str, zone_id: str) -> Optional[Dict[str, Any]]:
+        """The full main-slot record regardless of status (CRUD/preview), or None."""
+        return await self._read(self._key(tenant, zone_id))
+
+    async def get_draft(self, tenant: str, zone_id: str) -> Optional[Dict[str, Any]]:
+        """The work-in-progress record, or None. Never served to clients."""
+        return await self._read(self._draft_key(tenant, zone_id))
 
     async def get_approved(self, tenant: str, zone_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -119,19 +137,208 @@ class ZoneConfigStore:
         if status not in _STATUSES:
             raise ValueError(f"status must be one of {_STATUSES}, got {status!r}")
         normalized = ZoneConfig(**config).model_dump()
-        current = await self.get(tenant, zone_id)
         record = {
-            "version": (current["version"] + 1) if current else 1,
+            "version": await self._next_version(tenant, zone_id),
             "status": status,
             "config": normalized,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        await self._write(tenant, zone_id, record)
+        await self._write(self._key(tenant, zone_id), record)
         return record
 
+    async def save_draft(
+        self,
+        tenant: str,
+        zone_id: str,
+        config: Dict[str, Any],
+        expected_version: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Write the draft slot WITHOUT touching what production serves.
+
+        This is the write the governance UI uses: an edit must never
+        silently un-approve the config a legal/marketing sign-off put in
+        production; only approve() changes the served record.
+
+        expected_version enables optimistic concurrency (phase-2 plan):
+        pass the latest version you loaded; a mismatch raises
+        VersionConflict instead of overwriting someone else's edit.
+        Read-modify-write without a lock is deliberate: governance edits
+        happen at human speed.
+        """
+        normalized = ZoneConfig(**config).model_dump()
+        current = await self._current_version(tenant, zone_id)
+        if expected_version is not None and expected_version != current:
+            raise VersionConflict(
+                f"expected version {expected_version}, but the latest is "
+                f"{current}: reload before editing"
+            )
+        record = {
+            "version": current + 1,
+            "status": STATUS_DRAFT,
+            "config": normalized,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await self._write(self._draft_key(tenant, zone_id), record)
+        return record
+
+    async def approve(
+        self,
+        tenant: str,
+        zone_id: str,
+        expected_version: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Promote the draft into the served (main) slot.
+
+        The ONLY path from draft to approved: the approved record is the
+        draft verbatim with its status flipped, so what was previewed is
+        exactly what production starts serving. Returns None when there
+        is nothing to approve. Also accepts a phase-1 legacy draft
+        written to the main slot via upsert(status="draft").
+        """
+        draft = await self.get_draft(tenant, zone_id)
+        legacy = False
+        if draft is None:
+            main = await self.get(tenant, zone_id)
+            if main is None or main.get("status") != STATUS_DRAFT:
+                return None
+            draft, legacy = main, True
+
+        current = await self._current_version(tenant, zone_id)
+        if expected_version is not None and expected_version != current:
+            raise VersionConflict(
+                f"expected version {expected_version}, but the latest is "
+                f"{current}: reload before approving"
+            )
+
+        record = {
+            "version": draft["version"],
+            "status": STATUS_APPROVED,
+            "config": draft["config"],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await self._write(self._key(tenant, zone_id), record)
+        if not legacy:
+            await self._delete_key(self._draft_key(tenant, zone_id))
+        return record
+
+    async def discard_draft(self, tenant: str, zone_id: str) -> bool:
+        """Drop the draft slot; the approved record is untouched."""
+        return await self._delete_key(self._draft_key(tenant, zone_id))
+
     async def delete(self, tenant: str, zone_id: str) -> bool:
-        """Remove a zone's registry entry. True if it existed."""
-        key = self._key(tenant, zone_id)
+        """Remove a zone's registry entry (draft included). True if it existed."""
+        main_existed = await self._delete_key(self._key(tenant, zone_id))
+        draft_existed = await self._delete_key(self._draft_key(tenant, zone_id))
+        return main_existed or draft_existed
+
+    async def list_zones(self, tenant: str) -> Dict[str, Dict[str, Any]]:
+        """
+        Registry entries for a tenant: zone_id -> {status, version,
+        updated_at, has_draft}. status is what production does (approved
+        = an approved record serves; draft = configured but nothing
+        approved yet); version/updated_at follow the LATEST edit (the
+        draft when one exists).
+        """
+        prefix = f"{self.key_prefix}{tenant}:"
+        keys = set()
+        redis = await self._conn.get()
+        if redis is not None:
+            try:
+                async for key in redis.scan_iter(match=prefix + "*"):
+                    keys.add(str(key))
+            except Exception as e:
+                await self._conn.mark_failure(e)
+        keys.update(k for k in self._memory if k.startswith(prefix))
+
+        zone_ids = set()
+        for key in keys:
+            rest = key[len(prefix):]
+            if rest.endswith(_DRAFT_SUFFIX):
+                rest = rest[: -len(_DRAFT_SUFFIX)]
+            zone_ids.add(rest)
+
+        entries: Dict[str, Dict[str, Any]] = {}
+        for zone_id in zone_ids:
+            main = await self.get(tenant, zone_id)
+            draft = await self.get_draft(tenant, zone_id)
+            if main is None and draft is None:
+                continue
+            latest = draft or main
+            entries[zone_id] = {
+                "status": main["status"] if main else STATUS_DRAFT,
+                "version": latest["version"],
+                "updated_at": latest["updated_at"],
+                "has_draft": draft is not None
+                or (main is not None and main["status"] == STATUS_DRAFT),
+            }
+        return entries
+
+    async def record_observed(self, tenant: str, zone_id: str) -> None:
+        """
+        Remember that the render path served this (tenant, zone_id).
+
+        zone_id is LOGICAL identity: five mounts of zoneId="hero" are one
+        zone, and a SET dedups for free. Called on the serving path, so
+        it fails open like every store operation.
+        """
+        key = self._observed_key(tenant)
+        redis = await self._conn.get()
+        if redis is not None:
+            try:
+                if await redis.scard(key) < _OBSERVED_MAX:
+                    await redis.sadd(key, zone_id)
+                return
+            except Exception as e:
+                await self._conn.mark_failure(e)
+        seen = self._memory_observed.setdefault(tenant, set())
+        if len(seen) < _OBSERVED_MAX:
+            seen.add(zone_id)
+
+    async def observed(self, tenant: str) -> Set[str]:
+        """Every zone_id this tenant's site was actually served."""
+        redis = await self._conn.get()
+        if redis is not None:
+            try:
+                members = await redis.smembers(self._observed_key(tenant))
+                return {str(m) for m in members}
+            except Exception as e:
+                await self._conn.mark_failure(e)
+        return set(self._memory_observed.get(tenant, set()))
+
+    async def storage_backend(self) -> str:
+        """
+        'redis' or 'memory'. Governance writes landing in the in-memory
+        fallback live in ONE worker and die with it: the CRUD API
+        reports this so the Studio can warn instead of losing an
+        approval in silence.
+        """
+        return "redis" if await self._conn.get() is not None else "memory"
+
+    async def _current_version(self, tenant: str, zone_id: str) -> int:
+        main = await self.get(tenant, zone_id)
+        draft = await self.get_draft(tenant, zone_id)
+        return max(
+            main["version"] if main else 0,
+            draft["version"] if draft else 0,
+        )
+
+    async def _next_version(self, tenant: str, zone_id: str) -> int:
+        return await self._current_version(tenant, zone_id) + 1
+
+    async def _write(self, key: str, record: Dict[str, Any]) -> None:
+        redis = await self._conn.get()
+        if redis is not None:
+            try:
+                await redis.set(key, json.dumps(record, default=str))
+                return
+            except Exception as e:
+                await self._conn.mark_failure(e)
+
+        self._memory[key] = record
+
+    async def _delete_key(self, key: str) -> bool:
         existed = False
 
         redis = await self._conn.get()
@@ -146,16 +353,3 @@ class ZoneConfigStore:
             existed = True
 
         return existed
-
-    async def _write(self, tenant: str, zone_id: str, record: Dict[str, Any]) -> None:
-        key = self._key(tenant, zone_id)
-
-        redis = await self._conn.get()
-        if redis is not None:
-            try:
-                await redis.set(key, json.dumps(record, default=str))
-                return
-            except Exception as e:
-                await self._conn.mark_failure(e)
-
-        self._memory[key] = record

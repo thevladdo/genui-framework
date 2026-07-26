@@ -4,34 +4,8 @@
 
 import { motion, useReducedMotion } from 'framer-motion';
 import GradientText from '../components/gradient-text/GradientText';
+import { ConsoleCard } from './ConsoleCard';
 import styles from './Home.module.css';
-
-interface CardDef {
-  href: string;
-  tag: string;
-  title: [string, string];
-  description: string;
-  artClass: string;
-}
-
-const CARDS: CardDef[] = [
-  {
-    href: '#/playground',
-    tag: 'PUBLIC · NO LOGIN',
-    title: ['Theme', 'Playground'],
-    description:
-      'Configure tokens in real time: radius, blur, color, font. Preview every GenUI component live.',
-    artClass: styles.artPlayground,
-  },
-  {
-    href: '#/studio',
-    tag: 'ADMIN · BACKEND REQUIRED',
-    title: ['Content', 'Studio'],
-    description:
-      'Upload documents, manage your knowledge base, and test RAG queries. Connect once, explore everything.',
-    artClass: styles.artStudio,
-  },
-];
 
 export const Home = () => {
   const reducedMotion = useReducedMotion();
@@ -58,29 +32,31 @@ export const Home = () => {
       </section>
 
       <section className={styles.cards} aria-label="Studio sections">
-        {CARDS.map((card) => (
-          <motion.a
-            key={card.href}
-            href={card.href}
-            className={`${styles.card} ${card.artClass}`}
-            whileHover={reducedMotion ? undefined : { y: -6, scale: 1.015 }}
-            whileTap={reducedMotion ? undefined : { scale: 0.99 }}
-            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
-          >
-            <span className={styles.cardTag}>{card.tag}</span>
-            <span className={styles.cardBody}>
-              <span className={`st-display ${styles.cardTitle}`}>
-                {card.title[0]}
-                <br />
-                {card.title[1]}
-              </span>
-              <span className={styles.cardDescription}>{card.description}</span>
+        <motion.a
+          href="#/playground"
+          className={`${styles.card} ${styles.artPlayground}`}
+          whileHover={reducedMotion ? undefined : { y: -6, scale: 1.015 }}
+          whileTap={reducedMotion ? undefined : { scale: 0.99 }}
+          transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+        >
+          <span className={styles.cardTag}>PUBLIC · NO LOGIN</span>
+          <span className={styles.cardBody}>
+            <span className={`st-display ${styles.cardTitle}`}>
+              Theme
+              <br />
+              Playground
             </span>
-            <span className={styles.cardArrow} aria-hidden="true">
-              →
+            <span className={styles.cardDescription}>
+              Configure tokens in real time: radius, blur, color, font.
+              Preview every GenUI component live.
             </span>
-          </motion.a>
-        ))}
+          </span>
+          <span className={styles.cardArrow} aria-hidden="true">
+            →
+          </span>
+        </motion.a>
+
+        <ConsoleCard />
       </section>
 
       <motion.a
@@ -91,7 +67,7 @@ export const Home = () => {
         transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
         aria-label="What is GenUI"
       >
-        <span className={styles.cardTag}>THE VISION · FOR EVERYONE</span>
+        <span className={styles.cardTag}>THE VISION</span>
         <span className={styles.aboutBody}>
           <span className={`st-display ${styles.aboutTitle}`}>
             What is{' '}

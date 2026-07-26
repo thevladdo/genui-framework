@@ -2,12 +2,55 @@
  * About page: the business-facing story of GenUI (not a dev tutorial).
  */
 
-import { motion, useReducedMotion, type Variants } from 'framer-motion';
+import { motion, useInView, useReducedMotion, type Variants } from 'framer-motion';
+import { useRef } from 'react';
 import GradientText from '../gradient-text/GradientText';
 import styles from './About.module.css';
 
 const EASE = [0.4, 0, 0.2, 1] as const;
 const PURPLE = ['#a855f7', '#6366f1', '#c084fc', '#a855f7'];
+const OUT_STRANDS: Array<{ d: string; color: string; delay: number }> = [
+  { d: 'M-6 60 C 110 60, 180 30, 290 22 C 350 17, 388 15, 420 12', color: '#a855f7', delay: 1.05 },
+  { d: 'M-6 60 C 150 60, 300 58, 420 57', color: '#6366f1', delay: 1.18 },
+  { d: 'M-6 60 C 110 60, 180 90, 290 98 C 350 103, 388 105, 420 108', color: '#06d4ca', delay: 1.31 },
+];
+
+const Strand = ({ d, color, delay }: { d: string; color: string; delay: number }) => (
+  <path
+    d={d}
+    className={styles.strand}
+    pathLength={1}
+    style={{ color, ['--draw-delay' as string]: `${delay}s` }}
+  />
+);
+
+const TransformBeams = ({ reduced }: { reduced: boolean | null }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const inView = useInView(ref, { once: true, amount: 0.5 });
+  const play = inView && !reduced;
+
+  return (
+    <div ref={ref} className={`${styles.ctaWrap} ${play ? styles.play : ''}`.trim()}>
+      <div className={`${styles.beam} ${styles.beamLeft}`}>
+        <svg viewBox="0 0 340 120" preserveAspectRatio="none" aria-hidden="true">
+          <Strand d="M0 60 L 344 60" color="#ffffff" delay={0.1} />
+        </svg>
+      </div>
+
+      <a href="#/playground" className={styles.tryPlayground}>
+        Try the Theme Playground
+      </a>
+
+      <div className={`${styles.beam} ${styles.beamRight}`}>
+        <svg viewBox="0 0 420 120" preserveAspectRatio="none" aria-hidden="true">
+          {OUT_STRANDS.map((s) => (
+            <Strand key={s.color} {...s} />
+          ))}
+        </svg>
+      </div>
+    </div>
+  );
+};
 
 const container: Variants = {
   hidden: {},
@@ -94,7 +137,7 @@ export const About = () => {
 
       <Section>
         <motion.p variants={rise} className={styles.big}>
-          For thirty years we personalized <em>recommendations</em>.
+          For 30 years we personalized recommendations.
         </motion.p>
         <motion.p variants={rise} className={styles.big}>
           GenUI personalizes the <em>interface itself</em>.
@@ -138,20 +181,17 @@ export const About = () => {
       </Section>
 
       <Section className={styles.closing}>
-        <motion.h2 variants={rise} className={`st-display ${styles.closeTitle}`}>
-          Stop building for the average.
+        <motion.h2 variants={rise} className={`st-display ${styles.closeTitle}`} style={{ marginBottom: "4rem" }}>
+          Stop building for the average
           <br />
           Start building for{' '}
           <GradientText colors={PURPLE} animationSpeed={7}>
             everyone
           </GradientText>
-          .
         </motion.h2>
-        <motion.div variants={rise} className={styles.closeActions}>
-          <a href="#/playground" className={styles.primary}>
-            Try the Theme Playground →
-          </a>
-          <a href="#/" className={styles.secondary}>
+        <motion.div variants={rise} className={styles.closeCta}>
+          <TransformBeams reduced={reduced} />
+          <a href="#/" className={styles.backStudioHome}>
             Back to Studio
           </a>
         </motion.div>

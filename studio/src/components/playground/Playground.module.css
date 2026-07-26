@@ -33,6 +33,7 @@
   flex-direction: column;
   gap: 24px;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .control {
@@ -294,6 +295,67 @@
   line-height: 1.6;
   overflow-x: auto;
   color: var(--st-text-muted);
+}
+
+.tenantBlock {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 10px;
+  padding-top: 18px;
+  border-top: 1px solid var(--st-border);
+}
+
+.tenantHead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tenantActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tenantActions .tenantButton {
+  flex: 1;
+  min-width: 0;
+}
+
+.tenantButton {
+  padding: 9px 14px;
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--st-text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 160ms var(--st-ease), background 160ms var(--st-ease);
+}
+
+.tenantButton:hover:not(:disabled) {
+  border-color: var(--st-border-strong);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tenantButton:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.tenantNote {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--st-text-faint);
+}
+
+.tenantStatus {
+  margin: 0;
+  font-size: 13px;
+  color: var(--st-accent);
 }
 
 /* --- Responsive ------------------------------------------------------ */

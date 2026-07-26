@@ -14,7 +14,7 @@ _Complete customization engine for building AI-powered, profile-aware, and dynam
   <br /><br /><br />
 </div>
 
-[Overview](#-overview) • [Quick Start](#-quick-start) • [Components](#-components) • [Custom Components](#-custom-components--your-design-system-as-llm-vocabulary) • [Theming](#-theming) • [Segment Cache](#-segment-cache--llm-as-an-offline-ranker) • [Guarantees](#️-output-guarantees) • [Auth & Profiles](#-auth-server-side-profiles--audit) • [Streaming](#️-streaming--ssr-safety) • [Uplift](#-measuring-uplift--impressions-clicks--holdout) • [API Reference](#-backend-api-reference) • [Architecture](#️-architecture)
+[Overview](#-overview) • [Studio](#%EF%B8%8F-genui-studio) • [Quick Start](#-quick-start) • [Components](#-components) • [Custom Components](#-custom-components--your-design-system-as-llm-vocabulary) • [Theming](#-theming) • [Segment Cache](#-segment-cache--llm-as-an-offline-ranker) • [Guarantees](#️-output-guarantees) • [Zone Registry](#%EF%B8%8F-zone-config-registry--config-as-data) • [Auth & Profiles](#-auth-server-side-profiles--audit) • [Streaming](#️-streaming--ssr-safety) • [Uplift](#-measuring-uplift--impressions-clicks--holdout) • [API Reference](#-backend-api-reference) • [Architecture](#️-architecture)
 
 </div>
 
@@ -58,7 +58,8 @@ GenUI System is a complete customization engine for building **Generative User I
 ### 🧠 **Backend Intelligence**
 
 - **Segment Cache**: the LLM runs once per user _segment_, not per request — orders of magnitude cheaper ([how](#-segment-cache--llm-as-an-offline-ranker))
-- **Output Guarantees**: schema validation + URL whitelist + numeric grounding + per-tenant content policy — the system guarantees, not the prompt ([how](#️-output-guarantees))
+- **Output Guarantees**: schema validation + URL whitelist + numeric grounding + per-tenant content policy + no repeated content — the system guarantees, not the prompt ([how](#️-output-guarantees))
+- **Config as Data**: zone prompts, pinned content and constraints live server-side with draft / preview / approve and versions, so marketing, legal or compliance can change what a zone says without a deploy ([how](#%EF%B8%8F-zone-config-registry--config-as-data))
 - **Auth & Multi-tenancy**: API keys, per-tenant isolation, rate limiting
 - **Server-Side Profiles**: source of truth with GDPR erasure; IndexedDB is just a cache
 - **Holdout & Uplift**: control group + z-test significance — prove personalization works
@@ -75,17 +76,19 @@ GenUI System is a complete customization engine for building **Generative User I
 
 ## 🎛️ GenUI Studio
 
-**GenUI Studio** is the companion web app for building with the framework: a single SPA (`studio/`, React + Vite) with four tools. Run it locally with `cd studio && npm run dev`.
+**GenUI Studio** is the companion web app for building with the framework and operating it: a single SPA (`studio/`, React + Vite) with the public Theme Playground plus six console tools (Segment Preview, Zones, Audit, Content Policy, Content Studio, Measurement). Run it locally with `cd studio && npm run dev`.
 
 <div align="center">
   <br />
-  <img src="./studio/screenshots/Studio_HP.png" alt="GenUI Studio — homepage with Theme Playground and Content Studio" width="100%" height="auto" />
+  <img src="./studio/screenshots/Studio_HP.png" alt="GenUI Studio homepage: Theme Playground, Control Console and About" width="100%" height="auto" />
   <br /><br />
 </div>
 
 ### 🎨 Theme Playground
 
 Configure the entire `--genui-*` token dictionary in real time and watch **every real framework component** (not mockups) update live: hero banners, tabs, pricing, stats, testimonials, bento, charts, and both `with-image` / `text-only` variants. Toggle light/dark, tune radius scale, blur, spacing, accent, brand surfaces, heading weight, and font. Export the result as a `GenUITheme` object, CSS variables, JSON, or copy a **shareable link** that encodes the theme in the URL.
+
+Running the studio locally, the sidebar also carries a **tenant bar**: pick one of the tenants connected in this browser session, load the theme already saved for it, or save the current one (`PUT /api/v1/theme`). See [Per-tenant theme](#per-tenant-theme-the-theme-as-stored-config) for exactly what saving does, and what it does not. The bar needs an admin key, so like the rest of the console it is local-only for now; the exports and the share link are the public path and are unchanged.
 
 <div align="center">
   <br />
@@ -95,11 +98,35 @@ Configure the entire `--genui-*` token dictionary in real time and watch **every
 
 ### 👥 Segment Preview
 
-Watch GenUI do the thing it exists for: the LLM curating a zone per audience, live. Compose up to four audiences (role, interests, browsing style, engagement: the exact factors that form a segment key) and one ad-hoc zone config (prompts plus pinned content), then render them side by side against your real `/zone/render` with `cache_strategy: "live"` (admin only, never written to the cache real users are served). Each column shows the segment key the audience falls into, the cache state, and everything the guarantee chain removed before serving (`meta.sanitization`: stripped URLs, dropped components, ungrounded numbers, policy violations). A backend with no LLM engine configured degrades to a clearly labelled pinned-only fallback instead of a cryptic error.
+Watch GenUI do the thing it exists for: the LLM curating a zone per audience, live, **rendered with the theme saved for the active tenant** (so what you preview is what that tenant's page looks like, not the studio's default). Compose up to four audiences (role, interests, browsing style, engagement: the exact factors that form a segment key) and one ad-hoc zone config (prompts plus pinned content), then render them side by side against your real `/zone/render` with `cache_strategy: "live"` (admin only, never written to the cache real users are served). Each column shows the segment key the audience falls into, the cache state, and everything the guarantee chain removed before serving (`meta.sanitization`: stripped URLs, dropped components, ungrounded numbers, policy violations). A backend with no LLM engine configured degrades to a clearly labelled pinned-only fallback instead of a cryptic error.
 
 <div align="center">
   <br />
   <img src="./studio/screenshots/Studio_Segment_Preview.png" alt="GenUI Studio — Segment Preview to see GenUI doing its thing" width="100%" height="auto" />
+  <br /><br />
+</div>
+
+### 🗂️ Zones
+
+Zone governance for non-developers. The page lists every zone of the tenant (registry entries plus the zones your site actually rendered, each tagged `ungoverned` / `draft` / `approved`) and lets an operator edit the governed config (prompts, pinned content, component constraints) as a **draft**. A draft never touches production: you preview it with the same audience matrix as the Segment Preview (the backend resolves the saved draft via `preview_draft`, always a live bypass), and only an explicit **Approve** turns it into what every render of that zone serves. Every transition (draft saved, approved, discarded, deleted) lands in the audit log with the admin key fingerprint that did it. See [Zone Config Registry](#%EF%B8%8F-zone-config-registry--config-as-data) for the backend model.
+
+<div align="center">
+  <br />
+  <img src="./studio/screenshots/Studio_Zones.png" alt="GenUI Studio — Zones editor" width="100%" height="auto" />
+  <br /><br />
+</div>
+
+### 🔍 Audit Viewer
+
+The compliance question "what did user X see on day Z?" as a screen instead of a grep. The page queries the backend's audit read path (`GET /api/v1/audit`, admin key, always scoped to the key's tenant) with filters for user, zone, event type and date range, newest first with pagination. Clicking a row opens the full event: what was shown (component types, titles, every link), the segment served, the cache state, and what the guarantee chain removed before serving. One honest limit: with the production logger sink the events live in the host's log pipeline, and the page surfaces exactly that (the backend answers `queryable: false` with instructions) instead of a fake empty table. See [Audit in production](#audit-in-production).
+
+### 🚧 Content Policy
+
+The compliance guardrail with a face, for the person who owns it. An operator edits this tenant's **banned terms** (one per line) and they are enforced on the next render of every zone and every `/query`, with no redeploy and no developer: `GET` / `PUT /api/v1/content-policy` (admin key, tenant from the key, every change audit-logged as `content_policy_change`). The page states the split instead of implying more: terms are **enforced** by a lexical word-boundary match (a component containing one is dropped, chat text is redacted, hits are reported in `meta.sanitization.policy_violations`), while tone, semantics, synonyms and misspellings stay prompt-level **best-effort** and are labelled as such. A pill next to the editor opens the deployment-wide `CONTENT_POLICY` env terms read-only: an operator sees what infra enforces without being able to escalate a term to every tenant. See [Output Guarantees](#%EF%B8%8F-output-guarantees) point 5.
+
+<div align="center">
+  <br />
+  <img src="./studio/screenshots/Studio_ContentPolicy.png" alt="GenUI Studio: Content Policy editor with the enforced versus best-effort split" width="100%" height="auto" />
   <br /><br />
 </div>
 
@@ -119,11 +146,19 @@ The proof that personalization pays, on one page. Enter a `zone_id` and the dash
 
 <div align="center">
   <br />
-  <img src="./studio/screenshots/Studio_Measure.jpg" alt="GenUI Studio — Measurement Dashboard" width="100%" height="auto" />
+  <img src="./studio/screenshots/Studio_Measure.png" alt="GenUI Studio — Measurement Dashboard" width="100%" height="auto" />
   <br /><br />
 </div>
 
-> **Note:** the Segment Preview, the Content Studio and the Measurement dashboard require a reachable backend and an admin key, so for now they run **locally only** (`npm run dev`). On the public GitHub Pages build they show an "available locally" notice and their code is tree shaken out of the bundle. A hosted version arrives with proper user auth on the roadmap.
+### 🏢 Tenants in the console (and where auth begins)
+
+Every console page is scoped to one tenant, and the header of every page says which one: `Connected to <url>` plus a **tenant picker**. The scoping is not a UI convention, it is the key: an admin key resolves to exactly one tenant on the backend (`ADMIN_API_KEYS=sk_live_xyz:acme`), and the tenant of a request always comes from that key, never from the request body. `GET /api/v1/whoami` is what the console asks to learn it.
+
+So switching tenant is switching key. Connect the second tenant's key from the picker (`+ Connect another tenant`) and both stay connected in the browser session; the picker then moves the console between them, and every page remounts on the switch so one tenant's zones, audit trail or knowledge base never sit under another tenant's name. A call made with a session that is no longer the active one is refused client-side instead of quietly writing to the tenant you just left. Keys live in `sessionStorage` only, one per tenant.
+
+What this deliberately is **not**: an operator login. There are no accounts, no roles and no SSO here, so "one person, one login, many tenants" is not simulated with a key list. That, plus API key issuing and rotation, arrives with user auth, and until then the console tools stay local-only and admin-gated.
+
+> **Note:** the Segment Preview, the Zones editor, the Audit Viewer, the Content Studio and the Measurement dashboard require a reachable backend and an admin key, so for now they run **locally only** (`npm run dev`). On the public GitHub Pages build they show an "available locally" notice and their code is tree shaken out of the bundle. A hosted version arrives with proper user auth on the roadmap.
 
 ---
 
@@ -186,6 +221,9 @@ USER_TOKEN_SECRETS=change-me-long-random:myapp
 
 # Measure personalization uplift (10% of users see the generic version)
 HOLDOUT_PERCENT=10
+
+# How many components a single zone may render (see "Component budget" below)
+ZONE_MAX_COMPONENTS=2
 
 # Other providers instead of OpenAI:
 # LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY=...   (pip install anthropic)
@@ -289,6 +327,10 @@ Live mode is optional and opt-in: the default suite never needs it.
 
 ### GenUIZone — AI-Powered Content Zones
 
+<p align="center">
+  <img src="./genui-zone.svg" width="100%" alt="One GenUI zone declaration branching into three user segments, each assembling a different interface layout">
+</p>
+
 The `GenUIZone` component automatically fetches personalized content from the backend based on:
 
 - **User Profile**: Stored preferences, interests, demographics
@@ -331,6 +373,7 @@ interface GenUIZoneProps {
   customComponents?: GenUICustomComponentDef[]; // Your design-system components (name + JSON schema)
   preferredComponentType?: "bento" | "chart" | "text" | "buttons" | string; // built-in or custom name
   maxItems?: number; // Max items to generate (default: 6)
+  maxComponents?: number; // Component budget 1..10 (unset = backend default, see below)
 
   // === User Context ===
   userId?: string; // Stable user ID: enables server-side profile, holdout & audit trail
@@ -365,6 +408,27 @@ interface GenUIZoneProps {
 ```
 
 **Props are reactive**: changing any request-shaping prop (`zoneId`, `userId`, `basePrompt`, `pinnedContent`, ...) on a mounted zone refetches automatically, aborting the inflight request (last issued wins) — a zone reused across SPA routes never shows the previous route's content. Props are compared **by value**, so passing fresh inline literals (`pinnedContent={[...]}`) on every render does not retrigger fetches.
+
+---
+
+### Component budget: a zone is one band, not a page
+
+A zone renders **at most 2 components by default**. This is the single setting most likely to surprise you, so it is worth stating plainly: a zone is one band of a host page, and a model given no ceiling will happily stack a hero, a grid, a pricing block and a CTA into a sidebar slot. Extra components are cut after validation (first ones win) and reported in `meta.sanitization.dropped_components`, so nothing disappears silently.
+
+Three places set it, most specific first:
+
+| Where                                                                 | Scope                              | Notes                                                           |
+| --------------------------------------------------------------------- | ---------------------------------- | --------------------------------------------------------------- |
+| `maxComponents` prop (or `max_components` in the `/zone/render` body) | one zone / one request             | `1..10`. Omitted when unset, so the levels below still apply    |
+| `max_components` in the zone's registry config                        | that zone, for every render        | The governed way: set it in the Studio Zones editor and approve |
+| `ZONE_MAX_COMPONENTS`                                                 | the whole deployment (default `2`) | The fallback when neither of the above is set                   |
+
+```tsx
+// A wide homepage band that may carry a hero plus a supporting grid
+<GenUIZone apiUrl="..." zoneId="homepage-hero" maxComponents={3} />
+```
+
+Pinned content is exempt: the pinned guarantee runs after the budget, so a pinned item is appended even when it exceeds the ceiling. And the budget is a ceiling, never a target: the model is told to emit fewer components when it has nothing new to say (see guarantee 6 in [Output Guarantees](#%EF%B8%8F-output-guarantees)).
 
 ---
 
@@ -564,7 +628,9 @@ function ChatBot() {
       // response.sources - Source citations
       // response.suggestedActions - Follow-up suggestions
       // response.profileUpdates - Profile learning data
-      // response.meta - Confidence, sentiment, interaction type
+      // response.meta - Confidence, sentiment, interaction type,
+      //   meta.sanitization (what the guarantee chain removed) and
+      //   meta.behavior (see below)
     } catch (err) {
       // Handle error
     }
@@ -573,6 +639,19 @@ function ChatBot() {
   return <ChatUI onSend={handleSend} history={history} loading={isLoading} />;
 }
 ```
+
+**`meta.behavior`** carries what the BehaveAgent read from the session, camelCased like every other mapped field, so a host can react to it instead of re-deriving it:
+
+```tsx
+const { behavior } = response.meta ?? {};
+// behavior?.engagementScore  0..1, the BehaveAgent's own estimate
+// behavior?.userType         'explorer' | 'focused' | 'scanner' | 'deep_reader' | 'casual'
+// behavior?.sessionSummary   short human-readable summary
+// behavior?.insightsCount    how many signals it was derived from
+// behavior?.uiAdjustments    [{ type, target, suggestion }] hints, advisory only
+```
+
+It appears only when the request carried behavior data: no tracking (or `privacy: 'strict'`, DNT, consent withheld) means no analysis to report, by design. Note that `userType` **is** one of the factors of the segment key (`type=`), while `engagementScore` is **not**: the `eng=` bucket is computed deterministically from scroll depth (`>= 70` high, `>= 30` mid), never from this model-estimated score, so a segment stays reproducible.
 
 ### useZone — Zone-Level Control
 
@@ -906,6 +985,34 @@ The framework's defaults live in `:root` (override them globally to retheme ever
 }
 ```
 
+### Per-tenant theme (the theme as stored config)
+
+A theme can also live on the backend, per tenant, instead of only in your code. The Studio's Theme Playground saves it there and loads it back from the sidebar tenant bar, and the Segment Preview renders with it, so a rebrand has a home that can be reviewed, revisited and seen in context.
+
+| Method | Endpoint        | Key             | What it does                                                                                            |
+| ------ | --------------- | --------------- | ------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/api/v1/theme` | client or admin | This tenant's saved theme (`{"theme": {...}, "updated_at": ...}`), or `theme: null` when none was saved |
+| `PUT`  | `/api/v1/theme` | admin           | Replaces this tenant's theme. Audit-logged as `theme_change`                                            |
+
+**What saving does, precisely.** It stores config that this endpoint serves. It does **not** make the library fetch or apply anything: `GenUIZone` / `GenUISection` still take the theme as a prop, exactly as above. A host that wants runtime theming reads the endpoint once at boot and passes the JSON straight through:
+
+```tsx
+const { theme } = await fetch(`${apiUrl}/api/v1/theme`, {
+  headers: { "X-API-Key": process.env.GENUI_CLIENT_KEY },
+}).then((r) => r.json());
+
+// theme is null when nothing was saved: the library defaults apply
+<GenUISection theme={theme ?? undefined}>...</GenUISection>;
+```
+
+A host that themes at build time keeps using the Playground's TS/CSS/JSON export and never calls this. Both are supported; neither is deprecated by the other.
+
+Three properties worth knowing:
+
+- **The tenant comes from the key**, never from the request, like every other tenant-scoped endpoint. `GET` accepts a client key because a theme is public branding that is already visible in the rendered page as CSS custom properties; only admin keys write.
+- **A stored theme cannot inject CSS.** Accepted tokens are exactly the ones the Playground can produce, each bound to a closed shape (px sizes, 6-digit hex colors, a font stack charset that cannot close a declaration or reach `url()`). Anything else is refused on write, and re-checked on read since Redis is shared infrastructure.
+- **Unset means unset.** Tokens you did not set are absent from the stored JSON, so the library defaults (or the `mode` block) still win. Saving is not a way to accidentally pin every token.
+
 ---
 
 ## ⚡ Segment Cache — LLM as an Offline Ranker
@@ -980,10 +1087,30 @@ Resolution rules:
 - **Registry wins, wholesale.** When an _approved_ entry exists, every render of that zone (sync, streaming, batch, warmup) serves exactly the registry config; host props for the governed fields are ignored, **not merged** — a field-level merge would let the page inject prompt text around what was approved.
 - **Host props are the explicit fallback.** No entry (or a draft-only one) = props behave exactly as before. Existing integrations don't change; migration is per-zone: create an entry when a zone needs governance, delete it to hand control back to the host code.
 - **Per-tenant.** Tenants under the same deployment (e.g. `agente` / `assicurato`) have fully independent entries; the tenant always comes from the API key, never from the body.
-- **Versioned, with status.** Every write increments `version`; renders only ever serve `status: "approved"`. Drafts are stored but invisible to traffic — the hook for the approval workflow and Studio preview.
+- **Versioned, with status.** Renders only ever serve `status: "approved"`. Each `(tenant, zone_id)` has two slots: the approved record production serves, and a **draft** slot beside it for edits. Saving a draft never changes what renders serve; one version counter spans both slots, so versions stay monotonic across edit and approve cycles.
 - **Cache-coherent.** The resolved config feeds the cache key, so approving a new version invalidates cached renders exactly like a prop change does.
 
-Page context (`current_page`, `page_metadata`) and `custom_components` stay request props: the former is per-request by nature, the latter are bound to React components that only exist in the host bundle. Entries are managed from Python today (`zones.ZoneConfigStore`); CRUD/approval endpoints and the Studio editor are the next phases of `roadmap/strategiche/01`.
+Page context (`current_page`, `page_metadata`) and `custom_components` stay request props: the former is per-request by nature, the latter are bound to React components that only exist in the host bundle.
+
+### Governance workflow: draft, preview, approve
+
+The registry has an admin HTTP surface (`/api/v1/zone/config`, admin key required, tenant always from the key) and a face in the Studio (the **Zones** page):
+
+| Endpoint                                     | What it does                                                                                                                                            |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/v1/zone/config`                    | Lists the tenant's zones: registry entries plus every zone the render path actually served, tagged `ungoverned` / `draft` / `approved`                  |
+| `GET /api/v1/zone/config/{zone_id}`          | Both slots of one zone: the approved record and the draft                                                                                               |
+| `PUT /api/v1/zone/config/{zone_id}`          | Saves the config as a **draft**. Production is untouched. `expected_version` gives optimistic concurrency: 409 when someone else edited in the meantime |
+| `POST /api/v1/zone/config/{zone_id}/approve` | Promotes the draft: from this response on, every render of the zone serves it                                                                           |
+| `DELETE /api/v1/zone/config/{zone_id}/draft` | Discards the draft; the approved record keeps serving                                                                                                   |
+| `DELETE /api/v1/zone/config/{zone_id}`       | Removes the whole entry: the zone goes back to host props                                                                                               |
+
+Worth knowing:
+
+- **Previewing a draft** is a normal render request with `preview_draft: true` (admin keys only): the backend resolves the draft slot instead of the approved one and forces a live bypass, so a draft can be seen but never cached or served to real traffic. Warmup ignores the flag: a draft can never be warmed into the cache real users read.
+- **The observed catalog** is how the Studio knows which zones exist at all. The backend never scans host source code; a zone is just `<GenUIZone zoneId="hero" />` until it renders. So at every cached render the backend records `(tenant, zone_id)` in a per-tenant set (bounded, deduped: `zone_id` is logical identity, five mounts of `"hero"` are one zone). A new zone shows up as `ungoverned` the first time the site renders it, and the operator adopts it by saving a config.
+- **Every state transition is audited**: `draft_saved`, `approved`, `draft_discarded`, `deleted` become `zone_config_change` events carrying the admin key fingerprint, on the same audit trail as renders.
+- **Writes tell you where they landed**: responses carry `storage: "redis" | "memory"`. When Redis is down the write lives in one worker's memory and dies with it; the Studio shows a warning instead of losing an approval in silence.
 
 ---
 
@@ -1052,16 +1179,17 @@ What reaches the frontend is guaranteed by the system, not by prompt obedience:
 
 1. **Provider-native structured output** — the ZoneAgent constrains generation with `response_format` (JSON schema derived from the component schemas, falling back to JSON mode).
 2. **Schema validation** — every generated component is validated against Pydantic schemas (`backend/schemas/`) server-side. Invalid components are dropped individually and reported in `meta.sanitization.dropped_components`; one malformed component never breaks the zone.
-3. **URL whitelist (hard rule)** — a generated URL survives **only if it existed in the input**: pinned content, developer prompts, RAG documents, or page context. Invented links/images are stripped (`meta.sanitization.removed_urls`), buttons left without a valid URL are dropped, markdown links collapse to plain text — in components _and_ in the `/query` chat prose. Dangerous schemes (`javascript:`, `data:`, …) are always blocked, even with the whitelist disabled (`URL_WHITELIST_ENABLED=false`).
+3. **URL whitelist (hard rule)** — a generated URL survives **only if it existed in the input**: pinned content, developer prompts, RAG documents, or page context. Invented links/images are stripped (`meta.sanitization.removed_urls`), buttons left without a valid URL are dropped, markdown links collapse to plain text — in components _and_ in the `/query` chat prose. Dangerous schemes (`javascript:`, `data:`, …) are always blocked, even with the whitelist disabled (`URL_WHITELIST_ENABLED=false`). **Links and images are whitelisted separately**: an input URL that arrived as a link can never be reused as an `<img src>` (that renders as a broken image, not as content), so only URLs that genuinely came from an image source can back one — and a `with-image` variant whose image was stripped degrades to its text-only shape instead of showing a hole.
 4. **Numeric grounding (hard rule)** — a number displayed _as_ the content — a `stats_banner` value, a `pricing_cards` price, a `chart` data point — survives **only if its digits trace to a number present in the input** (verbatim modulo formatting: `1,200`, `1200` and `1200.0` all match). Ungrounded stats/plans are removed (`meta.sanitization.removed_numbers`); one ungrounded chart point drops the whole chart. Scope honesty: this guarantees the digits existed in your input, not the semantics of the sentence around them, and numbers inside prose are deliberately not touched. `NUMERIC_GROUNDING_ENABLED=false` opts out.
-5. **Per-tenant content policy** — banned terms configured in `CONTENT_POLICY` (JSON, per tenant + `"*"`) never reach the page: a component containing one is dropped, chat text is redacted, hits are reported in `meta.sanitization.policy_violations`. Term matching is lexical (word-boundary, case-insensitive) — tone constraints remain prompt-level best-effort, and we say so.
-6. **Pinned content enforcement** — pinned items are verified on the _actual output_ (by URL/title) after generation; missing ones are appended automatically. `pinned_content_included` is computed, not model-claimed.
-7. **Frontend defense in depth** — rendered `href`/`src` pass through `sanitizeUrl()` regardless of origin.
-8. **Versioned contract, graceful skew** — every response carries `contract_version` (exposed as `meta.contractVersion`). When an already-deployed frontend bundle meets a newer backend, unknown component types are **skipped silently in production** (a `console.warn` for developers, an inline error box only in dev builds) — a backend deploy never prints internal errors into the end user's page.
+5. **Per-tenant content policy** — banned terms never reach the page: a component containing one is dropped, chat text is redacted, hits are reported in `meta.sanitization.policy_violations`. Terms merge two sources: the `CONTENT_POLICY` env (JSON, per tenant + `"*"`, the deployment-wide seed) and a per-tenant store an admin edits live from the Studio (Console -> Content Policy) with no redeploy. Term matching is lexical (word-boundary, case-insensitive) — tone constraints remain prompt-level best-effort, and we say so.
+6. **No zone that says the same thing twice**: the components of a zone are read top to bottom as one band, but the model writes them in one shot, so it will spend its second component repeating the first one's link under the first one's wording (a hero with two CTAs to the same URL, then a full-width card echoing the primary CTA). Enforced deterministically: the same link target twice inside one component loses the repeat, an element with the same target _and_ the same wording as an earlier component is removed, and a component emptied that way is dropped whole (reported in `meta.sanitization.dropped_components`). Scope honesty: semantic redundancy is not judged, so the same link under genuinely different wording survives; that half stays prompt-level. `DEDUP_COMPONENTS_ENABLED=false` opts out.
+7. **Pinned content enforcement** — pinned items are verified on the _actual output_ (by URL/title) after generation; missing ones are appended automatically. `pinned_content_included` is computed, not model-claimed. Presence is read from the whole component tree, so a pinned link the model used as a hero CTA or a plan button counts as shown and is not appended a second time. It runs after the steps above, so a pinned item is never deduplicated away.
+8. **Frontend defense in depth** — rendered `href`/`src` pass through `sanitizeUrl()` regardless of origin.
+9. **Versioned contract, graceful skew** — every response carries `contract_version` (exposed as `meta.contractVersion`). When an already-deployed frontend bundle meets a newer backend, unknown component types are **skipped silently in production** (a `console.warn` for developers, an inline error box only in dev builds) — a backend deploy never prints internal errors into the end user's page.
 
 > Because URLs and numbers must exist in the input, enumerate your content in `contextPrompt` (or `pinnedContent` / RAG) — content the model cannot reference, it cannot link or claim.
 
-The full chain (`validate → URL guard → numeric grounding → content policy → pinned`) runs on **every** serving path — sync, SSE streaming, and `/query` — and always _before_ a render is cached. On the React side, `useZone` and `useGenUI` expose the report as `meta.sanitization` (`removedUrls`, `droppedComponents`, `removedNumbers`, `policyViolations`), so a host can observe enforcement without parsing wire data. [`deploy/OUTPUT-GUARANTEES.md`](deploy/OUTPUT-GUARANTEES.md) states each guarantee with its enforcing code reference, its test, and its honest limits — written to be attached to a contract.
+The full chain (`validate → URL guard → numeric grounding → content policy → redundancy → pinned`) runs on **every** serving path — sync, SSE streaming, and `/query` — and always _before_ a render is cached. On the React side, `useZone` and `useGenUI` expose the report as `meta.sanitization` (`removedUrls`, `droppedComponents`, `removedNumbers`, `policyViolations`), so a host can observe enforcement without parsing wire data. [`deploy/OUTPUT-GUARANTEES.md`](deploy/OUTPUT-GUARANTEES.md) states each guarantee with its enforcing code reference, its test, and its honest limits — written to be attached to a contract.
 
 ---
 
@@ -1077,7 +1205,7 @@ ADMIN_API_KEYS=sk_live_xyz789:acme                          # server-to-server o
 ```
 
 - **Client keys** identify the calling app/tenant, gate rate limits, and scope cached renders and stored profiles per tenant. Pass them via the `apiKey` prop (sent as `X-API-Key`; `Authorization: Bearer` also works). They live in the browser: they identify the _app_, never the _person_.
-- **Admin keys** protect `/documents*`, `/zone/warmup`, and `/zone/cache/stats`.
+- **Admin keys** protect `/documents*`, `/zone/warmup`, `/zone/cache/stats`, and the whole control plane (`/zone/config*`, `/audit`, `/content-policy`, `/whoami`). One key, one tenant: that is what scopes the Studio console, see [Tenants in the console](#-tenants-in-the-console-and-where-auth-begins).
 - **Fail-closed by default**: with no keys configured the API **refuses every request (403)** and the error explains what to configure. The only way to run open is the explicit dev flag `GENUI_DEV_OPEN=1` — never set it in production.
 - Rate limiting: `RATE_LIMIT_PER_MINUTE` per client key (default 120, `0` disables). A batch-render of N zones counts as N requests, and per-tenant LLM spend has its own cap: see [Cost controls](#-cost-controls).
 
@@ -1139,7 +1267,7 @@ When `userId` is provided, the **server-side profile store** (Redis, or in-memor
 
 ### Audit log — what was shown to whom
 
-Every zone render, query, profile sync, and profile deletion emits an append-only JSON event (`AUDIT_LOG_PATH` file, or the `genui.audit` logger): tenant, user, zone, segment, cache state, and the exact titles/links displayed. In regulated sectors this answers "why did user X see content Y on date Z?". API keys appear only as fingerprints, never raw.
+Every zone render, query, profile sync, and profile deletion emits an append-only JSON event (`AUDIT_LOG_PATH` file, or the `genui.audit` logger): tenant, user, zone, segment, cache state, the exact titles/links displayed, and what the guarantee chain removed before serving (`sanitization`). In regulated sectors this answers "why did user X see content Y on date Z?". API keys appear only as fingerprints, never raw. The trail is queryable via `GET /api/v1/audit` (admin, tenant-scoped, filters for user/zone/event/date, paginated) and through the Studio's Audit Viewer; see [Audit in production](#audit-in-production) for the read path's limit with an external log sink.
 
 ```json
 {
@@ -1172,7 +1300,7 @@ Under the hood the zone consumes `POST /api/v1/zone/render/stream` (Server-Sent 
 
 The library can be imported and rendered in server environments (Next.js, Remix, Astro): CSS is shipped as a separate file (no style injection at import time), IndexedDB persistence degrades to a no-op without a browser, and the BehaviorTracker won't attach listeners without a DOM.
 
-**What the server actually renders**: zone data is fetched client-side (in effects), so `renderToString` emits the **loading skeleton** — stable markup with the zone's real footprint, no layout shift, and the client's first paint matches it exactly (no hydration mismatch). With `loadOnMount={false}` the server renders nothing. This is the client-boundary contract: personalized content never appears in server HTML by design (it depends on the visitor); in the React App Router, put the zone in a `'use client'` component. A first-class SSR adapter (zone data fetched server-side) is on the roadmap as a separate package.
+**What the server actually renders**: zone data is fetched client-side (in effects), so `renderToString` emits the **loading skeleton** — stable markup with the zone's real footprint, no layout shift, and the client's first paint matches it exactly (no hydration mismatch). With `loadOnMount={false}` the server renders nothing. This is the client-boundary contract: personalized content never appears in server HTML by design (it depends on the visitor); in the React App Router, put the zone in a `'use client'` component.
 
 ---
 
@@ -1301,6 +1429,20 @@ Answering the DPO from the file sink (from a log pipeline, the same filters appl
 jq -c 'select(.user_id == "user-42" and (.ts | startswith("2026-07-14")))
        | {ts, event, zone_id, render_id, shown_titles, shown_links}' audit.jsonl*
 ```
+
+#### Querying the audit
+
+`GET /api/v1/audit` (admin key) is the read path over the trail: always scoped to the key's tenant, filterable by `user_id`, `zone_id`, `event` and `date_from`/`date_to` (YYYY-MM-DD, matched on the local-time date of each line), newest first, paginated with `limit` (max 200) and `offset`. The Studio's Audit Viewer is a UI over exactly this endpoint.
+
+```bash
+curl "http://localhost:8000/api/v1/audit?user_id=user-42&date_from=2026-07-14&date_to=2026-07-14" \
+  -H "X-API-Key: sk_live_xyz789"
+```
+
+The source is reported in every response and the endpoint is honest about its limit:
+
+- **File sink**: `queryable: true`, the query scans the JSONL file and its rotated backups. It is a full scan per query, fine at rotation-cap sizes; if you need more, ship the lines to a real store.
+- **Logger sink (production default)**: the lines live in the host's log pipeline, which this API cannot query. The endpoint answers `queryable: false` with a `note` telling you to query the pipeline (the `jq` filters above map 1:1 to indexed log fields), instead of returning an empty result that would read as "no events". A deployment whose pipeline exposes a query API can implement the same read interface against it (`utils/audit.AuditReader`).
 
 #### Tracing
 
@@ -1558,6 +1700,28 @@ Content-Type: application/json
 }
 ```
 
+### Every endpoint, and where it is documented
+
+Serving endpoints take a client key; control-plane endpoints take an admin key and are always scoped to the tenant that key resolves to.
+
+| Endpoint                                                                       | Key                 | What it is                                          | Section                                                                  |
+| ------------------------------------------------------------------------------ | ------------------- | --------------------------------------------------- | ------------------------------------------------------------------------ |
+| `POST /api/v1/zone/render`                                                     | client              | Render a zone                                       | above                                                                    |
+| `POST /api/v1/zone/render/stream`                                              | client              | Same render, progressive (SSE)                      | [Streaming](#️-streaming--ssr-safety)                                     |
+| `POST /api/v1/zone/batch-render`                                               | client              | Several zones in one request (capped, counted as N) | [Cost Controls](#-cost-controls)                                         |
+| `POST /api/v1/query`                                                           | client              | Chat with optional UI components                    | above                                                                    |
+| `POST /api/v1/events`                                                          | client              | Impression / click ingestion                        | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
+| `GET /api/v1/events/stats`                                                     | admin               | CTR per arm, uplift, z-test                         | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
+| `GET /api/v1/profile/{user_id}` · `DELETE` · `POST /profile/sync`              | client + user token | Server-side profile, GDPR erasure                   | [Auth & Profiles](#-auth-server-side-profiles--audit)                    |
+| `POST /api/v1/documents` · `/upload` · `/search` · `GET` · `DELETE` · `/stats` | admin               | RAG knowledge base                                  | [Knowledge Base](#knowledge-base-rag--tenant-isolated)                   |
+| `GET/PUT/POST/DELETE /api/v1/zone/config[...]`                                 | admin               | Zone config as data: draft, approve, discard        | [Zone Registry](#%EF%B8%8F-zone-config-registry--config-as-data)         |
+| `GET /api/v1/audit`                                                            | admin               | What was shown to whom                              | [Querying the audit](#querying-the-audit)                                |
+| `GET/PUT /api/v1/content-policy`                                               | admin               | Per-tenant banned terms                             | [Output Guarantees](#%EF%B8%8F-output-guarantees) point 5                |
+| `GET /api/v1/theme` (client) · `PUT` (admin)                                   | both                | Per-tenant theme                                    | [Per-tenant theme](#per-tenant-theme-the-theme-as-stored-config)         |
+| `POST /api/v1/zone/warmup` · `GET /api/v1/zone/cache/stats`                    | admin               | Pre-warm segments, inspect the cache                | [Segment Cache](#-segment-cache--llm-as-an-offline-ranker)               |
+| `GET /api/v1/whoami`                                                           | admin               | Which tenant this key resolves to                   | [Tenants in the console](#-tenants-in-the-console-and-where-auth-begins) |
+| `GET /health` · `/ready` · `/live` · `/metrics`                                | open / admin        | Health, probes, Prometheus metrics                  | [Observability](#observability)                                          |
+
 ---
 
 # 🏗️ Architecture
@@ -1569,20 +1733,27 @@ genui-framework/
 ├── backend/                              # Python FastAPI backend
 │   ├── agents/                           # AI agent implementations
 │   │   ├── zone_agent.py                 # Zone rendering (validation, URL + numeric guard,
-│   │   │                                 # content policy, pinned enforcement, streaming)
+│   │   │                                 # content policy, redundancy, pinned, streaming)
 │   │   ├── response_agent.py             # Chat responses (model-invoked RAG tool, isolated)
 │   │   ├── profile_agent.py              # Profile learning & extraction
 │   │   ├── behave_agent.py               # Behavior analysis
 │   │   └── orchestrator.py               # Multi-agent coordination (chat)
 │   ├── api/                              # REST API endpoints
-│   │   ├── main.py                       # FastAPI app, query/documents/profile, health/metrics
-│   │   ├── zone_router.py                # Zone render + stream + warmup + cache stats
+│   │   ├── main.py                       # FastAPI app, query/documents/profile, whoami,
+│   │   │                                 # health/ready/live, metrics
+│   │   ├── zone_router.py                # Zone render + stream + batch + warmup + cache stats
+│   │   ├── zone_config_router.py         # Zone config CRUD: draft / approve / discard (admin)
 │   │   ├── events_router.py              # UI event ingestion + uplift stats
+│   │   ├── audit_router.py               # Audit read path: what was shown to whom (admin)
+│   │   ├── content_policy_router.py      # Per-tenant banned terms (admin)
+│   │   ├── theme_router.py               # Per-tenant theme: read (client) / write (admin)
 │   │   └── deps.py                       # Shared service singletons
 │   ├── auth/                             # API keys, tenants, dependencies
 │   │   └── identity.py                   # Signed user identity (HMAC X-User-Token), fail-closed
 │   ├── llm/                              # Provider abstraction (BYOK) + tool-calling loop
 │   │   └── embeddings.py                 # Pluggable embeddings (EMBEDDING_PROVIDER / BASE_URL)
+│   ├── zones/registry.py                 # Zone config as DATA: draft/approved slots,
+│   │                                     # versions, observed catalog (governance)
 │   ├── schemas/                          # Component schemas (Pydantic) + custom type registry
 │   ├── segmentation/                     # Deterministic profile -> segment + archetype
 │   ├── profiles/                         # Server-side profile store + merge logic
@@ -1590,18 +1761,20 @@ genui-framework/
 │   ├── metrics/                          # Impression/click counters, z-test, ops.py (HTTP metrics)
 │   ├── rag/                              # Qdrant vector store + chunking
 │   ├── utils/                            # zone_cache (SWR), redis_conn (reconnect), url_guard,
-│   │                                     # numeric_guard, content_policy, audit, rate_limit,
-│   │                                     # json_stream (SSE parser), tracing
+│   │                                     # numeric_guard, redundancy_guard, content_policy,
+│   │                                     # content_policy_store, theme_store, tenant_json_store,
+│   │                                     # audit (write + read), rate_limit, json_stream, tracing
 │   ├── config/settings.py                # All env-driven configuration
-│   ├── tests/                            # 363 unit tests (unittest-compatible; opt-in live LLM)
+│   ├── tests/                            # 465 unit tests (unittest-compatible; opt-in live LLM)
 │   ├── Dockerfile                        # Container image
 │   └── docker-compose.yml                # Qdrant + Redis
 │
 ├── frontend/                             # React component library (npm package)
 │   ├── src/
 │   │   ├── components/                   # GenUIZone, GenUISection, ComponentRenderer +
-│   │   │                                 # Bento/Buttons/Chart/Text + 7 section components
-│   │   │                                 # (Tabs, Steps, Stats, Testimonial, Pricing, Grid, Hero)
+│   │   │                                 # Bento/Buttons/Chart/Text + 10 section components
+│   │   │                                 # (Tabs, Steps, Stats, Testimonial, Pricing, Grid,
+│   │   │                                 # Hero, CaseStudies, Quote, LogoWall)
 │   │   ├── hooks/                        # useZone (cache/streaming/events), useGenUI (chat)
 │   │   ├── registry.ts                   # registerGenUIComponent (custom design systems)
 │   │   ├── styles/genui.css              # Themeable tokens, light/dark, reduced-motion
@@ -1614,7 +1787,9 @@ genui-framework/
 │
 ├── deploy/                               # docker-compose, customer.env, OUTPUT-GUARANTEES.md,
 │                                         # TENANT-ISOLATION.md, smoke.sh
-├── studio/                               # Vite SPA: Theme Playground, Content Studio, Measure
+├── studio/                               # Vite SPA control plane: Theme Playground (public) +
+│                                         # six local-only tools (Segment Preview, Zones,
+│                                         # Audit, Content Policy, Content Studio, Measure)
 └── CHANGELOG.md
 ```
 
@@ -1655,6 +1830,12 @@ genui-framework/
 │  └──────┬───────┘                                                       │
 │         │                                                               │
 │         ▼                                                               │
+│  ┌────────────────────────┐   ┌──────────────────────────┐              │
+│  │ Zone config registry   │──►│ Segment cache (SWR)      │              │
+│  │ approved config = DATA │   │ fresh hit: no LLM at all │              │
+│  └────────────────────────┘   └────────────┬─────────────┘              │
+│                                     miss / stale                        │
+│                                            ▼                            │
 │  ┌─────────────────────────────────────────────────────────────┐        │
 │  │                        AGENT SYSTEM                         │        │
 │  │                                                             │        │
@@ -1671,6 +1852,9 @@ genui-framework/
 │  │                                                             │        │
 │  └─────────────────────────────────────────────────────────────┘        │
 │                                                                         │
+│  Guarantee chain (before cache and response):                           │
+│  validate → URLs → numbers → policy → redundancy → pinned               │
+│                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
                                        │
                                        ▼
@@ -1680,13 +1864,14 @@ genui-framework/
 ### Zone render pipeline (what actually happens on `/zone/render`)
 
 1. **Auth, identity & rate limit** — the API key resolves the tenant and applies the rate limit. On routes carrying a `user_id`, when `USER_TOKEN_SECRETS` is set for the tenant a signed `X-User-Token` is required (fail-closed; open dev mode only under `GENUI_DEV_OPEN=1`).
-2. **Profile resolution** — with a `user_id`, the server-side profile overrides the client copy (or gets seeded by it).
-3. **Holdout assignment** — with `HOLDOUT_PERCENT` set, a sticky hash sends X% of users to the control arm (signals stripped).
-4. **Segmentation** — profile + behavior collapse into a deterministic segment key (`role=developer|int=ai|eng=high`).
-5. **Cache lookup** — fresh hit: served, no LLM. Stale: served + refreshed in background (single-flight). Miss: continue under a cold-miss single-flight lock, subject to the per-tenant LLM budget.
-6. **Generation** — provider-agnostic LLM call (BYOK) with structured output and a timeout. Cached (segment) renders see the segment **archetype**, never the raw profile, so no single user can poison a segment; only admin-forced `live` renders see the full profile.
-7. **Guarantees** — per-component schema validation, URL whitelist, numeric grounding, per-tenant content policy, pinned-content enforcement (identical on the sync and SSE paths).
-8. **Cache write, audit & metrics** — the render is cached for the whole segment, audit-logged (what was shown, to whom, why), and counted by the `/metrics` middleware.
+2. **Zone config resolution**: if the registry holds an **approved** config for this `(tenant, zone_id)`, it replaces the governed block (prompts, pinned content, constraints) wholesale; otherwise host props stand. The zone id is also recorded in the tenant's observed catalog, so the Studio can list zones the site really renders. Admin-only `preview_draft` resolves the draft instead, and forces a live render that is never cached.
+3. **Profile resolution** — with a `user_id`, the server-side profile overrides the client copy (or gets seeded by it).
+4. **Holdout assignment** — with `HOLDOUT_PERCENT` set, a sticky hash sends X% of users to the control arm (signals stripped).
+5. **Segmentation** — profile + behavior collapse into a deterministic segment key (`role=developer|int=ai|eng=high`).
+6. **Cache lookup** — fresh hit: served, no LLM. Stale: served + refreshed in background (single-flight). Miss: continue under a cold-miss single-flight lock, subject to the per-tenant LLM budget. The resolved config is part of the cache key, so approving an edit invalidates what it changed.
+7. **Generation** — provider-agnostic LLM call (BYOK) with structured output and a timeout. Cached (segment) renders see the segment **archetype**, never the raw profile, so no single user can poison a segment; only admin-forced `live` renders see the full profile.
+8. **Guarantees** — per-component schema validation, URL whitelist, numeric grounding, per-tenant content policy, redundancy removal, pinned-content enforcement (identical on the sync and SSE paths).
+9. **Cache write, audit & metrics** — the render is cached for the whole segment, audit-logged (what was shown, to whom, why, and what the chain removed), and counted by the `/metrics` middleware.
 
 The **chat pipeline** (`/query`) is separate and isolated: Response/Profile/Behave agents run in parallel per request with no state shared across users or tenants; the model can invoke a tenant-scoped `search_documents` RAG tool; the same guarantee chain applies to its output.
 
@@ -1702,13 +1887,13 @@ The **chat pipeline** (`/query`) is separate and isolated: Response/Profile/Beha
 
 ## Frontend Module Summary
 
-| Module          | Purpose                     | Key Exports                                                                                                                                                                                              |
-| --------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **components/** | React UI components         | `GenUIZone`, `GenUISection`, `ComponentRenderer`, `BentoComponent`, `ButtonsComponent`, `ChartComponent`, `TextComponent`, + 7 section components (Tabs, Steps, Stats, Testimonial, Pricing, Grid, Hero) |
-| **hooks/**      | React hooks for state & API | `useGenUI`, `useZone`                                                                                                                                                                                    |
-| **types/**      | TypeScript definitions      | `GenUITheme`, `BentoCard`, `ButtonDef`, `ButtonVariant`, `UserProfile`, `GenUIResponse`, etc.                                                                                                            |
-| **utils/**      | Utilities                   | `BehaviorTracker` (with privacy filter), `sanitizeUrl`, impression/click events, profile/history persistence                                                                                             |
-| **styles/**     | CSS                         | Glassmorphism theme, animations, responsive layouts                                                                                                                                                      |
+| Module          | Purpose                     | Key Exports                                                                                                                                                                                                                             |
+| --------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **components/** | React UI components         | `GenUIZone`, `GenUISection`, `ComponentRenderer`, `BentoComponent`, `ButtonsComponent`, `ChartComponent`, `TextComponent`, + 10 section components (Tabs, Steps, Stats, Testimonial, Pricing, Grid, Hero, CaseStudies, Quote, LogoWall) |
+| **hooks/**      | React hooks for state & API | `useGenUI`, `useZone`                                                                                                                                                                                                                   |
+| **types/**      | TypeScript definitions      | `GenUITheme`, `BentoCard`, `ButtonDef`, `ButtonVariant`, `UserProfile`, `GenUIResponse`, etc.                                                                                                                                           |
+| **utils/**      | Utilities                   | `BehaviorTracker` (with privacy filter), `sanitizeUrl`, impression/click events, profile/history persistence                                                                                                                            |
+| **styles/**     | CSS                         | Glassmorphism theme, animations, responsive layouts                                                                                                                                                                                     |
 
 ---
 

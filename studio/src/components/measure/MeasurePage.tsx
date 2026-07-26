@@ -17,8 +17,9 @@ import {
   type EventStats,
   type WarmupResult,
 } from '../../lib/measure';
-import { clearSession, getSession, type AdminSession } from '../../lib/session';
+import { getSession, sessionId, type AdminSession } from '../../lib/session';
 import { ConnectGate } from '../studio/ConnectGate';
+import { ConsoleHeader } from '../studio/ConsoleHeader';
 
 const TONE_CLASS = {
   success: styles.toneSuccess,
@@ -317,22 +318,12 @@ export const MeasurePage = () => {
   }
 
   return (
-    <main className={studioStyles.page} style={{ marginTop: "3rem" }}>
-      <div className={studioStyles.pageHeader}>
-        <span className={studioStyles.connectedTo}>
-          Connected to <code>{session.baseUrl}</code>
-        </span>
-        <button
-          type="button"
-          className={studioStyles.disconnect}
-          onClick={() => {
-            clearSession();
-            setSession(null);
-          }}
-        >
-          Disconnect
-        </button>
-      </div>
+    <main
+      key={sessionId(session)}
+      className={studioStyles.page}
+      style={{ marginTop: "3rem" }}
+    >
+      <ConsoleHeader session={session} onSession={setSession} />
 
       <ZoneStats session={session} />
       <OpsPanel session={session} />

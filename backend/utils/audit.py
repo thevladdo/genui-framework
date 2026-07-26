@@ -23,6 +23,7 @@ The raw API key is never audited, only its fingerprint.
 import json
 import logging
 import logging.handlers
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -90,11 +91,134 @@ class AuditLogger:
             return
 
         if self._file_logger is not None:
-            # Rotation and locking via stdlib; write errors are reported by logging.Handler.handleError (stderr).
             self._file_logger.info(line)
             return
 
         logger.info(line)
+
+
+class AuditReader:
+    """
+    Query side of the audit trail, always tenant-scoped.
+
+    The base class is the honest answer for the production default
+    (logger sink: the lines live in the host's log pipeline, which this
+    backend cannot query): it reports queryable=False with a note,
+    instead of an empty result that would read as "no events".
+    """
+
+    source = "log-pipeline"
+    queryable = False
+    note = (
+        "Audit events are emitted on the 'genui.audit' logger and live in "
+        "the host's log pipeline; query them there, or set AUDIT_LOG_PATH "
+        "(single-worker file sink) to make them queryable from this API."
+    )
+
+    def query(
+        self,
+        tenant: str,
+        *,
+        user_id: Optional[str] = None,
+        zone_id: Optional[str] = None,
+        event: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        return {"entries": [], "has_more": False}
+
+
+class FileAuditReader(AuditReader):
+    """
+    Reads the JSONL file sink (AUDIT_LOG_PATH), rotated backups included,
+    newest first.
+    """
+
+    source = "file"
+    queryable = True
+    note = ""
+
+    def __init__(self, path: str):
+        self.path = path
+
+    def _files(self) -> List[str]:
+        """Newest first: audit.jsonl, then .1, .2, ... (rotation order)."""
+        files = [self.path]
+        i = 1
+        while os.path.exists(f"{self.path}.{i}"):
+            files.append(f"{self.path}.{i}")
+            i += 1
+        return files
+
+    @staticmethod
+    def _matches(
+        record: Dict[str, Any],
+        tenant: str,
+        user_id: Optional[str],
+        zone_id: Optional[str],
+        event: Optional[str],
+        date_from: Optional[str],
+        date_to: Optional[str],
+    ) -> bool:
+        if record.get("tenant") != tenant:
+            return False
+        if user_id is not None and record.get("user_id") != user_id:
+            return False
+        if zone_id is not None and record.get("zone_id") != zone_id:
+            return False
+        if event is not None and record.get("event") != event:
+            return False
+        if date_from or date_to:
+            day = str(record.get("ts", ""))[:10]  # ISO date prefix
+            if date_from and day < date_from:
+                return False
+            if date_to and day > date_to:
+                return False
+        return True
+
+    def query(
+        self,
+        tenant: str,
+        *,
+        user_id: Optional[str] = None,
+        zone_id: Optional[str] = None,
+        event: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        needed = offset + limit + 1  
+        matches: List[Dict[str, Any]] = []
+        for file_path in self._files():
+            try:
+                with open(file_path, encoding="utf-8") as f:
+                    lines = f.readlines()
+            except OSError:
+                continue
+            # newest last
+            for line in reversed(lines):
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue 
+                if not isinstance(record, dict):
+                    continue
+                if self._matches(
+                    record, tenant, user_id, zone_id, event, date_from, date_to
+                ):
+                    matches.append(record)
+                    if len(matches) >= needed:
+                        break
+            if len(matches) >= needed:
+                break
+
+        return {
+            "entries": matches[offset:offset + limit],
+            "has_more": len(matches) > offset + limit,
+        }
 
 
 def summarize_shown_components(components: List[Dict[str, Any]]) -> Dict[str, Any]:

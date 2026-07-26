@@ -137,6 +137,14 @@ class Settings(BaseSettings):
                     "present in the input. Same model as the URL whitelist: "
                     "check the output, don't trust the instruction."
     )
+    dedup_components_enabled: bool = Field(
+        default=True,
+        description="Remove links a zone already showed: the same target "
+                    "twice in one component, or the same target and wording "
+                    "as an earlier component. A component emptied this way "
+                    "is dropped. Wording-level (semantic) redundancy stays "
+                    "prompt-level, best effort."
+    )
     content_policy: str = Field(
         default="",
         description='Per-tenant banned terms, enforced post-generation. JSON: '

@@ -1,5 +1,5 @@
 """
-Tests for /query chat isolation (roadmap/fondamenta/03).
+Tests for /query chat isolation.
 
 The invariant: NO conversational state survives a single request or
 crosses users/tenants. Historically the agents sat on a datapizza

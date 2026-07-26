@@ -18,7 +18,7 @@ from config import settings
 from llm import create_llm_client
 from rag import create_vector_store, build_context_from_results
 from schemas import component_to_dict, validate_components
-from utils.content_policy import policy_for
+from utils.content_policy_store import effective_policy
 from utils.numeric_guard import NumericGuard
 from utils.url_guard import UrlGuard
 
@@ -465,7 +465,7 @@ security regulations. The implementation is handled by your technical team..."
             )
 
             # Per-tenant content policy: banned terms drop the component
-            policy = policy_for(tenant, settings.content_policy)
+            policy = await effective_policy(tenant, settings.content_policy)
             component_dicts, policy_violations = policy.sanitize_components(
                 component_dicts
             )

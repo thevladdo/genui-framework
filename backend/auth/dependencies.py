@@ -25,7 +25,7 @@ from fastapi import Depends, HTTPException, Security
 from fastapi.security import APIKeyHeader
 
 from config import settings
-from utils.audit import AuditLogger
+from utils.audit import AuditLogger, AuditReader, FileAuditReader
 from utils.rate_limit import RateLimiter
 
 from .identity import UserTokenVerifier, authorize_user_access, open_mode_context
@@ -77,6 +77,17 @@ def get_audit_logger() -> AuditLogger:
             backup_count=settings.audit_log_backup_count,
         )
     return _audit_logger
+
+
+def get_audit_reader() -> AuditReader:
+    """
+    Read path over the audit trail. Built per call from settings
+    (stateless, nothing worth caching): a file sink is queryable here,
+    the logger sink lives in the host's log pipeline and says so.
+    """
+    if settings.audit_log_path:
+        return FileAuditReader(settings.audit_log_path)
+    return AuditReader()
 
 
 def _extract_key(api_key: Optional[str], authorization: Optional[str]) -> Optional[str]:

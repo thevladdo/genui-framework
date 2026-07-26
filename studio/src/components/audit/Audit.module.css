@@ -1,0 +1,110 @@
+.filtersGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px 18px;
+  align-items: end;
+}
+
+.fieldGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.fieldGroup>label {
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--st-text-faint);
+  margin: 0;
+}
+
+.filtersGrid :is(input, select) {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+}
+
+.filtersGrid :is(input, select):focus {
+  outline: none;
+  border-color: var(--st-accent);
+  background: color-mix(in srgb, var(--st-accent) 6%, rgba(255, 255, 255, 0.03));
+}
+
+.filtersActions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.searchBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding-left: 22px;
+  padding-right: 24px;
+}
+
+.searchIcon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.pagerRow {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 16px;
+}
+
+.pagerBtn {
+  background: transparent;
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-sm);
+  color: var(--st-text-muted);
+  font-family: var(--st-font-mono);
+  font-size: 0.75rem;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.pagerBtn:hover:not(:disabled) {
+  color: var(--st-text);
+  border-color: var(--st-accent);
+}
+
+.pagerBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pagerInfo {
+  color: var(--st-text-muted);
+  font-size: 0.78rem;
+  font-family: var(--st-font-mono);
+}
+
+.rawToggle summary {
+  cursor: pointer;
+  color: var(--st-text-faint);
+  font-size: 0.75rem;
+  margin-top: 14px;
+}
+
+.rawJson {
+  margin: 8px 0 0;
+  padding: 12px;
+  background: color-mix(in srgb, var(--st-border) 18%, transparent);
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-sm);
+  color: var(--st-text-muted);
+  font-family: var(--st-font-mono);
+  font-size: 0.72rem;
+  overflow-x: auto;
+  white-space: pre;
+}

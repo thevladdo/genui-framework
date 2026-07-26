@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import styles from './Nav.module.css';
+import { CONSOLE_TOOLS } from '../lib/console';
 import type { RoutePath } from '../hooks/useHashRoute';
 
 interface NavProps {
@@ -17,11 +18,7 @@ interface NavItem {
 
 const PUBLIC_TABS: NavItem[] = [{ path: '/playground', label: 'Theme Playground' }];
 const PUBLIC_TABS_AFTER: NavItem[] = [{ path: '/about', label: 'About' }];
-const CONSOLE_ITEMS: NavItem[] = [
-  { path: '/preview', label: 'Segment Preview' },
-  { path: '/studio', label: 'Content Studio' },
-  { path: '/measure', label: 'Measurement' },
-];
+const CONSOLE_ITEMS: NavItem[] = CONSOLE_TOOLS;
 
 const DisclosureIcon = ({ open }: { open: boolean }) => (
   <svg
@@ -107,6 +104,7 @@ export const Nav = ({ path }: NavProps) => {
   return (
     <header className={styles.nav}>
       <a href="#/" className={styles.wordmark}>
+        <img src='/GenUI_Logo.png' style={{ maxHeight: "30px", marginRight: "15px" }} />
         GenUI <span>Studio</span>
       </a>
 

@@ -31,6 +31,15 @@ const MeasurePage = import.meta.env.DEV
 const PreviewPage = import.meta.env.DEV
   ? lazy(() => import('./components/preview/PreviewPage'))
   : null;
+const ZonesPage = import.meta.env.DEV
+  ? lazy(() => import('./components/zones/ZonesPage'))
+  : null;
+const AuditPage = import.meta.env.DEV
+  ? lazy(() => import('./components/audit/AuditPage'))
+  : null;
+const PolicyPage = import.meta.env.DEV
+  ? lazy(() => import('./components/policy/PolicyPage'))
+  : null;
 
 const App = () => {
   const { path, query, replaceQuery, navigate } = useHashRoute();
@@ -107,7 +116,6 @@ const App = () => {
             <StudioPage />
           </Suspense>
         ) : (
-          // Public build: show the homepage with a "runs locally" modal over it
           <>
             <Home />
             <LocalOnlyModal onClose={() => navigate('/')} />
@@ -127,6 +135,57 @@ const App = () => {
               onClose={() => navigate('/')}
               title="Segment Preview runs locally"
               body="The Segment Preview renders zones live against your GenUI backend with an admin key, so for now it's available only when you run the studio on your own machine:"
+            />
+          </>
+        )
+      )}
+
+      {path === '/zones' && (
+        ZonesPage ? (
+          <Suspense fallback={<p data-route-loading="" style={{ padding: 32 }}>Loading Zone Governance…</p>}>
+            <ZonesPage />
+          </Suspense>
+        ) : (
+          <>
+            <Home />
+            <LocalOnlyModal
+              onClose={() => navigate('/')}
+              title="Zone governance runs locally"
+              body="Zone governance edits and approves the zone configs your GenUI backend serves, with an admin key, so for now it's available only when you run the studio on your own machine:"
+            />
+          </>
+        )
+      )}
+
+      {path === '/audit' && (
+        AuditPage ? (
+          <Suspense fallback={<p data-route-loading="" style={{ padding: 32 }}>Loading Audit Viewer…</p>}>
+            <AuditPage />
+          </Suspense>
+        ) : (
+          <>
+            <Home />
+            <LocalOnlyModal
+              onClose={() => navigate('/')}
+              title="The audit viewer runs locally"
+              body="The audit viewer reads what was shown to whom from your GenUI backend with an admin key, so for now it's available only when you run the studio on your own machine:"
+            />
+          </>
+        )
+      )}
+
+      {path === '/policy' && (
+        PolicyPage ? (
+          <Suspense fallback={<p data-route-loading="" style={{ padding: 32 }}>Loading Content Policy…</p>}>
+            <PolicyPage />
+          </Suspense>
+        ) : (
+          <>
+            <Home />
+            <LocalOnlyModal
+              onClose={() => navigate('/')}
+              title="The content policy editor runs locally"
+              body="The content policy editor writes the per-tenant banned terms your GenUI backend enforces, with an admin key, so for now it's available only when you run the studio on your own machine:"
             />
           </>
         )

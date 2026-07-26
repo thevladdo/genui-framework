@@ -220,6 +220,46 @@ _ZONE_ENVELOPE = {
 }
 
 
+# One piece of information spread over three elements: two CTAs to the
+# same place, then a card repeating the primary CTA verbatim
+_REDUNDANT_ENVELOPE = {
+    "components": [
+        {"type": "hero_banner", "data": {
+            "variant": "centered",
+            "headline": "Build faster with a clearer workflow",
+            "primary_cta": {"label": "See pricing", "url": "https://example.com/pricing"},
+            "secondary_cta": {"label": "Explore", "url": "https://example.com/pricing"},
+        }},
+        {"type": "bento", "data": {"cards": [
+            {"title": "See pricing", "description": "Compare plans and pick the right fit.",
+             "link": "https://example.com/pricing"},
+        ], "columns": 1}},
+    ],
+    "pinned_included": [],
+    "personalization_applied": False,
+    "confidence": 0.8,
+    "reasoning": "redundant envelope",
+    "profile_factors": [],
+}
+
+
+# The pinned link used ONCE, as the hero's single CTA: what the prompt asks for
+_HERO_CTA_ENVELOPE = {
+    "components": [
+        {"type": "hero_banner", "data": {
+            "variant": "centered",
+            "headline": "Build faster with a clearer workflow",
+            "primary_cta": {"label": "See pricing", "url": "https://example.com/pricing"},
+        }},
+    ],
+    "pinned_included": [],
+    "personalization_applied": False,
+    "confidence": 0.9,
+    "reasoning": "hero envelope",
+    "profile_factors": [],
+}
+
+
 def _zone_request(tenant="acme"):
     return ZoneRenderRequest(
         zone_id="stats-zone",
@@ -231,6 +271,23 @@ def _zone_request(tenant="acme"):
         user_profile=None,
         behavior_data=None,
         current_page="/about",
+        page_metadata={},
+        tenant=tenant,
+    )
+
+
+def _redundant_request(tenant="acme"):
+    # The URL is grounded in the prompt, so the URL guard keeps it. What gets removed here is the repetition.
+    return ZoneRenderRequest(
+        zone_id="hero-zone",
+        base_prompt="Introduce the product. Pricing lives at https://example.com/pricing",
+        context_prompt=None,
+        pinned_content=[],
+        preferred_component_type=None,
+        max_items=6,
+        user_profile=None,
+        behavior_data=None,
+        current_page="/",
         page_metadata={},
         tenant=tenant,
     )
@@ -287,6 +344,55 @@ class TestZoneChain(unittest.TestCase):
         result = asyncio.run(self._agent().render_zone_async(_zone_request(tenant="globex")))
         self.assertTrue([c for c in result.components if c["type"] == "text"])
         self.assertEqual(result.policy_violations, [])
+
+    def test_sync_path_removes_a_zone_that_says_the_same_thing_twice(self):
+        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+                          llm_client=_FakeLLM(_REDUNDANT_ENVELOPE))
+        result = asyncio.run(agent.render_zone_async(_redundant_request()))
+
+        # The hero keeps obe cta, and the card that only echoed it is gone
+        self.assertEqual([c["type"] for c in result.components], ["hero_banner"])
+        hero = result.components[0]["data"]
+        self.assertIn("primary_cta", hero)
+        self.assertNotIn("secondary_cta", hero)
+        self.assertEqual(len(result.dropped_components), 2)
+
+    def test_sse_path_removes_the_same_redundancy(self):
+        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+                          llm_client=_FakeLLM(_REDUNDANT_ENVELOPE))
+
+        async def collect():
+            return [e async for e in agent.render_zone_stream_async(_redundant_request())]
+
+        events = asyncio.run(collect())
+        streamed = [e["component"] for e in events if e["type"] == "component"]
+        self.assertEqual([c["type"] for c in streamed], ["hero_banner"])
+        self.assertNotIn("secondary_cta", streamed[0]["data"])
+
+    def test_pinned_used_as_a_hero_cta_is_not_appended_again(self):
+        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+                          llm_client=_FakeLLM(_HERO_CTA_ENVELOPE))
+        request = _redundant_request()
+        request.pinned_content = [
+            {"title": "See pricing", "url": "https://example.com/pricing"}
+        ]
+        result = asyncio.run(agent.render_zone_async(request))
+
+        self.assertEqual([c["type"] for c in result.components], ["hero_banner"])
+        self.assertEqual(result.pinned_content_included, ["https://example.com/pricing"])
+
+    def test_pinned_still_appended_when_the_output_ignores_it(self):
+        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+                          llm_client=_FakeLLM(_HERO_CTA_ENVELOPE))
+        request = _redundant_request()
+        request.pinned_content = [
+            {"title": "Security whitepaper", "url": "https://example.com/security"}
+        ]
+        result = asyncio.run(agent.render_zone_async(request))
+
+        self.assertEqual([c["type"] for c in result.components], ["hero_banner", "bento"])
+        cards = result.components[1]["data"]["cards"]
+        self.assertEqual([c["title"] for c in cards], ["Security whitepaper"])
 
     @unittest.skipUnless(HAVE_API_DEPS, "requires fastapi (backend venv)")
     def test_outcome_lands_in_meta_sanitization(self):

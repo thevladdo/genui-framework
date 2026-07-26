@@ -1,5 +1,5 @@
 """
-Tests for observability & audit (roadmap WP-08): what a regulated
+Tests for observability & audit: what a regulated
 customer must observe (health, "who saw what") has to be queryable and
 reliable, not a side effect on a local disk.
 

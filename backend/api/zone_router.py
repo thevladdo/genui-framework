@@ -187,6 +187,14 @@ class ZoneRenderRequest(BaseModel):
                     "stale-while-revalidate. 'live': always call the LLM."
     )
 
+    # Governance (admin only)
+    preview_draft: bool = Field(
+        default=False,
+        description="Resolve the DRAFT registry config for this render "
+                    "(admin keys only). Forces a live bypass: a draft is "
+                    "never cached or served to real traffic."
+    )
+
     # Component vocabulary
     custom_components: Optional[List[CustomComponentDef]] = Field(
         None,
@@ -273,7 +281,7 @@ def get_llm_budget() -> RateLimiter:
 
     Reuses the fixed-window rate limiter on the shared Redis store, so
     the budget is one counter across workers, exactly like the rate
-    limit (WP-04). Identity = tenant: the cap protects the tenant's
+    limit. Identity = tenant: the cap protects the tenant's
     BYOK key, not a single client key.
     """
     global _llm_budget
@@ -325,8 +333,18 @@ async def _apply_registry(request: ZoneRenderRequest, tenant: str) -> None:
     Must run before the cache key is computed: the resolved config feeds
     zone_config_hash, so cached renders follow the registry and an
     approved edit invalidates them like any config change.
+
+    preview_draft (admin-only, enforced in _resolve_strategy) resolves
+    the draft slot instead, falling back to approved: it is how the
+    Studio sees an edit before approving it. Draft renders are never
+    cached because preview_draft forces a bypass.
     """
-    record = await get_zone_config_store().get_approved(tenant, request.zone_id)
+    store = get_zone_config_store()
+    record = None
+    if request.preview_draft:
+        record = await store.get_draft(tenant, request.zone_id)
+    if record is None:
+        record = await store.get_approved(tenant, request.zone_id)
     if record is None:
         return
     config = record["config"]
@@ -471,6 +489,15 @@ def _resolve_strategy(request: ZoneRenderRequest, auth: AuthContext) -> Tuple[st
     an LLM call, so a public credential must not be able to select it:
     that hands the operator's LLM bill to any visitor.
     """
+    if request.preview_draft:
+        if not auth.is_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="preview_draft requires an admin key: drafts are "
+                       "never served to clients",
+            )
+        return "live", True
+
     strategy = request.cache_strategy or "segment"
     if strategy == "live" and not auth.is_admin:
         raise HTTPException(
@@ -624,6 +651,7 @@ def _audit_render(
         arm=arm,
         cache=cache_meta,
         personalization_applied=payload.get("personalization_applied", False),
+        sanitization=payload.get("meta", {}).get("sanitization"),
         **summarize_shown_components(payload.get("components", [])),
     )
 
@@ -677,6 +705,10 @@ async def _handle_render(
             request.behavior_data = None
 
         strategy, cache_bypassed = _resolve_strategy(request, auth)
+
+        # Every zone real traffic is served from joins the tenant's zone list in the Studio.
+        if not cache_bypassed:
+            await get_zone_config_store().record_observed(auth.tenant, request.zone_id)
 
         def _annotate(cache_status: str, segment_key: Optional[str] = None) -> None:
             if render_span is not None:
@@ -790,6 +822,9 @@ async def render_zone_stream(
 
     # Raises 403 for client-key "live" before the stream starts
     strategy, cache_bypassed = _resolve_strategy(request, auth)
+
+    if not cache_bypassed:
+        await get_zone_config_store().record_observed(auth.tenant, request.zone_id)
 
     async def event_stream():
         cache = get_zone_cache()
@@ -964,7 +999,10 @@ async def warmup_zones(
     cache = get_zone_cache()
 
     async def _warm_one(zone_request: ZoneRenderRequest) -> Dict[str, Any]:
+        # The warmed cache is what real traffic reads: a smuggled preview_draft here would cache a draft. Never resolve drafts.
+        zone_request.preview_draft = False
         await _apply_registry(zone_request, auth.tenant)
+        await get_zone_config_store().record_observed(auth.tenant, zone_request.zone_id)
         segment = _segment_for(zone_request)
         cache_key = _cache_key_for(zone_request, segment, auth.tenant)
         try:

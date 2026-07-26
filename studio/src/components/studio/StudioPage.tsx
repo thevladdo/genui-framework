@@ -12,8 +12,9 @@ import {
   type KnowledgeDocument,
   type SearchResult,
 } from '../../lib/api';
-import { clearSession, getSession, type AdminSession } from '../../lib/session';
+import { clearSession, getSession, sessionId, type AdminSession } from '../../lib/session';
 import { ConnectGate } from './ConnectGate';
+import { ConsoleHeader } from './ConsoleHeader';
 
 // Upload zone
 const ACCEPT = '.pdf,.docx,.html,.htm,.txt,.md,.png,.jpg,.jpeg,.webp,.tiff';
@@ -270,12 +271,12 @@ export const StudioPage = () => {
   const refresh = useCallback(async () => {
     if (!session) return;
     setLoading(true);
+    setDocuments([]);
     try {
       setDocuments(await listDocuments(session));
     } catch {
-      // A dead session (expired key, backend down) falls back to the gate
-      clearSession();
-      setSession(null);
+      // A dead session (expired key, backend down) falls back to the gate, or to another connected tenant when there is one
+      setSession(clearSession());
     } finally {
       setLoading(false);
     }
@@ -300,22 +301,12 @@ export const StudioPage = () => {
   }
 
   return (
-    <main className={styles.page} style={{ marginTop: "3rem" }}>
-      <div className={styles.pageHeader}>
-        <span className={styles.connectedTo}>
-          Connected to <code>{session.baseUrl}</code>
-        </span>
-        <button
-          type="button"
-          className={styles.disconnect}
-          onClick={() => {
-            clearSession();
-            setSession(null);
-          }}
-        >
-          Disconnect
-        </button>
-      </div>
+    <main
+      key={sessionId(session)}
+      className={styles.page}
+      style={{ marginTop: "3rem" }}
+    >
+      <ConsoleHeader session={session} onSession={setSession} />
 
       <UploadZone session={session} onUploaded={() => void refresh()} />
       <DocumentsTable documents={documents} loading={loading} onDelete={onDelete} />

@@ -53,6 +53,12 @@ def normalize_url(url: str) -> str:
     return url.strip().rstrip(_TRAILING_PUNCTUATION).rstrip("/") or "/"
 
 
+def is_url_field(key: str) -> bool:
+    """Whether a field name carries a URL (link or image)."""
+    lowered = key.lower()
+    return lowered in _URL_FIELD_NAMES or lowered.endswith(_URL_FIELD_SUFFIXES)
+
+
 def is_image_field(key: str) -> bool:
     """Whether a URL-carrying field name expects an image (src) not a link."""
     lowered = key.lower()
@@ -292,8 +298,7 @@ class UrlGuard:
         Sanitize a string field of a custom component.
         Returns the (possibly cleaned) value, or None to drop the field.
         """
-        lowered_key = key.lower()
-        if lowered_key in _URL_FIELD_NAMES or lowered_key.endswith(_URL_FIELD_SUFFIXES):
+        if is_url_field(key):
             return self.check(value, as_image=is_image_field(key))
 
         stripped = value.strip().lower()

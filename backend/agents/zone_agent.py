@@ -43,9 +43,11 @@ from schemas import (
     zone_output_json_schema,
 )
 from utils.content_policy import policy_for
+from utils.content_policy_store import effective_policy
 from utils.json_stream import ComponentStreamParser
 from utils.numeric_guard import NumericGuard
-from utils.url_guard import UrlGuard, is_image_field, normalize_url
+from utils.redundancy_guard import RedundancyGuard
+from utils.url_guard import UrlGuard, is_image_field, is_url_field, normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +104,38 @@ class ZoneRenderResult:
             "removed_numbers": self.removed_numbers,
             "policy_violations": self.policy_violations,
         }
+
+
+# Field names that can carry the visible wording of an element. Wider than
+# the redundancy guard's label list on purpose: that one answers "is this
+# dict a clickable element", this one "did this text reach the page".
+_SHOWN_TITLE_FIELDS = (
+    "title", "label", "name", "headline", "heading", "quote", "alt",
+)
+
+
+def _collect_shown(node: Any, links: Set[str], titles: Set[str]) -> None:
+    """
+    Collect every URL and every visible title in a component's data.
+
+    Type-agnostic on purpose: the enterprise components carry their links
+    in hero CTAs, plan buttons, grid items and logos, and a per-type scan
+    goes stale every time a component type is added (it did).
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(value, str):
+                if not value.strip():
+                    continue
+                if is_url_field(key):
+                    links.add(normalize_url(value))
+                elif key.lower() in _SHOWN_TITLE_FIELDS:
+                    titles.add(value.strip().lower())
+            else:
+                _collect_shown(value, links, titles)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_shown(item, links, titles)
 
 
 class ZoneAgent:
@@ -268,6 +302,24 @@ CRITICAL RULES:
    a feature list; two stats instead of four. Components are DESIGNED to
    degrade: an omitted field renders as a deliberate layout, while invented
    filler is a lie on the page. Never pad a component to look complete.
+
+11. EACH COMPONENT MUST EARN ITS PLACE, GIVEN THE ONES BEFORE IT: the
+   components you emit are read top to bottom as ONE band of a page, so
+   write each one knowing what the previous ones already say. Before
+   adding component N+1, ask what the visitor learns from it that
+   component N did not already tell them. If the answer is nothing, emit
+   fewer components: a zone with one strong component is a good zone.
+   Concretely:
+   - never repeat the same link under the same wording twice (a second CTA
+     pointing where the first one points, a card whose title is the
+     previous CTA's label): the system removes the repeat, and a component
+     left with nothing else is dropped;
+   - two CTAs are for two DIFFERENT destinations. One destination = one CTA;
+   - if all that is left to say is a single action, that is a "buttons"
+     component, not a card grid or a pricing block. Do not inflate one
+     link into a full-width card;
+   - the same content re-stated as a different component type is still the
+     same content.
 """
 
     def __init__(self, model: str = None, vector_store=None, llm_client=None):
@@ -296,7 +348,8 @@ CRITICAL RULES:
             response_text = await self._call_llm(prompt, custom_types)
             parsed = self._parse_response(response_text)
 
-            return self._validate_and_sanitize(request, retrieved, parsed, custom_types)
+            policy = await effective_policy(request.tenant, settings.content_policy)
+            return self._validate_and_sanitize(request, retrieved, parsed, custom_types, policy)
 
         except Exception as e:
             logger.error(f"Zone rendering failed: {e}")
@@ -329,7 +382,8 @@ CRITICAL RULES:
             prompt = self._build_zone_prompt(request, retrieved, custom_types)
             guard = self._build_url_guard(request, retrieved)
             numeric_guard = self._build_numeric_guard(request, retrieved)
-            policy = policy_for(request.tenant, settings.content_policy)
+            policy = await effective_policy(request.tenant, settings.content_policy)
+            redundancy = RedundancyGuard(enforce=settings.dedup_components_enabled)
 
             parser = ComponentStreamParser()
             emitted: List[Dict[str, Any]] = []
@@ -354,6 +408,9 @@ CRITICAL RULES:
                     if sanitized:
                         sanitized, violations = policy.sanitize_components(sanitized)
                         policy_violations.extend(violations)
+                    if sanitized:
+                        sanitized, redundant = redundancy.sanitize_components(sanitized)
+                        dropped.extend(redundant)
                     if not sanitized:
                         continue
                     if (
@@ -420,6 +477,7 @@ CRITICAL RULES:
         retrieved: List[Any],
         parsed: Dict[str, Any],
         custom_types: Optional[Dict[str, Any]] = None,
+        policy=None,
     ) -> ZoneRenderResult:
         """Turn raw LLM output into a guaranteed-valid render result."""
         # 1. Schema validation, component by component (built-in Pydantic schemas + host-registered JSON Schemas)
@@ -441,11 +499,21 @@ CRITICAL RULES:
         components, removed_numbers = numeric_guard.sanitize_components(components)
 
         # 4. Per-tenant content policy: banned terms drop the component
-        policy = policy_for(request.tenant, settings.content_policy)
+        if policy is None:
+            policy = policy_for(request.tenant, settings.content_policy)
         components, policy_violations = policy.sanitize_components(components)
 
-        # 4b. Component budget: a zone is one band of a host page. 
-        # Extra components are cut (first ones win) and reported. 
+        # 4b. Redundancy: a zone is read as ONE band, so a component may not
+        # spend itself repeating a link the visitor has already been shown.
+        # Before the budget on purpose: a duplicate must not eat the slot of
+        # a component that had something new to say.
+        components, redundant = RedundancyGuard(
+            enforce=settings.dedup_components_enabled
+        ).sanitize_components(components)
+        dropped.extend(redundant)
+
+        # 4c. Component budget: a zone is one band of a host page.
+        # Extra components are cut (first ones win) and reported.
         components, over_budget = apply_component_budget(
             components, request.max_components
         )
@@ -545,6 +613,11 @@ CRITICAL RULES:
         Presence is computed from the actual components (by URL or title);
         missing items are appended as cards to the first bento component
         (or a new one when none exists).
+
+        Presence is read from the whole component tree, not from bento and
+        buttons only: a pinned link the model used as a hero CTA, a pricing
+        plan's button or a content_grid item is on the page, and appending a
+        card for it would show the visitor the same link twice.
         """
         if not pinned_content:
             return components, []
@@ -552,17 +625,7 @@ CRITICAL RULES:
         links: Set[str] = set()
         titles: Set[str] = set()
         for component in components:
-            data = component.get("data", {})
-            if component.get("type") == "bento":
-                for card in data.get("cards", []):
-                    if card.get("link"):
-                        links.add(normalize_url(str(card["link"])))
-                    if card.get("title"):
-                        titles.add(str(card["title"]).strip().lower())
-            elif component.get("type") == "buttons":
-                for button in data.get("buttons", []):
-                    if button.get("url"):
-                        links.add(normalize_url(str(button["url"])))
+            _collect_shown(component.get("data", {}), links, titles)
 
         included: List[str] = []
         missing: List[Dict[str, Any]] = []

@@ -1,8 +1,8 @@
 /**
- * Sidebar controls: one control per theme token.
+ * Sidebar controls: one control per theme token, plus the tenant bar.
  */
 
-import { useId, useRef, useState } from 'react';
+import { lazy, Suspense, useId, useRef, useState } from 'react';
 import styles from './Playground.module.css';
 import {
   FONT_OPTIONS,
@@ -18,7 +18,9 @@ import {
   type ThemeMode,
 } from '../../lib/theme';
 
-// ---------------------------------------------------------------------
+const TenantThemePanel = import.meta.env.DEV
+  ? lazy(() => import('./TenantThemePanel'))
+  : null;
 
 interface ToggleGroupProps {
   label: string;
@@ -71,11 +73,9 @@ const ToggleGroup = ({ label, options, value, onChange, format }: ToggleGroupPro
   );
 };
 
-// ---------------------------------------------------------------------
-
 interface BrandColorProps {
   label: string;
-  value: string; // '' = unset
+  value: string;
   onChange: (value: string) => void;
 }
 
@@ -131,15 +131,14 @@ const BrandColor = ({ label, value, onChange }: BrandColorProps) => {
   );
 };
 
-// ---------------------------------------------------------------------
-
 interface ControlsProps {
   theme: StudioTheme;
   onChange: (patch: Partial<StudioTheme>) => void;
   onSave: () => void;
+  onLoad: (theme: StudioTheme) => void;
 }
 
-export const Controls = ({ theme, onChange, onSave }: ControlsProps) => {
+export const Controls = ({ theme, onChange, onSave, onLoad }: ControlsProps) => {
   const blurId = useId();
   const colorId = useId();
   const hexId = useId();
@@ -302,6 +301,12 @@ export const Controls = ({ theme, onChange, onSave }: ControlsProps) => {
           <span className={styles.fixedValue}>JetBrains Mono (fixed)</span>
         </div>
       </div>
+
+      {TenantThemePanel && (
+        <Suspense fallback={null}>
+          <TenantThemePanel theme={theme} onLoad={onLoad} />
+        </Suspense>
+      )}
 
       <button type="button" className={styles.saveButton} onClick={onSave}>
         Save →

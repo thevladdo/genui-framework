@@ -69,3 +69,31 @@ test('zoneId change refetches with abort; equal-value re-render does not', async
   act(() => root.unmount());
   expect(calls[1].signal.aborted).toBe(true);
 });
+
+const BudgetProbe: React.FC<{ maxComponents?: number }> = ({ maxComponents }) => {
+  useZone({ apiUrl: 'http://backend.test', zoneId: 'z', maxComponents });
+  return null;
+};
+
+test('maxComponents reaches the request body, and only when set', async () => {
+  const before = calls.length;
+  const container = document.createElement('div');
+  const root = createRoot(container);
+
+  // Unset: the key must be absent so the backend keeps its own default
+  // (ZONE_MAX_COMPONENTS or the zone's approved registry config)
+  await act(async () => {
+    root.render(<BudgetProbe />);
+  });
+  await vi.waitFor(() => expect(calls.length).toBe(before + 1));
+  expect(calls[before].body.max_components).toBeUndefined();
+
+  // Set: it travels as max_components, and changing it refetches
+  await act(async () => {
+    root.render(<BudgetProbe maxComponents={4} />);
+  });
+  await vi.waitFor(() => expect(calls.length).toBe(before + 2));
+  expect(calls[before + 1].body.max_components).toBe(4);
+
+  act(() => root.unmount());
+});

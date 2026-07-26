@@ -59,7 +59,6 @@
     0 24px 80px -32px rgba(59, 130, 246, 0.35);
 }
 
-/* CSS-only card art */
 .artPlayground {
   background:
     radial-gradient(720px 420px at 20% 15%, rgba(20, 90, 80, 0.5), transparent 65%),
@@ -67,11 +66,186 @@
     linear-gradient(160deg, #07110f 0%, #050507 70%);
 }
 
-.artStudio {
+.artConsole {
   background:
     radial-gradient(720px 420px at 80% 20%, rgba(37, 65, 178, 0.45), transparent 65%),
     radial-gradient(560px 420px at 15% 95%, rgba(20, 32, 90, 0.6), transparent 70%),
     linear-gradient(200deg, #060a18 0%, #050507 70%);
+}
+
+.consoleTrigger {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.consoleBody {
+  position: absolute;
+  inset: 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 14px;
+}
+
+.consoleBodyOpen {
+  justify-content: flex-start;
+  gap: 16px;
+}
+
+.consoleIndex {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 16px;
+  min-height: 0;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.consoleTitle {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  color: var(--st-text);
+  font-size: clamp(30px, 3.4vw, 44px);
+}
+
+.consoleTitleOpen {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 0.26em;
+  font-size: 15px;
+}
+
+.consoleWord {
+  white-space: nowrap;
+}
+
+.consoleBack {
+  border: 1px solid var(--st-border);
+  background: rgba(0, 0, 0, 0.4);
+  color: var(--st-text-muted);
+  border-radius: 999px;
+  width: 30px;
+  height: 30px;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 160ms var(--st-ease), border-color 160ms var(--st-ease);
+}
+
+.consoleBack:hover {
+  color: var(--st-text);
+  border-color: var(--st-border-strong);
+}
+
+.toolList {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--st-border);
+}
+
+.toolRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--st-border);
+  text-decoration: none;
+  transition: padding-left 220ms var(--st-ease), background 220ms var(--st-ease);
+}
+
+.toolRow:hover,
+.toolRow:focus-visible {
+  padding-left: 10px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.05), transparent 70%);
+}
+
+.toolName {
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--st-text-muted);
+  transition: color 220ms var(--st-ease);
+}
+
+.toolRow:hover .toolName,
+.toolRow:focus-visible .toolName {
+  color: var(--st-text);
+}
+
+.toolMark {
+  font-size: 13px;
+  color: var(--st-text-faint);
+  opacity: 0;
+  transform: translateX(-6px);
+  transition: opacity 220ms var(--st-ease), transform 220ms var(--st-ease);
+}
+
+.toolRow:hover .toolMark,
+.toolRow:focus-visible .toolMark,
+.toolRow[data-pending] .toolMark {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.toolRow[data-pending] .toolMark {
+  color: var(--st-text);
+  animation: toolPending 900ms var(--st-ease) infinite;
+}
+
+@keyframes toolPending {
+
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.toolHintDefault {
+  margin: auto 0 0;
+  min-height: fit-content;
+  font-size: 12.5px;
+  line-height: 1.45;
+  transition: color 220ms var(--st-ease);
+  color: var(--st-text-muted);
+}
+
+.toolHint {
+  margin: auto 0 0;
+  min-height: fit-content;
+  font-size: 12.5px;
+  line-height: 1.45;
+  transition: color 220ms var(--st-ease);
+  color: var(--st-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+  .toolRow,
+  .toolName,
+  .toolMark {
+    transition: none;
+  }
+
+  .toolRow[data-pending] .toolMark {
+    animation: none;
+  }
 }
 
 .cardTag {
@@ -130,10 +304,15 @@
 @media (max-width: 900px) {
   .cards {
     grid-template-columns: 1fr;
+    gap: 56px;
   }
 
   .card {
     min-height: 320px;
+  }
+
+  .artConsole {
+    min-height: 420px;
   }
 }
 

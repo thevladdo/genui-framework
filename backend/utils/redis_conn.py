@@ -10,14 +10,12 @@ permanent `_redis_unavailable` flag. The contract:
 - fail-briefly, not permanently: a failure arms an exponential backoff
   window (1s doubling up to 30s); after it expires the next call probes
   Redis again and the stores return to the shared backend as soon as it
-  answers. In-memory is a shock absorber for blips, not an operating
-  mode — with multiple workers it breaks profiles, rate limits, metrics
-  and single-flight (see roadmap/fondamenta/04-scalabilita-multi-istanza.md).
+  answers.
 
 One handle (one connection pool, one backoff clock, one reported state)
 is shared per URL across all stores in the process: Redis has a single
-real state, so it is probed and reported once — /health reads the same
-handle the stores use.
+real state, so it is probed and reported once.
+/health reads the same handle the stores use.
 """
 
 import logging

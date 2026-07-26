@@ -1,5 +1,5 @@
 /**
- * Admin connect gate, shared by the Content Studio and the Measurement dashboard: one sessionStorage session unlocks both tools.
+ * Admin connect gate, shared by every console tool.
  */
 
 import { useState } from 'react';
@@ -7,7 +7,13 @@ import styles from './Studio.module.css';
 import { verifySession } from '../../lib/api';
 import { normalizeBaseUrl, saveSession, type AdminSession } from '../../lib/session';
 
-export const ConnectGate = ({ onConnected }: { onConnected: (s: AdminSession) => void }) => {
+export const ConnectGate = ({
+  onConnected,
+  onCancel,
+}: {
+  onConnected: (s: AdminSession) => void;
+  onCancel?: () => void;
+}) => {
   const [baseUrl, setBaseUrl] = useState('');
   const [adminKey, setAdminKey] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -26,13 +32,22 @@ export const ConnectGate = ({ onConnected }: { onConnected: (s: AdminSession) =>
       setError('Enter your admin key.');
       return;
     }
+    if (adminKey.includes(':')) {
+      setError(
+        'Enter the key only, without the ":tenant" part. That suffix is backend ' +
+        'config (ADMIN_API_KEYS=key:tenant): the key you send is the part before ' +
+        'the colon, and the tenant comes back from it.',
+      );
+      return;
+    }
 
-    const candidate: AdminSession = { baseUrl: normalized, adminKey: adminKey.trim() };
+    const candidate = { baseUrl: normalized, adminKey: adminKey.trim() };
     setBusy(true);
     try {
-      await verifySession(candidate);
-      saveSession(candidate);
-      onConnected(candidate);
+      const identity = await verifySession(candidate);
+      const connected: AdminSession = { ...candidate, tenant: identity.tenant };
+      saveSession(connected);
+      onConnected(connected);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Connection failed.');
     } finally {
@@ -74,11 +89,37 @@ export const ConnectGate = ({ onConnected }: { onConnected: (s: AdminSession) =>
           ⚠ Never share this key. It grants full read/write access to your knowledge base.
         </p>
 
+        <details className={styles.gateHelp}>
+          <summary>Which tenant will I be editing?</summary>
+          <p>
+            Every admin key is bound to one tenant, and the whole console is
+            scoped to it: what you see and change on any page (Content Studio,
+            Zones, Audit, Content Policy, Measurement) applies only to that
+            tenant. The tenant comes from the key, never from the request.
+          </p>
+          <p>
+            Keys are configured in the backend env as <code>key:tenant</code>{' '}
+            (e.g. <code>sk_live_xyz:acme</code>), so connecting with{' '}
+            <code>sk_live_xyz</code> scopes everything to <code>acme</code>.
+            Type the key only: the <code>:tenant</code> part is config, never
+            part of what you send. A key configured with no{' '}
+            <code>:tenant</code> maps to tenant <code>default</code>. To work on another tenant,
+            connect its key too: the tenant picker in the console header then
+            switches between them, one key each.
+          </p>
+        </details>
+
         {error && <p className={styles.error} role="alert">{error}</p>}
 
         <button type="submit" className={styles.primaryButton} disabled={busy}>
           {busy ? 'Connecting…' : 'Connect →'}
         </button>
+
+        {onCancel && (
+          <button type="button" className={styles.disconnect} onClick={onCancel}>
+            Cancel
+          </button>
+        )}
       </form>
 
       <p className={styles.gateFootnote}>

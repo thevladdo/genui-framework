@@ -65,6 +65,13 @@ export interface GenUIZoneProps {
   preferredComponentType?: 'bento' | 'chart' | 'text' | 'buttons' | (string & {});
   /** Maximum number of items to display */
   maxItems?: number;
+  /**
+   * Component budget for this zone (1..10). A zone is one band of a host
+   * page, not a page: extra components are cut server-side and reported
+   * in meta.sanitization.dropped_components. Unset = the backend default
+   * (ZONE_MAX_COMPONENTS, 2) or the zone's approved registry config.
+   */
+  maxComponents?: number;
 
   //  User Context 
   /** User ID for profile lookup */
@@ -161,6 +168,7 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
   customComponents,
   preferredComponentType,
   maxItems = 6,
+  maxComponents,
   userId = 'anonymous',
   currentPage,
   pageMetadata,
@@ -201,6 +209,7 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
     customComponents,
     preferredComponentType,
     maxItems,
+    maxComponents,
     userId,
     currentPage,
     pageMetadata,

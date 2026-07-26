@@ -170,6 +170,30 @@ export const toGenUITheme = (theme: StudioTheme): GenUITheme => {
   return result;
 };
 
+// Bridge to the per-tenant theme store
+export const themeTokens = (theme: StudioTheme): Record<string, string> => {
+  const tokens: Record<string, string> = {};
+  Object.entries(toGenUITheme(theme)).forEach(([key, value]) => {
+    tokens[key] = String(value);
+  });
+  return tokens;
+};
+
+export const themeFromTokens = (tokens: Record<string, string>): StudioTheme =>
+  themeFromQuery(new URLSearchParams(tokens).toString());
+
+// A stored theme as a PARTIAL GenUITheme, ready for the theme prop.
+export const genUIThemeFromTokens = (
+  tokens: Record<string, string>,
+): GenUITheme => {
+  const validated = toGenUITheme(themeFromTokens(tokens));
+  const partial: Record<string, unknown> = {};
+  (Object.keys(validated) as Array<keyof GenUITheme>).forEach((key) => {
+    if (tokens[key] === String(validated[key])) partial[key] = validated[key];
+  });
+  return partial as GenUITheme;
+};
+
 // Exports
 export const exportAsTS = (theme: StudioTheme): string => {
   const entries = Object.entries(toGenUITheme(theme)).map(

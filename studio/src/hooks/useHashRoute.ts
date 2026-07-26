@@ -10,6 +10,9 @@ export type RoutePath =
   | "/studio"
   | "/measure"
   | "/preview"
+  | "/zones"
+  | "/audit"
+  | "/policy"
   | "/about";
 
 export interface HashRoute {
@@ -25,6 +28,9 @@ const parseHash = (): HashRoute => {
       rawPath === "/studio" ||
       rawPath === "/measure" ||
       rawPath === "/preview" ||
+      rawPath === "/zones" ||
+      rawPath === "/audit" ||
+      rawPath === "/policy" ||
       rawPath === "/about"
       ? rawPath
       : "/";

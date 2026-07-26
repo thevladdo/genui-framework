@@ -1,5 +1,5 @@
 """
-Tests for the zone config registry (roadmap S1): config as data.
+Tests for the zone config registry: config as data.
 
 The invariant: anything that must be approved, versioned, or edited by
 non-developers (prompts, pinned content, rendering constraints) must be

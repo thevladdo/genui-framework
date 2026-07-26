@@ -13,7 +13,11 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from api.deps import get_profile_store
+from api.audit_router import router as audit_router
+from api.content_policy_router import router as content_policy_router
 from api.events_router import router as events_router
+from api.theme_router import router as theme_router
+from api.zone_config_router import router as zone_config_router
 from api.zone_router import router as zone_router
 from pydantic import BaseModel, Field
 
@@ -201,8 +205,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(zone_config_router)
 app.include_router(zone_router)
 app.include_router(events_router)
+app.include_router(audit_router)
+app.include_router(content_policy_router)
+app.include_router(theme_router)
 
 
 @app.exception_handler(AuthError)
@@ -322,6 +330,17 @@ async def metrics(auth: AuthContext = Depends(require_admin)):
         extra_gauges={"genui_llm_configured": 1.0 if llm_configured() else 0.0}
     )
     return PlainTextResponse(text, media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
+@app.get("/api/v1/whoami")
+async def whoami(auth: AuthContext = Depends(require_admin)):
+    """
+    The tenant an admin key resolves to (the console shows it, so an
+    operator sees which tenant they are editing). The tenant always comes
+    from the key, never from the request; a key configured without a
+    ':tenant' suffix maps to 'default'.
+    """
+    return {"tenant": auth.tenant, "is_admin": auth.is_admin}
 
 
 @app.post("/api/v1/query", response_model=QueryResponse)

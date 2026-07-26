@@ -1,5 +1,5 @@
 """
-Tests for the cost controls (roadmap WP-07): a public client key must
+Tests for the cost controls: a public client key must
 not be able to convert traffic into LLM spend without a limit.
 
 The three verified amplifiers, and their guards:

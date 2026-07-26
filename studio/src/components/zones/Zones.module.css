@@ -1,0 +1,86 @@
+.zoneRow {
+  cursor: pointer;
+}
+
+.zoneRow:hover td {
+  background: color-mix(in srgb, var(--st-accent) 6%, transparent);
+}
+
+.zoneRowSelected td {
+  background: color-mix(in srgb, var(--st-accent) 10%, transparent);
+}
+
+.statusPill {
+  font-family: var(--st-font-mono);
+  font-size: 0.68rem;
+  border-radius: var(--st-radius-sm);
+  padding: 3px 8px;
+  border: 1px solid var(--st-border);
+  color: var(--st-text-muted);
+  white-space: nowrap;
+}
+
+.statusApproved {
+  color: var(--st-success);
+  border-color: color-mix(in srgb, var(--st-success) 40%, transparent);
+  background: color-mix(in srgb, var(--st-success) 10%, transparent);
+}
+
+.statusDraft {
+  color: var(--st-warning);
+  border-color: color-mix(in srgb, var(--st-warning) 40%, transparent);
+  background: color-mix(in srgb, var(--st-warning) 10%, transparent);
+}
+
+.draftBadge {
+  margin-left: 6px;
+  font-size: 0.66rem;
+  color: var(--st-warning);
+  font-family: var(--st-font-mono);
+}
+
+.newZoneRow {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.newZoneRow input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.versionChips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+}
+
+.actionsRow {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 18px;
+}
+
+.numberFields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 560px) {
+  .numberFields {
+    grid-template-columns: 1fr;
+  }
+}
+
+.previewNote {
+  color: var(--st-text-muted);
+  font-size: 0.85rem;
+  margin: 24px 0 0;
+}
