@@ -124,6 +124,23 @@ class AgentOrchestrator:
         self.behave_agent = behave_agent or create_behave_agent()
         self.parallel_execution = parallel_execution
     
+    def planned_generations(self, behavior_data: Optional[Dict[str, Any]] = None) -> int:
+        """
+        Model calls one process() will make: one per agent that runs.
+
+        Response and profile agents run on every turn; the behave agent
+        only when the request carries behavior data. Callers charging
+        the LLM budget need this BEFORE spending, so it lives next to
+        the fan-out it counts: an agent added below without a number
+        here would go on being spent and never be charged.
+
+        The response agent may run extra rounds when the model calls the
+        search tool, so this is the floor, not a ceiling. It is charged
+        as a floor on purpose: the alternative is charging for rounds
+        that usually do not happen.
+        """
+        return 3 if behavior_data else 2
+
     async def process(
         self,
         query: str,

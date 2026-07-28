@@ -8,6 +8,30 @@ The entire history lives below, newest first.
 
 ## [Unreleased]
 
+### The health probe was the most expensive route in the process
+
+The search path was already asynchronous, so the RAG the product actually runs was never the problem. The problem was `/health` and `/ready`. Both rebuilt an entire vector store per call, and building one means collection bring-up, dimension validation and an embedding client, all over the synchronous Qdrant client, all on the event loop. Three to four blocking round-trips per probe, on every replica, every few seconds. A slow Qdrant did not degrade the service: it stalled the workers through the very probes meant to notice, and an orchestrator then killed processes that were serving fine. That is the exact inverse of what a probe is for.
+
+- **The store is built once per process.** Same shape as the orchestrator singleton and the embedding client: the expensive, stateful part is constructed on first use and reused. The agents share it too, so a zone render, a chat and a document listing now talk to one connection instead of three.
+- **A failed first construction is not remembered.** A Qdrant that is not up yet raises, the caller reports the dependency as down, and the next call tries again. Caching that failure would pin the process to a lie for its whole lifetime, which is how a five minute outage becomes a permanent one.
+- **The connection is reused, the answer is not.** `/health` still makes a live round-trip on every call, because that is the only thing that can tell a healthy dependency from a dead one. A reused handle must never be able to report health it did not verify. With Qdrant unreachable the body still says `qdrant_connected: false` and `degraded`, and the health, ready and live contract is unchanged: Qdrant down is degradation, not unreadiness, so the replica stays in rotation and keeps serving from cache.
+- **Nothing synchronous is left on the event loop.** The probe offloads explicitly. The document routes that had nothing to await are simply declared synchronous and the framework runs them in its threadpool, which is the shorter diff and the same result. The file upload route keeps its `await` and hands off the blocking half. Admin routes are lower frequency, not lower risk: one slow listing on the loop stalls every render the worker is serving beside it.
+- **`QDRANT_TIMEOUT_SECONDS`, default 2**, matching the cap already on the Redis handle. A hung vector database costs one slow operation instead of a stuck worker. Raise it for bulk indexing into a remote Qdrant; the upload response reports `chunks_indexed`, so a cap set too tight is visible rather than silent.
+- **One ingest path instead of three.** Chunking and indexing lived copied in the two upload routes and the background task, each free to drift on how it stays off the loop. It is one function now, and the background task is synchronous so it runs in the threadpool like the rest.
+- **The proof is a test, not a claim.** A fake that sleeps synchronously while another coroutine has to keep advancing: 26 ticks with the offload, zero without it. Plus the store built once, the failure not cached, and health still truthful with Qdrant refusing connections.
+- **The unused synchronous `search()` wrapper is gone.** No caller, and with a shared store its `asyncio.run` would have handed the async client a second event loop. Dead code whose only remaining job was to be a trap.
+
+### The chat was outside the cap that was supposed to cover it
+
+The cost controls protected the zone path and stopped at its edge. Every chat message starts two model calls, three when the request carries behavior data, and not one of them touched the per-tenant budget. With the default limit of 120 requests a minute and a `pk_` key that ships inside the page, that was room for roughly 21,600 generations an hour on the operator's key, counted nowhere. The README promised that a public credential cannot convert traffic into spend, so either the chat came under the promise or the promise had to be rewritten.
+
+- **A chat message is charged for the generations it makes.** `POST /query` now spends 2 units of `LLM_BUDGET_PER_HOUR`, or 3 when it carries behavior data, because that is how many agents run. A cap that counts one where the system spends three is worse than no cap: it reads as protection and is not.
+- **The count lives next to the fan-out that produces it**, in the orchestrator, so an agent added to the parallel run cannot be spent without being counted. A test runs the real agents against a counting client and fails if the declared number and the calls made ever disagree.
+- **The budget moved into `api/deps.py`**, next to the other shared singletons, and both routers read it from there. It used to live inside the zone router, and the alternative was one router importing another to reach it. Behavior on the zone path is unchanged, one unit per generation, admin exempt, cache hits free.
+- **Over the cap, chat answers stop.** A zone render degrades invisibly because a cached copy exists. The chat has none, and the answer itself is the expensive call of the three, so dropping the accessory analyses would save the small half and still spend the large one. The request returns 429 and names the knob to turn.
+- **Admin keys stay exempt on both surfaces**, so an operator's own traffic never competes with the cap protecting them.
+- **The three agent fan-out stays as it is.** The profile analysis is what makes a profile progressive rather than a form someone fills in, the behavior agent already runs only when the page sends behavior data, and cutting either per message would trade a visible cost for an invisible loss of the thing the product sells. What was missing was not restraint, it was the meter.
+
 ### The compliance story gets a public URL
 
 The four statements in `deploy/` are written for a legal team and read by whoever already cloned the repository. The person deciding whether this project is worth an hour lands on the Studio instead, and left without knowing any of it exists.

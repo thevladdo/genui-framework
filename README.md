@@ -1142,6 +1142,12 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 4
 - Socket timeouts are capped (~2s), so a hung Redis costs one slow operation, not a hung request.
 - The in-memory fallbacks are bounded (2000 entries for renders and profiles, oldest evicted): a long outage on a multi-worker deployment means _reduced consistency_, not memory exhaustion — but it is a shock absorber for blips, **not an operating mode**. Fix the Redis, don't run on the fallback.
 
+**What a slow Qdrant does.** The same rule, applied to the vector database. Search runs on the async client, and every remaining Qdrant call (health probe, document upload, listing, deletion, stats) runs in the worker's threadpool, so a slow answer never occupies the event loop that is serving renders next to it. The connection is opened once per process instead of once per request, but the health answer is still a live round-trip: a reused connection can report `qdrant_connected: false` and it will, because it asks. `QDRANT_TIMEOUT_SECONDS` (default `2`, matching the Redis socket cap) bounds every call, so an unresponsive Qdrant costs one slow operation. Raise it if you bulk-index large documents into a remote instance; the upload response reports `chunks_indexed`, so a cap set too tight shows up there instead of hiding.
+
+| Knob                     | Default | Meaning                                                              |
+| ------------------------ | ------- | -------------------------------------------------------------------- |
+| `QDRANT_TIMEOUT_SECONDS` | `2`     | Per-call timeout for every Qdrant request (probe, index, list, search) |
+
 ---
 
 ## 🚚 Deploying for a Customer
@@ -1168,17 +1174,18 @@ With BYOK the LLM bill is on **your** key, and the client `pk_` key is public (i
 - **`cacheStrategy="live"` is admin-only.** A request body field must not let any visitor force one LLM call per page load. Client keys sending `"live"` get a 403; the segment cache serves them instead.
 - **Cold misses are single-flight.** When a popular segment expires, concurrent requests coalesce on one generation (the same lock that guards stale refreshes). The extra requests wait briefly and are served the winner's render (`meta.cache.status: "coalesced"`).
 - **Batches are capped and charged for what they spend.** `/zone/batch-render` accepts at most `ZONE_BATCH_MAX` zones (413 above) and a batch of N zones consumes N rate-limit slots, not 1.
-- **Per-tenant LLM budget.** `LLM_BUDGET_PER_HOUR` caps how many LLM generations one tenant can trigger per hour, across all workers (same shared Redis store as the rate limit). Over the cap: cached renders keep being served (stale entries simply stop refreshing), new generations return 429. Admin-triggered renders (warmup, admin `"live"`) are exempt, so pre-warming after a deploy never competes with the abuse cap.
+- **Per-tenant LLM budget, on every surface that spends.** `LLM_BUDGET_PER_HOUR` caps how many LLM generations one tenant can trigger per hour, across all workers (same shared Redis store as the rate limit). It covers zone renders **and** chat: one `POST /query` is charged for the model calls it actually makes, two per message and three when the request carries behavior data, because the chat fans out to the response, profile and behavior agents. Over the cap: cached renders keep being served (stale entries simply stop refreshing), new generations return 429. Admin-triggered renders (warmup, admin `"live"`) and admin chat are exempt, so pre-warming after a deploy never competes with the abuse cap.
+- **Over the cap, chat stops instead of degrading.** A zone render has a cached copy to fall back on, so its degradation is invisible. A chat answer has none: the answer itself is the expensive call, and serving it without the accessory analyses would save the small half of the cost while spending the large one. So the request returns 429 and says which knob to turn.
 - **Provider timeout.** `LLM_TIMEOUT_SECONDS` bounds every LLM and embedding call; a slow or cold provider endpoint fails the request instead of holding it (and a worker slot) open for the SDK default of 10 minutes.
 
 | Knob                    | Default   | Meaning                                                           |
 | ----------------------- | --------- | ----------------------------------------------------------------- |
-| `LLM_BUDGET_PER_HOUR`   | `0` (off) | Max LLM generations per tenant per hour; set it in production     |
+| `LLM_BUDGET_PER_HOUR`   | `0` (off) | Max LLM generations per tenant per hour, zones and chat together; set it in production |
 | `ZONE_BATCH_MAX`        | `10`      | Max zones per batch-render request                                |
 | `LLM_TIMEOUT_SECONDS`   | `60`      | Per-call provider timeout (LLM + embeddings); empty = SDK default |
 | `RATE_LIMIT_PER_MINUTE` | `120`     | Requests per client key per minute (batches count as N)           |
 
-Sizing `LLM_BUDGET_PER_HOUR`: at steady state generations are rare (misses on new segments plus one refresh per cached key per `ZONE_CACHE_FRESH_TTL` window). Count your zones times your active segments, add headroom for a cold start, and remember the budget is per tenant, not per key. The rate limit protects request volume; the budget protects the LLM wallet. They are independent caps and the stricter one wins.
+Sizing `LLM_BUDGET_PER_HOUR`: at steady state zone generations are rare (misses on new segments plus one refresh per cached key per `ZONE_CACHE_FRESH_TTL` window). Count your zones times your active segments, add headroom for a cold start, then add the chat: chat is not cached, so every message spends two or three generations of the same budget. Remember the budget is per tenant, not per key. The rate limit protects request volume; the budget protects the LLM wallet. They are independent caps and the stricter one wins.
 
 > The quota exists because "no client `live`" alone is not enough: `page_metadata` is client-controlled and part of the cache key, so a hostile visitor can rotate a nonce to force a miss on every request. The budget caps what any such trick can spend, no matter how the generation was triggered.
 

@@ -34,6 +34,7 @@ try:  # app-level deps: available in the backend venv, not in the shell python
     from fastapi.testclient import TestClient
 
     import api.main as main
+    import api.deps as deps
     import api.zone_router as zone_router
     import auth.dependencies as auth_deps
     import metrics.ops as ops_module
@@ -293,7 +294,7 @@ class ObservabilityAppTest(unittest.TestCase):
         self._saved = (
             ops_module._ops,
             zone_router._zone_cache,
-            zone_router._llm_budget,
+            deps._llm_budget,
             auth_deps._rate_limiter,
             auth_deps._registry,
             settings.redis_url,
@@ -303,7 +304,7 @@ class ObservabilityAppTest(unittest.TestCase):
         )
         ops_module._ops = OpsMetrics()  # in-memory, isolated per test
         zone_router._zone_cache = ZoneRenderCache()
-        zone_router._llm_budget = None
+        deps._llm_budget = None
         auth_deps._rate_limiter = None
         auth_deps._registry = None
         settings.redis_url = None
@@ -315,7 +316,7 @@ class ObservabilityAppTest(unittest.TestCase):
         (
             ops_module._ops,
             zone_router._zone_cache,
-            zone_router._llm_budget,
+            deps._llm_budget,
             auth_deps._rate_limiter,
             auth_deps._registry,
             settings.redis_url,

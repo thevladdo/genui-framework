@@ -29,6 +29,7 @@ try:
     from agents.response_agent import ResponseAgent
     from agents.zone_agent import ZoneAgent, ZoneRenderRequest as AgentZoneRequest
     from api.zone_router import ZoneRenderRequest as ApiZoneRequest
+    import api.deps as deps
     import api.zone_router as zone_router
     from auth.keys import AuthContext
     from config import settings
@@ -347,7 +348,7 @@ class TestServingPathsDisclosure(unittest.TestCase):
     def setUp(self):
         self._saved = (
             zone_router._zone_cache,
-            zone_router._llm_budget,
+            deps._llm_budget,
             auth_deps._rate_limiter,
             settings.zone_cache_enabled,
             settings.holdout_percent,
@@ -355,7 +356,7 @@ class TestServingPathsDisclosure(unittest.TestCase):
             settings.llm_budget_per_hour,
         )
         zone_router._zone_cache = ZoneRenderCache()  # fresh, in-memory
-        zone_router._llm_budget = None
+        deps._llm_budget = None
         auth_deps._rate_limiter = RateLimiter(limit=1000, window_seconds=60)
         settings.zone_cache_enabled = True
         settings.holdout_percent = 0.0
@@ -377,7 +378,7 @@ class TestServingPathsDisclosure(unittest.TestCase):
         zone_router.get_zone_agent = self._orig_agent
         (
             zone_router._zone_cache,
-            zone_router._llm_budget,
+            deps._llm_budget,
             auth_deps._rate_limiter,
             settings.zone_cache_enabled,
             settings.holdout_percent,

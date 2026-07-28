@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Form, Query, Request, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from api.deps import get_profile_store
+from api.deps import budget_tenant, charge_llm_budget, get_profile_store
 from api.audit_router import router as audit_router
 from api.content_policy_router import router as content_policy_router
 from api.events_router import router as events_router
@@ -38,7 +38,7 @@ from config import settings
 from agents import get_orchestrator, OrchestratorResult
 from metrics.ops import get_ops_metrics
 from profiles import is_identified
-from rag import create_chunker, create_vector_store
+from rag import create_chunker, get_vector_store
 from schemas.components import GENUI_CONTRACT_VERSION
 from utils.redis_conn import shared_redis
 from utils.tracing import span
@@ -284,14 +284,26 @@ async def http_metrics_middleware(request: Request, call_next):
     return response
 
 
-async def _dependency_health() -> HealthResponse:
-    """One truthful snapshot of the real dependencies (Qdrant, Redis, LLM)."""
+def _qdrant_reachable() -> bool:
+    """
+    Ask Qdrant, now. The connection is reused across probes but the
+    answer never is: a live round-trip is the only thing that can tell a
+    healthy dependency from a dead one.
+    """
     try:
-        vector_store = create_vector_store()
-        qdrant_connected = bool(vector_store.get_collection_stats())
+        return bool(get_vector_store().get_collection_stats())
     except Exception as e:
         logger.warning(f"Qdrant health check failed: {e}")
-        qdrant_connected = False
+        return False
+
+
+async def _dependency_health() -> HealthResponse:
+    """One truthful snapshot of the real dependencies (Qdrant, Redis, LLM)."""
+    # The Qdrant client is synchronous: on the event loop it would let a
+    # slow dependency stall every request this worker is serving, through
+    # the very probes that exist to notice it. A probe must be able to
+    # report "sick" without making the process sick.
+    qdrant_connected = await asyncio.to_thread(_qdrant_reachable)
 
     # Probe the same handle the stores use.
     redis_status = await shared_redis(settings.redis_url).probe()
@@ -388,8 +400,14 @@ async def process_query(
 
     check_user_access(auth, request.user_id, user_token)
 
+    orchestrator = get_orchestrator()
+
+    await charge_llm_budget(
+        budget_tenant(auth),
+        cost=orchestrator.planned_generations(request.behavior_data),
+    )
+
     try:
-        orchestrator = get_orchestrator()
         profile_store = get_profile_store()
 
         # Server-side profile is authoritative, the client copy seeds it
@@ -489,47 +507,63 @@ async def process_query(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _chunk_and_index(
+    text: str,
+    metadata: Dict[str, Any],
+    source_name: str,
+    tenant: str,
+) -> tuple[int, int]:
+    """
+    The blocking half of an ingest (chunking, embedding, Qdrant upsert),
+    in one place so every caller keeps it off the event loop the same
+    way. Returns (chunks created, chunks indexed).
+    """
+    metadata.setdefault("indexed_at", datetime.now(timezone.utc).isoformat())
+    chunks = create_chunker().chunk_text(
+        text=text,
+        metadata=metadata,
+        source_name=source_name,
+    )
+    return len(chunks), get_vector_store().index_chunks(chunks, tenant=tenant)
+
+
+# Document routes talk to Qdrant with the synchronous client, so the
+# ones that have nothing to await are declared `def`: the framework runs
+# them in its threadpool and the loop stays free. Lower frequency than a
+# probe, identical effect on the worker serving renders next to them.
 @app.post("/api/v1/documents")
-async def upload_document(
+def upload_document(
     request: DocumentUploadRequest,
     background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(require_admin),
 ):
     """
     Upload a document to the knowledge base.
-    
+
     The document will be chunked semantically and indexed in Qdrant.
     Processing happens in the background.
     """
     try:
-        chunker = create_chunker()
-        vector_store = create_vector_store()
-
         # Process synchronously for small documents, async for large
         content_length = len(request.content)
 
         if content_length < 10000:
-            request.metadata.setdefault(
-                "indexed_at", datetime.now(timezone.utc).isoformat()
+            source_name = request.metadata.get("title", "uploaded_document")
+            chunk_count, indexed = _chunk_and_index(
+                request.content, request.metadata, source_name, auth.tenant
             )
-            chunks = chunker.chunk_text(
-                text=request.content,
-                metadata=request.metadata,
-                source_name=request.metadata.get("title", "uploaded_document"),
-            )
-            indexed = vector_store.index_chunks(chunks, tenant=auth.tenant)
 
             get_audit_logger().log(
                 "document_upload",
                 tenant=auth.tenant,
                 key=auth.key_fingerprint,
-                source=request.metadata.get("title", "uploaded_document"),
+                source=source_name,
                 chunks_indexed=indexed,
             )
 
             return {
                 "status": "completed",
-                "chunks_created": len(chunks),
+                "chunks_created": chunk_count,
                 "chunks_indexed": indexed,
             }
         else:
@@ -579,24 +613,17 @@ async def upload_document_file(
         raise HTTPException(status_code=501, detail=str(e))
 
     try:
-        chunker = create_chunker()
-        vector_store = create_vector_store()
-
-        metadata: Dict[str, Any] = {
-            "title": source_name,
-            "indexed_at": datetime.now(timezone.utc).isoformat(),
-        }
+        metadata: Dict[str, Any] = {"title": source_name}
         if url:
             metadata["url"] = url
         if file.filename:
             metadata["file_type"] = file.filename.rsplit(".", 1)[-1].lower()
 
-        chunks = chunker.chunk_text(
-            text=text,
-            metadata=metadata,
-            source_name=source_name,
+        # This route has to await the upload, so it stays a coroutine and
+        # hands the blocking part to a thread explicitly
+        chunk_count, indexed = await asyncio.to_thread(
+            _chunk_and_index, text, metadata, source_name, auth.tenant
         )
-        indexed = vector_store.index_chunks(chunks, tenant=auth.tenant)
 
         get_audit_logger().log(
             "document_upload",
@@ -614,7 +641,7 @@ async def upload_document_file(
             "source": source_name,
             "extractor": extractor,
             "extracted_chars": len(text),
-            "chunks_created": len(chunks),
+            "chunks_created": chunk_count,
             "chunks_indexed": indexed,
         }
 
@@ -623,38 +650,32 @@ async def upload_document_file(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _process_document_background(
+def _process_document_background(
     content: str,
     metadata: Dict[str, Any],
     tenant: str,
 ):
-    """Background task for processing large documents."""
+    """Background task for processing large documents (threadpool)."""
     try:
-        chunker = create_chunker()
-        vector_store = create_vector_store()
-
-        metadata.setdefault("indexed_at", datetime.now(timezone.utc).isoformat())
-        chunks = chunker.chunk_text(
-            text=content,
-            metadata=metadata,
-            source_name=metadata.get("title", "uploaded_document"),
+        chunk_count, _ = _chunk_and_index(
+            content,
+            metadata,
+            metadata.get("title", "uploaded_document"),
+            tenant,
         )
-        vector_store.index_chunks(chunks, tenant=tenant)
-
-        logger.info(f"Background document processing completed: {len(chunks)} chunks")
+        logger.info(f"Background document processing completed: {chunk_count} chunks")
 
     except Exception as e:
         logger.error(f"Background document processing failed: {e}")
 
 
 @app.get("/api/v1/documents")
-async def list_documents(auth: AuthContext = Depends(require_admin)):
+def list_documents(auth: AuthContext = Depends(require_admin)):
     """
     List the documents in the tenant's knowledge base, with chunk counts.
     """
     try:
-        vector_store = create_vector_store()
-        documents = vector_store.list_documents(tenant=auth.tenant)
+        documents = get_vector_store().list_documents(tenant=auth.tenant)
         return {
             "tenant": auth.tenant,
             "documents": documents,
@@ -682,7 +703,8 @@ async def search_documents(
     Useful for content debugging: "why does the AI show X?".
     """
     try:
-        vector_store = create_vector_store()
+        # Search itself is asynchronous end to end; only building the store (first use, or a retry after Qdrant was down) can block
+        vector_store = await asyncio.to_thread(get_vector_store)
         results = await vector_store.search_async(
             query=request.query,
             top_k=request.top_k,
@@ -707,7 +729,7 @@ async def search_documents(
 
 
 @app.delete("/api/v1/documents/{source_name}")
-async def delete_document(
+def delete_document(
     source_name: str,
     auth: AuthContext = Depends(require_admin),
 ):
@@ -715,8 +737,7 @@ async def delete_document(
     Delete a document from the tenant's knowledge base by source name.
     """
     try:
-        vector_store = create_vector_store()
-        success = vector_store.delete_by_source(source_name, tenant=auth.tenant)
+        success = get_vector_store().delete_by_source(source_name, tenant=auth.tenant)
 
         if success:
             get_audit_logger().log(
@@ -735,13 +756,12 @@ async def delete_document(
 
 
 @app.get("/api/v1/documents/stats")
-async def get_document_stats(auth: AuthContext = Depends(require_admin)):
+def get_document_stats(auth: AuthContext = Depends(require_admin)):
     """
     Get statistics about the document knowledge base (tenant-aware).
     """
     try:
-        vector_store = create_vector_store()
-        stats = vector_store.get_collection_stats(tenant=auth.tenant)
+        stats = get_vector_store().get_collection_stats(tenant=auth.tenant)
 
         return {
             "status": "ok",

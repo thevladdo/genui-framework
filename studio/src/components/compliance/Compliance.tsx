@@ -236,9 +236,9 @@ export const Compliance = () => {
           AI ACT AND GDPR
         </span>
         <h1 className={`st-display ${styles.heroTitle}`}>
-          Compliance is not a claim.
+          Compliance<br /> isn't just a label.
           <br />
-          It is a list of mechanisms.
+          It's built on real, <br />working processes.
         </h1>
         <p className={styles.heroLead}>
           The transparency duties of the AI Act and the obligations of the GDPR land on

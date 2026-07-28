@@ -16,7 +16,7 @@ import json
 
 from config import settings
 from llm import create_llm_client
-from rag import create_vector_store, build_context_from_results
+from rag import get_vector_store, build_context_from_results
 from schemas import component_to_dict, validate_components
 from utils.content_policy_store import effective_policy
 from utils.disclosure import (
@@ -323,7 +323,7 @@ security regulations. The implementation is handled by your technical team..."
             llm_client: LLMChatClient instance (created if not provided)
         """
         self.model = model or settings.response_model
-        self.vector_store = vector_store or create_vector_store()
+        self.vector_store = vector_store or get_vector_store()
         self.llm = llm_client or create_llm_client(self.model)
 
     def _build_query_prompt(

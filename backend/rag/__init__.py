@@ -12,6 +12,7 @@ from .vector_store import (
     QdrantVectorStore,
     RetrievalResult,
     create_vector_store,
+    get_vector_store,
     build_context_from_results,
 )
 
@@ -22,5 +23,6 @@ __all__ = [
     "QdrantVectorStore",
     "RetrievalResult",
     "create_vector_store",
+    "get_vector_store",
     "build_context_from_results",
 ]

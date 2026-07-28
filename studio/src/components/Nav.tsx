@@ -104,7 +104,7 @@ export const Nav = ({ path }: NavProps) => {
   return (
     <header className={styles.nav}>
       <a href="#/" className={styles.wordmark}>
-        <img src='./GenUI_Logo.png' style={{ maxHeight: "30px", marginRight: "15px" }} />
+        <img src='./GenUI_Logo.png' alt='GenUI logo abstraction - just a decorative image' style={{ maxHeight: "30px", marginRight: "15px" }} />
         GenUI&nbsp;<span>Studio</span>
       </a>
 

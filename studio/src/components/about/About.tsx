@@ -120,7 +120,7 @@ export const About = () => {
       >
         <span className={styles.eyebrow}>THE VISION</span>
         <h1 className={`st-display ${styles.heroTitle}`}>
-          The web still shows
+          The web <br className='hide-lg show-sm' /> still shows
           <br />
           everyone the{' '}
           <span className={styles.strike}>same thing</span>.

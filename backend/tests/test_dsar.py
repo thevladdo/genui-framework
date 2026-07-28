@@ -28,6 +28,7 @@ try:
     from fastapi.testclient import TestClient
 
     import api.main as main
+    import api.deps as deps
     import api.zone_router as zone_router
     import auth.dependencies as auth_deps
     from api.zone_router import ZoneRenderRequest
@@ -90,14 +91,14 @@ class TestAnonymousRenderCreatesNoState(unittest.TestCase):
         )
         self._saved = (
             zone_router._zone_cache,
-            zone_router._llm_budget,
+            deps._llm_budget,
             settings.zone_cache_enabled,
             settings.redis_url,
             settings.llm_budget_per_hour,
             settings.holdout_percent,
         )
         zone_router._zone_cache = ZoneRenderCache()
-        zone_router._llm_budget = None
+        deps._llm_budget = None
         settings.zone_cache_enabled = True
         settings.redis_url = None
         settings.llm_budget_per_hour = 0
@@ -124,7 +125,7 @@ class TestAnonymousRenderCreatesNoState(unittest.TestCase):
         zone_router._render_live = self._orig_live
         (
             zone_router._zone_cache,
-            zone_router._llm_budget,
+            deps._llm_budget,
             settings.zone_cache_enabled,
             settings.redis_url,
             settings.llm_budget_per_hour,

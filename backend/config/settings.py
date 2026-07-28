@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
     qdrant_collection: str = "genui_documents"
+    qdrant_timeout_seconds: int = Field(
+        default=2,
+        description="Per-call timeout for Qdrant requests, matching the cap "
+                    "on the Redis handle: a hung vector database costs one "
+                    "slow operation, never a stuck worker. Raise it when "
+                    "bulk-indexing into a remote Qdrant (the upload response "
+                    "reports chunks_indexed, so a too-tight cap is visible)"
+    )
     
     # RAG Configuration
     chunk_size: int = 512

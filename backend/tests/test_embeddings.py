@@ -117,6 +117,7 @@ def fake_settings(**overrides):
         qdrant_host="localhost",
         qdrant_port=6333,
         qdrant_collection="test_collection",
+        qdrant_timeout_seconds=2,
         top_k_retrieval=5,
         similarity_threshold=0.35,
         use_semantic_chunking=True,
@@ -391,8 +392,9 @@ def _collection_info(size):
 
 def fake_qdrant_modules(server):
     class FakeQdrantClient:
-        def __init__(self, host=None, port=None):
+        def __init__(self, host=None, port=None, timeout=None):
             self._server = server
+            self.timeout = timeout
 
         def get_collections(self):
             return _FakeCollectionsList(list(self._server.collections))
@@ -419,8 +421,9 @@ def fake_qdrant_modules(server):
             return SimpleNamespace(count=0)
 
     class FakeAsyncQdrantClient:
-        def __init__(self, host=None, port=None):
+        def __init__(self, host=None, port=None, timeout=None):
             self._server = server
+            self.timeout = timeout
 
         async def query_points(self, **kwargs):
             self._server.searches.append(kwargs)

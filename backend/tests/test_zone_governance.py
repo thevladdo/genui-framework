@@ -207,7 +207,7 @@ class GovernanceRouterBase(unittest.TestCase):
     def setUp(self):
         self._saved = (
             zone_router._zone_cache,
-            zone_router._llm_budget,
+            deps._llm_budget,
             deps._zone_config_store,
             auth_deps._rate_limiter,
             auth_deps._audit_logger,
@@ -217,7 +217,7 @@ class GovernanceRouterBase(unittest.TestCase):
             settings.redis_url,
         )
         zone_router._zone_cache = ZoneRenderCache()  # fresh, in-memory
-        zone_router._llm_budget = None
+        deps._llm_budget = None
         deps._zone_config_store = ZoneConfigStore()
         auth_deps._rate_limiter = RateLimiter(limit=1000, window_seconds=60)
         settings.llm_budget_per_hour = 0
@@ -257,7 +257,7 @@ class GovernanceRouterBase(unittest.TestCase):
         zone_router._render_live = self._orig_render
         (
             zone_router._zone_cache,
-            zone_router._llm_budget,
+            deps._llm_budget,
             deps._zone_config_store,
             auth_deps._rate_limiter,
             auth_deps._audit_logger,

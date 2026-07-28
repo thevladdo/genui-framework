@@ -6,6 +6,7 @@ Handles embedding storage, retrieval, and similarity search.
 import logging
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
+from functools import lru_cache
 import uuid
 import asyncio
 
@@ -61,9 +62,12 @@ class QdrantVectorStore:
         self.port = port or settings.qdrant_port
         self.collection_name = collection_name or settings.qdrant_collection
 
-        # Initialize Qdrant client (both sync and async)
-        self.client = QdrantClient(host=self.host, port=self.port)
-        self.async_client = AsyncQdrantClient(host=self.host, port=self.port)
+        # Initialize Qdrant client (both sync and async). The timeout is what keeps a hung Qdrant from turning into a hung caller
+        timeout = settings.qdrant_timeout_seconds
+        self.client = QdrantClient(host=self.host, port=self.port, timeout=timeout)
+        self.async_client = AsyncQdrantClient(
+            host=self.host, port=self.port, timeout=timeout
+        )
 
         # Embedding goes through the provider abstraction
         self.embed_model = embedder or create_embedding_client()
@@ -290,19 +294,6 @@ class QdrantVectorStore:
 
         return indexed_count
     
-    def search(
-        self,
-        query: str,
-        top_k: int = None,
-        score_threshold: float = None,
-        filters: Optional[Dict[str, Any]] = None,
-        tenant: Optional[str] = None,
-    ) -> List[RetrievalResult]:
-        """Synchronous wrapper for backward compatibility."""
-        return asyncio.run(
-            self.search_async(query, top_k, score_threshold, filters, tenant)
-        )
-
     @cacheable()
     async def search_async(
         self,
@@ -504,6 +495,19 @@ class QdrantVectorStore:
 def create_vector_store(**kwargs) -> QdrantVectorStore:
     """Factory function to create a vector store instance."""
     return QdrantVectorStore(**kwargs)
+
+
+# One store per process. Constructing one is expensive and stateful. 
+# Rebuilding it per request meant paying those round-trips on every health probe and every document route.
+#
+# A failed construction is deliberately NOT remembered (the cache only
+# stores return values): a Qdrant that is not up yet raises, the caller
+# reports the dependency as down, and the next call tries again instead
+# of pinning the process to a lie for its whole lifetime.
+@lru_cache(maxsize=None)
+def get_vector_store() -> QdrantVectorStore:
+    """The process-wide vector store, built on first use."""
+    return QdrantVectorStore()
 
 
 def build_context_from_results(

@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from config import settings
 from llm import create_llm_client
 from llm.embeddings import EmbeddingConfigError
-from rag import create_vector_store, build_context_from_results
+from rag import get_vector_store, build_context_from_results
 from schemas import (
     apply_component_budget,
     component_to_dict,
@@ -339,7 +339,7 @@ CRITICAL RULES:
     def __init__(self, model: str = None, vector_store=None, llm_client=None):
         """Initialize the Zone Agent."""
         self.model = model or settings.response_model
-        self.vector_store = vector_store or create_vector_store()
+        self.vector_store = vector_store or get_vector_store()
         self.llm = llm_client or create_llm_client(self.model)
     
     

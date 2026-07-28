@@ -63,7 +63,7 @@ The tenant of every request is resolved **server-side from the presented key**, 
 | Render cache             | cache keys are namespaced by tenant (+ zone config + segment)                   |
 | Zone config (registry)   | governed config is keyed `(tenant, zone_id)` (see README §Zone Config Registry) |
 | Metrics, audit, uplift   | every counter and audit record carries the tenant                               |
-| LLM budget + rate limits | `LLM_BUDGET_PER_HOUR` is counted per tenant; rate limits per key                |
+| LLM budget + rate limits | `LLM_BUDGET_PER_HOUR` is counted per tenant, over zone renders and chat; rate limits per key |
 
 **Adding a tenant** = add its entries to the three vars, then `docker compose up -d` (recreates the backend; keys are read at process start). Give the new tenant's `sk_` key to whoever ingests its documents, the `pk_` key to its frontend, and its user-token secret to the host backend that signs logins.
 

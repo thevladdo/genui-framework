@@ -63,7 +63,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from agents.zone_agent import ZoneAgent, ZoneRenderRequest as ZoneAgentRequest, create_zone_agent
-from api.deps import get_profile_store, get_zone_config_store
+from api.deps import (
+    budget_tenant,
+    charge_llm_budget,
+    get_llm_budget,
+    get_profile_store,
+    get_zone_config_store,
+)
 from auth import AuthContext
 from auth.dependencies import (
     USER_TOKEN_HEADER,
@@ -81,7 +87,6 @@ from profiles import is_identified
 from schemas.components import GENUI_CONTRACT_VERSION
 from segmentation import Segment, compute_segment, segment_archetype
 from utils.audit import summarize_shown_components
-from utils.rate_limit import RateLimiter
 from utils.tracing import span
 from utils.zone_cache import (
     ZoneRenderCache,
@@ -258,7 +263,6 @@ class ZoneWarmupRequest(BaseModel):
 # Singletons
 _zone_agent: Optional[ZoneAgent] = None
 _zone_cache: Optional[ZoneRenderCache] = None
-_llm_budget: Optional[RateLimiter] = None
 
 
 def get_zone_agent() -> ZoneAgent:
@@ -280,26 +284,6 @@ def get_zone_cache() -> ZoneRenderCache:
             lock_ttl=settings.zone_cache_lock_ttl,
         )
     return _zone_cache
-
-
-def get_llm_budget() -> RateLimiter:
-    """
-    Per-tenant hourly cap on LLM generations (LLM_BUDGET_PER_HOUR).
-
-    Reuses the fixed-window rate limiter on the shared Redis store, so
-    the budget is one counter across workers, exactly like the rate
-    limit. Identity = tenant: the cap protects the tenant's
-    BYOK key, not a single client key.
-    """
-    global _llm_budget
-    if _llm_budget is None:
-        _llm_budget = RateLimiter(
-            limit=settings.llm_budget_per_hour,
-            window_seconds=3600,
-            redis_url=settings.redis_url,
-            key_prefix="genui:llmbudget:",
-        )
-    return _llm_budget
 
 
 # Internal helpers
@@ -538,29 +522,6 @@ def _resolve_strategy(request: ZoneRenderRequest, auth: AuthContext) -> Tuple[st
     return strategy, strategy == "live" or not settings.zone_cache_enabled
 
 
-def _budget_tenant(auth: AuthContext) -> Optional[str]:
-    """Tenant to charge for a generation; None (exempt) for admin keys."""
-    return None if auth.is_admin else auth.tenant
-
-
-async def _charge_llm_budget(tenant: Optional[str]) -> None:
-    """
-    Charge one LLM generation to the tenant budget; 429 when exhausted.
-
-    Called exactly where a generation is born (cold miss, cache-off
-    render), never on cache hits: the cost is controlled at its source.
-    """
-    if tenant is None:
-        return
-    if not await get_llm_budget().allow(tenant):
-        raise HTTPException(
-            status_code=429,
-            detail=f"LLM budget exceeded (LLM_BUDGET_PER_HOUR="
-                   f"{settings.llm_budget_per_hour}): new generations are "
-                   f"paused for this window; cached renders are unaffected",
-        )
-
-
 # How long a cold-miss waiter polls for the single-flight winner's cache
 # write before rendering on its own (fail-open, e.g. the winner crashed).
 _COLD_WAIT_SECONDS = 15.0
@@ -596,7 +557,7 @@ async def _render_cold(
     segment: Segment,
     cache: ZoneRenderCache,
     cache_key: str,
-    budget_tenant: Optional[str],
+    charge_to: Optional[str],
 ) -> Tuple[Dict[str, Any], str]:
     """
     Cold start with single-flight: one generation per cache key.
@@ -612,7 +573,7 @@ async def _render_cold(
         if lookup is not None:
             return lookup.payload, "coalesced"
     try:
-        await _charge_llm_budget(budget_tenant)
+        await charge_llm_budget(charge_to)
         payload = await _render_live(request, tenant, segment)
         await cache.set(cache_key, payload)
         return payload, "miss"
@@ -750,7 +711,7 @@ async def _handle_render(
         if cache_bypassed:
             # Admin "live" is exempt; a client key only lands here when the
             # operator disabled the cache globally: still their tenant's spend.
-            await _charge_llm_budget(_budget_tenant(auth))
+            await charge_llm_budget(budget_tenant(auth))
             payload = await _render_live(request, auth.tenant)
             cache_meta = {"status": "bypass", "strategy": strategy}
             _annotate("bypass")
@@ -778,7 +739,7 @@ async def _handle_render(
             return _build_response(request.zone_id, lookup.payload, cache_meta, arm)
 
         payload, cache_status = await _render_cold(
-            request, auth.tenant, segment, cache, cache_key, _budget_tenant(auth)
+            request, auth.tenant, segment, cache, cache_key, budget_tenant(auth)
         )
 
         cache_meta = {"status": cache_status, "strategy": strategy, "segment": segment.key}
@@ -898,7 +859,7 @@ async def render_zone_stream(
             # Live streaming render (cold-start winner or bypass). 
             # On a cold start (segment set) the result is cached for the whole segment.
             try:
-                await _charge_llm_budget(_budget_tenant(auth))
+                await charge_llm_budget(budget_tenant(auth))
             except HTTPException as e:
                 yield _sse("error", {
                     "detail": e.detail,

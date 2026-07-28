@@ -4,6 +4,7 @@
 
 :root {
   color-scheme: dark;
+  scrollbar-width: thin;
 
   --st-bg: #0a0a0c;
   --st-surface: rgba(255, 255, 255, 0.03);
@@ -68,6 +69,12 @@ button {
   font-family: inherit;
 }
 
+option,
+optgroup {
+  background-color: var(--st-bg);
+  color: var(--st-text);
+}
+
 ::selection {
   background: rgba(59, 130, 246, 0.35);
 }
@@ -78,6 +85,24 @@ button {
   letter-spacing: -0.02em;
   line-height: 1.02;
   margin: 0;
+
+  .hide-md {
+    @media (max-width: 768px) {
+      display: none;
+    }
+  }
+
+  .hide-lg {
+    @media (max-width: 1024px) {
+      display: none;
+    }
+  }
+
+  .show-sm {
+    @media (max-width: 768px) {
+      display: block;
+    }
+  }
 }
 
 .st-section-title {
