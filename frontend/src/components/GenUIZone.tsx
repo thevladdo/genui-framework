@@ -22,11 +22,21 @@
 
 import React, { useCallback, useEffect, useRef } from 'react';
 import { ComponentRenderer } from './ComponentRenderer';
+import { GenUIDisclosureNotice } from './DisclosureNotice';
 import { GenUISection } from './GenUISection';
 import { useZone, UseZoneOptions, PinnedContent } from '../hooks/useZone';
 import type { GenUICustomComponentDef } from '../registry';
 import type { GenUITheme, GenUIComponent } from '../types';
 import { getBehaviorTracker } from '../utils/behaviorTracker';
+import { consentGranted, type PrivacyLevel } from '../utils/privacy';
+import {
+  DEFAULT_DISCLOSURE_TEXT,
+  PENDING_DISCLOSURE,
+  disclosureJsonLd,
+  noticeComesFirst,
+  type GenUIDisclosure,
+  type GenUIDisclosureOptions,
+} from '../utils/disclosure';
 import { sendGenUIEvents } from '../utils/genuiEvents';
 
 
@@ -73,9 +83,23 @@ export interface GenUIZoneProps {
    */
   maxComponents?: number;
 
-  //  User Context 
-  /** User ID for profile lookup */
+  //  User Context
+  /** User ID for profile lookup (sent only once consent is granted) */
   userId?: string;
+  /**
+   * Consent from your CMP. Without an explicit `true` the zone runs in
+   * anonymous mode: nothing written to or read from the visitor's
+   * browser, no userId and no behavior leaving the page, content served
+   * from the anonymous segment. The zone still renders and is still
+   * personalized, by segment instead of by person.
+   */
+  consent?: boolean;
+  /**
+   * Capture contract of the behavior tracker, once consent is granted
+   * (default: 'balanced'). Also decides whether the auto-detected page
+   * path is PII-redacted before it is sent.
+   */
+  privacy?: PrivacyLevel;
   /** Current page path (defaults to window.location.pathname) */
   currentPage?: string;
   /** Additional page context metadata */
@@ -104,7 +128,17 @@ export interface GenUIZoneProps {
    */
   trackEvents?: boolean;
 
-  //  Theming 
+  //  Disclosure
+  /**
+   * AI content disclosure (on by default while the zone shows generated
+   * content). Pass `{ text, position }` to set the wording, which is a
+   * legal choice, and where the notice sits. Pass `false` to render no
+   * visible notice: the machine-readable markup stays either way, and
+   * turning the notice off means you inform the visitor elsewhere.
+   */
+  disclosure?: GenUIDisclosureOptions | false;
+
+  //  Theming
   /** Theme configuration */
   theme?: GenUITheme;
   /** Additional CSS class */
@@ -133,6 +167,26 @@ export interface GenUIZoneProps {
   debug?: boolean;
 }
 
+
+/**
+ * The marking a machine reads, in the served HTML.
+ *
+ * Rendered inline (never from an effect) so it is in the server-rendered
+ * markup and in the very first client paint, including while components
+ * are still streaming in.
+ */
+const DisclosureMarkup: React.FC<{
+  disclosure: GenUIDisclosure;
+  zoneId: string;
+}> = ({ disclosure, zoneId }) => (
+  <script
+    type="application/ld+json"
+    // JSON built by disclosureJsonLd, which escapes '<': the content
+    // cannot close this element. React would HTML-escape a text child,
+    // which a JSON-LD parser reads literally and chokes on.
+    dangerouslySetInnerHTML={{ __html: disclosureJsonLd(disclosure, zoneId) }}
+  />
+);
 
 const LoadingSkeleton: React.FC<{ type?: string }> = ({ type }) => {
   if (type === 'bento') {
@@ -170,6 +224,8 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
   maxItems = 6,
   maxComponents,
   userId = 'anonymous',
+  consent,
+  privacy,
   currentPage,
   pageMetadata,
   loadOnMount = true,
@@ -177,6 +233,7 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
   cacheStrategy,
   streaming = false,
   trackEvents = true,
+  disclosure: disclosureOptions,
   theme,
   className = '',
   style,
@@ -211,6 +268,8 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
     maxItems,
     maxComponents,
     userId,
+    consent,
+    privacy,
     currentPage,
     pageMetadata,
     loadOnMount,
@@ -220,6 +279,35 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
     onRender,
     onError,
   });
+
+  // Until the backend has said otherwise, the zone assumes it is about
+  // to show generated content: a marking that appears only after the
+  // response would be missing exactly when the visitor sees the first
+  // paint, in SSR output, and for the whole of a streamed render.
+  const disclosure = meta?.disclosure ?? PENDING_DISCLOSURE;
+
+  // Wording, placement and on/off can be decided per zone or once per
+  // tenant in the theme. A prop on this zone is the more specific
+  // statement, so it wins; `disclosure={false}` wins over a theme that
+  // turns the notice on, and a `disclosure` object wins over a theme
+  // that turns it off.
+  // `false` is the off switch, not a set of options, so it is read once
+  // here and wording and placement then come from one shape.
+  const options = disclosureOptions === false ? undefined : disclosureOptions;
+  const noticeOff =
+    disclosureOptions === false ||
+    (disclosureOptions === undefined && theme?.disclosureEnabled === 'off');
+  const noticeText =
+    options?.text ?? theme?.disclosureText ?? DEFAULT_DISCLOSURE_TEXT;
+  const noticePosition =
+    options?.position ?? theme?.disclosurePosition ?? 'above-left';
+  // Nothing a model wrote is on screen: saying it was would be the
+  // false half of the same obligation.
+  const showNotice = !noticeOff && disclosure.aiGenerated;
+  const notice = showNotice ? (
+    <GenUIDisclosureNotice text={noticeText} position={noticePosition} />
+  ) : null;
+  const noticeFirst = noticeComesFirst(noticePosition);
 
   // One impression per rendered variant
   const impressionSentForRef = useRef<string | null>(null);
@@ -235,11 +323,17 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
         segment: meta?.cache?.segment,
         item_title: itemTitle,
         item_url: itemUrl,
-        user_id: userId && userId !== 'anonymous' ? userId : undefined,
+        // Same gate as the render request: uplift is measured per zone,
+        // arm and segment, so the counters keep working while nobody is
+        // named in them.
+        user_id:
+          consentGranted(consent) && userId && userId !== 'anonymous'
+            ? userId
+            : undefined,
         ts: new Date().toISOString(),
       }]);
     },
-    [trackEvents, apiUrl, apiKey, zoneId, userId, meta?.renderId, meta?.experiment?.arm, meta?.cache?.segment]
+    [trackEvents, apiUrl, apiKey, zoneId, userId, consent, meta?.renderId, meta?.experiment?.arm, meta?.cache?.segment]
   );
 
   // Capture clicks on any link inside the zone (uplift measurement)
@@ -306,7 +400,17 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
     if (showLoadingSkeleton) {
       return (
         <GenUISection theme={theme} className={`genui-zone genui-zone--loading ${className}`} style={style}>
-          <LoadingSkeleton type={preferredComponentType} />
+          <div
+            className="genui-zone__content"
+            data-zone-id={zoneId}
+            data-ai-generated={disclosure.aiGenerated ? 'true' : 'false'}
+            data-ai-provenance={disclosure.provenance}
+          >
+            <DisclosureMarkup disclosure={disclosure} zoneId={zoneId} />
+            {noticeFirst && notice}
+            <LoadingSkeleton type={preferredComponentType} />
+            {!noticeFirst && notice}
+          </div>
         </GenUISection>
       );
     }
@@ -356,15 +460,23 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
         className="genui-zone__content"
         data-zone-id={zoneId}
         data-personalized={meta?.personalizationApplied ? 'true' : 'false'}
+        data-ai-generated={disclosure.aiGenerated ? 'true' : 'false'}
+        data-ai-provenance={disclosure.provenance}
         onClickCapture={handleZoneClick}
       >
+        <DisclosureMarkup disclosure={disclosure} zoneId={zoneId} />
+
         {isLoading && components.length > 0 && (
           <div className="genui-zone__refreshing">
             <span className="genui-zone__refreshing-dot" />
           </div>
         )}
 
+        {noticeFirst && notice}
+
         <ComponentRenderer components={components} />
+
+        {!noticeFirst && notice}
 
         {debug && meta && (
           <details className="genui-zone__debug">

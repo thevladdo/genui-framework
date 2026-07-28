@@ -9,6 +9,7 @@ import {
   CaseStudies,
   ChartComponent,
   ContentGrid,
+  GenUIDisclosureNotice,
   GenUISection,
   HeroBanner,
   LogoWall,
@@ -19,6 +20,7 @@ import {
   TabsFeature,
   TestimonialCarousel,
   TextComponent,
+  noticeComesFirst,
 } from 'genui-framework';
 import styles from './Playground.module.css';
 import { isLightColor, toGenUITheme, type StudioTheme } from '../../lib/theme';
@@ -26,9 +28,9 @@ import { isLightColor, toGenUITheme, type StudioTheme } from '../../lib/theme';
 import heroImg from '../../../stock-img/milad-fakurian-61bq5E8i0WM-unsplash.jpg';
 import tabsImg from '../../../stock-img/puscas-adryan-OLADYT0pz6o-unsplash.jpg';
 import stepsImg from '../../../stock-img/egor-litvinov-t0OY8pONcf8-unsplash.jpg';
-import gridImgA from '../../../stock-img/3d-render-lv_WRGCQJVc-unsplash.jpg';
+import gridImgA from '../../../stock-img/kir-3WUiwmyoNEw-unsplash.jpg';
 import gridImgB from '../../../stock-img/brotherhood-studio--psmFP4VC8A-unsplash.jpg';
-import avatarImg from '../../../stock-img/kir-3WUiwmyoNEw-unsplash.jpg';
+import avatarImg from '../../../stock-img/3d-render-lv_WRGCQJVc-unsplash.jpg';
 import logo1 from '../../../logo-img/logo-1.svg?no-inline';
 import logo2 from '../../../logo-img/logo-2.svg?no-inline';
 import logo3 from '../../../logo-img/logo-3.svg?no-inline';
@@ -50,12 +52,13 @@ const BENTO_DATA = {
       image: gridImgA,
     },
     {
-      title: 'Frosted Glass Content',
-      description: 'Standard surface: blur follows the slider.',
+      title: 'Glass Caption Rail',
+      description: 'The caption strip blurs the photo behind it: this is the only surface the blur slider reaches.',
+      image: gridImgB,
     },
     {
       title: 'Text-Only Degradation',
-      description: 'No image? Accent gradient, never an empty box.',
+      description: 'No photo, so no glass to blur: the accent gradient takes the whole card and the text moves up into it.',
     },
   ],
   columns: 3 as const,
@@ -98,6 +101,14 @@ const CREDITS: Array<{ photo: string; author: string; url: string }> = [
 export const Preview = ({ theme }: { theme: StudioTheme }) => {
   const sectionClass = `${styles.previewSection} ${theme.mode === 'light' ? styles.sectionLight : ''
     }`.trim();
+
+  const notice = theme.disclosureEnabled === 'on' ? (
+    <GenUIDisclosureNotice
+      text={theme.disclosureText || undefined}
+      position={theme.disclosurePosition}
+    />
+  ) : null;
+  const noticeFirst = noticeComesFirst(theme.disclosurePosition);
 
   return (
     <div
@@ -382,6 +393,25 @@ export const Preview = ({ theme }: { theme: StudioTheme }) => {
           <TextComponent
             data={{ content: 'Note style: muted with accent rail.', style: 'note' }}
           />
+        </section>
+
+        <section className={sectionClass}>
+          <p className="st-code-label">
+            {'// ai disclosure: the notice a zone shows on generated content'}
+          </p>
+          <div className="genui-zone__content">
+            {noticeFirst && notice}
+            <div className="genui-zone-skeleton genui-zone-skeleton--bento">
+              {[1, 2, 3].map((card) => (
+                <div key={card} className="genui-zone-skeleton__card">
+                  <div className="genui-zone-skeleton__title" />
+                  <div className="genui-zone-skeleton__text" />
+                  <div className="genui-zone-skeleton__text genui-zone-skeleton__text--short" />
+                </div>
+              ))}
+            </div>
+            {!noticeFirst && notice}
+          </div>
         </section>
       </GenUISection>
 

@@ -21,6 +21,9 @@ Output guarantees (enforced by the system, not by the prompt):
   ones are removed by the NumericGuard.
 - Per-tenant banned terms (CONTENT_POLICY) drop the offending component.
 - Pinned content is verified after generation and appended if missing.
+- Every result carries a disclosure block saying whether a model wrote
+  the content, when it was generated, and whether the visible text is
+  original prose or the operator's input copied verbatim.
 """
 
 import asyncio
@@ -44,6 +47,11 @@ from schemas import (
 )
 from utils.content_policy import policy_for
 from utils.content_policy_store import effective_policy
+from utils.disclosure import (
+    PROVENANCE_NONE,
+    content_provenance,
+    disclosure_block,
+)
 from utils.json_stream import ComponentStreamParser
 from utils.numeric_guard import NumericGuard
 from utils.redundancy_guard import RedundancyGuard
@@ -90,6 +98,11 @@ class ZoneRenderResult:
     dropped_components: List[str] = field(default_factory=list)
     removed_numbers: List[str] = field(default_factory=list)
     policy_violations: List[str] = field(default_factory=list)
+    # Marking of this content: whether a model wrote it, when, and with
+    # which provenance. Computed here, where the input corpus and the
+    # generation timestamp are known, and carried into the cache with
+    # the payload. None when the operator turned the disclosure off.
+    disclosure: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -103,6 +116,7 @@ class ZoneRenderResult:
             "dropped_components": self.dropped_components,
             "removed_numbers": self.removed_numbers,
             "policy_violations": self.policy_violations,
+            "disclosure": self.disclosure,
         }
 
 
@@ -448,6 +462,7 @@ CRITICAL RULES:
                     dropped_components=dropped,
                     removed_numbers=removed_numbers,
                     policy_violations=policy_violations,
+                    disclosure=self._disclosure_for(request, retrieved, components),
                 ),
             }
 
@@ -537,6 +552,7 @@ CRITICAL RULES:
             dropped_components=dropped,
             removed_numbers=removed_numbers,
             policy_violations=policy_violations,
+            disclosure=self._disclosure_for(request, retrieved, components),
         )
 
     def _build_url_guard(
@@ -580,6 +596,50 @@ CRITICAL RULES:
             guard.allow_from_text(getattr(result, "content", None))
 
         return guard
+
+    def _input_corpus(self, request: ZoneRenderRequest, retrieved: List[Any]) -> str:
+        """
+        Everything the operator supplied to this render, as one text.
+
+        Same sources the URL whitelist and the numeric grounding read
+        from, for the same reason: it is the only text this render is
+        allowed to treat as not synthetic.
+        """
+        parts = [
+            request.base_prompt or "",
+            request.context_prompt or "",
+            json.dumps(request.pinned_content or [], default=str, ensure_ascii=False),
+            request.current_page or "",
+            json.dumps(request.page_metadata or {}, default=str, ensure_ascii=False),
+        ]
+        for result in retrieved:
+            parts.append(str(getattr(result, "content", "") or ""))
+            parts.append(json.dumps(
+                getattr(result, "metadata", None) or {}, default=str, ensure_ascii=False
+            ))
+        return "\n".join(parts)
+
+    def _disclosure_for(
+        self,
+        request: ZoneRenderRequest,
+        retrieved: List[Any],
+        components: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Mark a render the model produced.
+
+        Single implementation for both the sync and the streaming path:
+        marking that is computed in two places diverges in two places.
+        """
+        return disclosure_block(
+            ai_generated=True,
+            provenance=content_provenance(
+                components, self._input_corpus(request, retrieved)
+            ),
+            model=self.model,
+            enabled=not settings.genui_disclosure_off,
+            expose_model=settings.disclosure_expose_model,
+        )
 
     def _build_numeric_guard(
         self,
@@ -917,7 +977,15 @@ CRITICAL RULES:
             return {}
 
     def _fallback_render(self, request: ZoneRenderRequest) -> ZoneRenderResult:
-        """Generate fallback content using only pinned content."""
+        """
+        Assemble the zone from pinned content only, without the model.
+
+        Nothing here comes from a model: the cards are the operator's own
+        pinned items copied by this function. The disclosure says so,
+        because this payload is cached and served like any other, and
+        marking operator content as AI-generated is a false statement in
+        the direction the marking exists to prevent.
+        """
         cards = []
         pinned_ids = []
 
@@ -950,6 +1018,11 @@ CRITICAL RULES:
             confidence=0.3,
             reasoning="Fallback render with only pinned content due to processing error",
             profile_factors_used=[],
+            disclosure=disclosure_block(
+                ai_generated=False,
+                provenance=PROVENANCE_NONE,
+                enabled=not settings.genui_disclosure_off,
+            ),
         )
 
 

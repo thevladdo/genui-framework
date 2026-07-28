@@ -42,6 +42,12 @@ Security model:
   (cache_strategy="live").
 - Every render is audit-logged: what was shown, to whom, from which
   segment and cache state.
+
+Transparency:
+- Every served payload carries meta.disclosure: whether a model wrote
+  the content, when it was generated, and the provenance of the visible
+  text. It is computed once, into the cached payload, so cache hits
+  carry the generation timestamp and not the moment they were served.
 """
 
 import asyncio
@@ -71,6 +77,7 @@ from auth.identity import AuthError
 from config import settings
 from experiments import ARM_CONTROL, ARM_NONE, assign_arm
 from metrics.ops import get_ops_metrics
+from profiles import is_identified
 from schemas.components import GENUI_CONTRACT_VERSION
 from segmentation import Segment, compute_segment, segment_archetype
 from utils.audit import summarize_shown_components
@@ -376,6 +383,12 @@ async def _resolve_profile(
     """
     Make the server-side profile authoritative.
 
+    A request without a usable identity is served anonymously: no
+    profile is read, none is created, and the segment is computed from
+    whatever the request itself carries. That is the consent-denied
+    path, and it is also the path of every visitor who was never
+    identified in the first place.
+
     When user_id is present:
     - the caller must prove it IS that user (signed X-User-Token) or be
       admin — otherwise any pk_ holder reads/seeds someone else's profile
@@ -383,7 +396,8 @@ async def _resolve_profile(
     - otherwise the client profile (if any) seeds the server store,
       so the IndexedDB copy is demoted to a cache over time.
     """
-    if not request.user_id:
+    if not is_identified(request.user_id):
+        request.user_id = None
         return
 
     check_user_access(auth, request.user_id, user_token)
@@ -436,25 +450,41 @@ def _agent_request(
 
 
 def _payload_from_result(result) -> Dict[str, Any]:
-    """Build the cacheable response payload from a ZoneRenderResult."""
+    """
+    Build the cacheable response payload from a ZoneRenderResult.
+
+    The single place a zone payload is born, for every path that can
+    produce one (cold miss, bypass, background refresh, warmup, and the
+    complete event of the stream). The disclosure the agent computed
+    goes IN here, so it is written to the cache with the content and
+    every later hit serves the same marking with the same generation
+    timestamp. Adding it when serving instead would date a render by the
+    moment it was copied out of the cache, up to a full stale window
+    after the model actually wrote it, and would have no way of knowing
+    that a cached fallback payload was never generated at all.
+    """
+    meta: Dict[str, Any] = {
+        "confidence": result.confidence,
+        "reasoning": result.reasoning,
+        "profile_factors": result.profile_factors_used,
+        "sanitization": {
+            "removed_urls": result.removed_urls,
+            "dropped_components": result.dropped_components,
+            "removed_numbers": result.removed_numbers,
+            "policy_violations": result.policy_violations,
+        },
+    }
+    if getattr(result, "disclosure", None):
+        meta["disclosure"] = result.disclosure
+
     return {
-        # Identity of this generated variant: users served the same cached payload share it, 
+        # Identity of this generated variant: users served the same cached payload share it,
         # so events can be tied to the exact content shown
         "render_id": uuid.uuid4().hex[:12],
         "components": result.components,
         "pinned_content_included": result.pinned_content_included,
         "personalization_applied": result.personalization_applied,
-        "meta": {
-            "confidence": result.confidence,
-            "reasoning": result.reasoning,
-            "profile_factors": result.profile_factors_used,
-            "sanitization": {
-                "removed_urls": result.removed_urls,
-                "dropped_components": result.dropped_components,
-                "removed_numbers": result.removed_numbers,
-                "policy_violations": result.policy_violations,
-            },
-        },
+        "meta": meta,
         "rendered_at": _utc_now(),
     }
 

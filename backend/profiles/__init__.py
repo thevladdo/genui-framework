@@ -7,6 +7,11 @@ in profiles.store (Redis with in-memory fallback).
 """
 
 from .merge import apply_profile_updates, merge_client_profile
-from .store import ProfileStore
+from .store import ProfileStore, is_identified
 
-__all__ = ["apply_profile_updates", "merge_client_profile", "ProfileStore"]
+__all__ = [
+    "apply_profile_updates",
+    "merge_client_profile",
+    "is_identified",
+    "ProfileStore",
+]

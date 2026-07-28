@@ -10,14 +10,13 @@
 
 import {
   PrivacyLevel,
-  NavigatorLike,
+  consentGranted,
   isPrivateElement,
   isRedactedElement,
   isFormField,
   redactPII,
   sanitizeText,
   sanitizeValue,
-  trackingAllowed,
 } from "./privacy";
 
 export type { PrivacyLevel } from "./privacy";
@@ -86,7 +85,7 @@ export interface BehaviorRecord {
 }
 
 export interface BehaviorTrackerOptions {
-  sessionId: string;
+  sessionId?: string;
   userId: string;
   trackClicks?: boolean;
   trackScroll?: boolean;
@@ -104,8 +103,8 @@ export interface BehaviorTrackerOptions {
    */
   privacy?: PrivacyLevel;
   /**
-   * Consent hook for the host's CMP: false = never track (any level),
-   * true = track (overrides DNT/GPC), unset = no consent gating.
+   * Consent from the host's CMP. Tracking runs only on an explicit
+   * `true`: unset or false, nothing is captured at any level.
    */
   consent?: boolean;
 }
@@ -135,6 +134,7 @@ const DEFAULT_OPTIONS: Partial<BehaviorTrackerOptions> = {
 
 export class BehaviorTracker {
   private options: BehaviorTrackerOptions;
+  private sessionId: string;
   private record: BehaviorRecord;
   private isTracking: boolean = false;
   private clickHandler: ((e: MouseEvent) => void) | null = null;
@@ -152,6 +152,9 @@ export class BehaviorTracker {
 
   constructor(options: BehaviorTrackerOptions) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
+    this.sessionId =
+      options.sessionId ||
+      `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     this.record = this.createEmptyRecord();
   }
 
@@ -168,7 +171,7 @@ export class BehaviorTracker {
 
   private createEmptyRecord(): BehaviorRecord {
     return {
-      sessionId: this.options.sessionId,
+      sessionId: this.sessionId,
       userId: this.options.userId,
       startTime: Date.now(),
       lastActivity: Date.now(),
@@ -196,16 +199,8 @@ export class BehaviorTracker {
     // SSR guard: there is nothing to track without a DOM
     if (typeof window === "undefined" || typeof document === "undefined")
       return;
-    // Privacy gate: explicit consent denial, or DNT/GPC unless privacy is 'off'
-    const nav =
-      typeof navigator !== "undefined" ? (navigator as NavigatorLike) : null;
-    if (
-      !trackingAllowed(
-        { privacy: this.level, consent: this.options.consent },
-        nav,
-      )
-    )
-      return;
+    // Consent gate: capture runs on an explicit grant and on nothing else
+    if (!consentGranted(this.options.consent)) return;
 
     this.isTracking = true;
     this.record.startTime = Date.now();

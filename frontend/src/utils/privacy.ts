@@ -23,12 +23,6 @@ export interface ElementLike {
   isContentEditable?: boolean;
 }
 
-/** Minimal structural view of `navigator` for the DNT/GPC signals */
-export interface NavigatorLike {
-  doNotTrack?: string | null;
-  globalPrivacyControl?: boolean;
-}
-
 export const isPrivateElement = (el: ElementLike | null | undefined): boolean =>
   !!el?.closest?.(PRIVATE_SELECTOR);
 
@@ -89,23 +83,21 @@ export const sanitizeValue = (value: unknown, level: PrivacyLevel, depth = 0): u
   return out;
 };
 
-/** Do-Not-Track ('1'/'yes') or Global Privacy Control */
-export const dntEnabled = (nav?: NavigatorLike | null): boolean =>
-  !!nav &&
-  (nav.doNotTrack === '1' || nav.doNotTrack === 'yes' || nav.globalPrivacyControl === true);
-
 /**
- * Whether tracking may run at all.
- * - `consent === false` (explicit denial from the host's consent flow) always blocks.
- * - `consent === true` (explicit grant) allows, overriding the ambient DNT/GPC signal.
- * - `consent` unset: DNT/GPC is honored unless privacy is 'off' — an explicit
- *   integrator choice to ignore it.
+ * The single gate for everything that needs the visitor's agreement:
+ * behavior capture, the profile in IndexedDB, and sending a persistent
+ * identifier with a request.
+ *
+ * Only an explicit `true` opens it. Storing or reading information on
+ * someone's terminal equipment takes consent given, never consent
+ * assumed, so an integrator who has not wired a consent flow yet gets
+ * the anonymous mode rather than a quiet write to the visitor's
+ * browser. The library still personalizes in that mode: it is served
+ * the archetype of an anonymous segment.
+ *
+ * Consent given here also settles the ambient browser signals: a
+ * visitor who answered a consent prompt has made a more specific
+ * statement than a browser-wide default, and nothing runs without that
+ * answer anyway.
  */
-export const trackingAllowed = (
-  opts: { privacy: PrivacyLevel; consent?: boolean },
-  nav?: NavigatorLike | null,
-): boolean => {
-  if (opts.consent === false) return false;
-  if (opts.consent === true) return true;
-  return !(opts.privacy !== 'off' && dntEnabled(nav));
-};
+export const consentGranted = (consent?: boolean): boolean => consent === true;

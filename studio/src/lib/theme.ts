@@ -20,6 +20,14 @@ import type { GenUITheme } from "genui-framework";
 
 export type SpacingScale = "sm" | "base" | "lg";
 export type ThemeMode = "dark" | "light";
+export type DisclosureEnabled = "on" | "off";
+export type DisclosurePosition =
+  | "above-left"
+  | "above-center"
+  | "above-right"
+  | "below-left"
+  | "below-center"
+  | "below-right";
 
 export interface StudioTheme {
   mode: ThemeMode;
@@ -36,6 +44,11 @@ export interface StudioTheme {
   surface2: string;
   surface3: string;
   textOnAccent: string;
+  disclosureEnabled: DisclosureEnabled;
+  disclosurePosition: DisclosurePosition;
+  disclosureText: string;
+  disclosureFontSize: string;
+  disclosureOpacity: string;
 }
 
 export const RADIUS_PRESETS = ["0px", "12px", "24px", "32px", "64px"] as const;
@@ -45,6 +58,30 @@ export const RADIUS_FULL_PRESETS = ["999px", "12px", "0px"] as const;
 export const SPACING_SCALES: SpacingScale[] = ["sm", "base", "lg"];
 export const MODES: ThemeMode[] = ["dark", "light"];
 export const HEADING_WEIGHTS = ["400", "600", "700", "800"] as const;
+export const DISCLOSURE_STATES: DisclosureEnabled[] = ["on", "off"];
+export const DISCLOSURE_POSITIONS: ReadonlyArray<{
+  value: DisclosurePosition;
+  label: string;
+}> = [
+  { value: "above-left", label: "Above, left" },
+  { value: "above-center", label: "Above, centered" },
+  { value: "above-right", label: "Above, right" },
+  { value: "below-left", label: "Below, left" },
+  { value: "below-center", label: "Below, centered" },
+  { value: "below-right", label: "Below, right" },
+];
+
+/**
+ * Readability floors, mirroring backend/utils/theme_store.py.
+ *
+ * The notice is a transparency obligation, so it can be styled but not
+ * styled away: 11px and 0.6 opacity are as small and as faint as the
+ * contract allows, on both sides.
+ */
+export const DISCLOSURE_MIN_FONT_PX = 11;
+export const DISCLOSURE_MAX_FONT_PX = 24;
+export const DISCLOSURE_MIN_OPACITY = 0.6;
+export const DISCLOSURE_TEXT_MAX = 120;
 
 /** Selectable UI fonts: label shown in the select -> CSS font stack */
 const SYSTEM_FONT =
@@ -78,6 +115,11 @@ export const DEFAULT_STUDIO_THEME: StudioTheme = {
   surface2: "",
   surface3: "",
   textOnAccent: "",
+  disclosureEnabled: "on",
+  disclosurePosition: "above-left",
+  disclosureText: "",
+  disclosureFontSize: "14px",
+  disclosureOpacity: "1",
 };
 
 // Mirrors the spacing math in the library's GenUISection so the CSS
@@ -122,6 +164,22 @@ const VALIDATORS: { [K in keyof StudioTheme]: (v: string) => boolean } = {
   surface2: isOptionalHex,
   surface3: isOptionalHex,
   textOnAccent: isOptionalHex,
+  disclosureEnabled: (v) => (DISCLOSURE_STATES as string[]).includes(v),
+  disclosurePosition: (v) => DISCLOSURE_POSITIONS.some((p) => p.value === v),
+  // '' = the library's own wording. Any other value is shown as text,
+  // never as CSS, so it is bounded by length and by having no newlines
+  disclosureText: (v) =>
+    v === "" || (v.length <= DISCLOSURE_TEXT_MAX && !/[\r\n]/.test(v)),
+  disclosureFontSize: (v) => {
+    const match = /^(\d{1,3})px$/.exec(v);
+    if (!match) return false;
+    const px = Number(match[1]);
+    return px >= DISCLOSURE_MIN_FONT_PX && px <= DISCLOSURE_MAX_FONT_PX;
+  },
+  disclosureOpacity: (v) => {
+    if (!/^(0(\.\d{1,2})?|1(\.0+)?)$/.test(v)) return false;
+    return Number(v) >= DISCLOSURE_MIN_OPACITY;
+  },
 };
 
 // URL share link serialization
@@ -162,7 +220,13 @@ export const toGenUITheme = (theme: StudioTheme): GenUITheme => {
     accentColor: theme.accentColor,
     fontFamily: theme.fontFamily,
     fontWeightHeading: theme.fontWeightHeading,
+    disclosureEnabled: theme.disclosureEnabled,
+    disclosurePosition: theme.disclosurePosition,
+    disclosureFontSize: theme.disclosureFontSize,
+    disclosureOpacity: theme.disclosureOpacity,
   };
+  // Unset wording means the library default, not an empty notice
+  if (theme.disclosureText) result.disclosureText = theme.disclosureText;
   if (theme.surface1) result.surface1 = theme.surface1;
   if (theme.surface2) result.surface2 = theme.surface2;
   if (theme.surface3) result.surface3 = theme.surface3;
@@ -230,6 +294,8 @@ export const exportAsCSS = (theme: StudioTheme): string => {
   if (theme.surface3) lines.push(`  --genui-surface-3: ${theme.surface3};`);
   if (theme.textOnAccent)
     lines.push(`  --genui-text-on-accent: ${theme.textOnAccent};`);
+  lines.push(`  --genui-disclosure-font-size: ${theme.disclosureFontSize};`);
+  lines.push(`  --genui-disclosure-opacity: ${theme.disclosureOpacity};`);
 
   const hint =
     theme.mode === "light"

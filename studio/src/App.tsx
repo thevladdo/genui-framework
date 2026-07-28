@@ -8,6 +8,8 @@
 
 import { lazy, Suspense, useEffect } from 'react';
 import { About } from './components/about/About';
+import { Compliance } from './components/compliance/Compliance';
+import { Footer } from './components/Footer';
 import { Home } from './components/Home';
 import { LocalOnlyModal } from './components/LocalOnlyModal';
 import { Nav } from './components/Nav';
@@ -105,6 +107,8 @@ const App = () => {
       )}
 
       {path === '/about' && <About />}
+
+      {path === '/compliance' && <Compliance />}
 
       {path === '/playground' && (
         <PlaygroundPage query={query} replaceQuery={replaceQuery} />
@@ -207,6 +211,8 @@ const App = () => {
           </>
         )
       )}
+
+      <Footer />
     </>
   );
 };

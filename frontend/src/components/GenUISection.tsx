@@ -90,6 +90,15 @@ const themeToCSSVars = (theme: GenUITheme): Record<string, string> => {
   if (theme.fontWeightHeading) {
     vars['--genui-font-weight-heading'] = theme.fontWeightHeading;
   }
+  // Only the two visual knobs of the disclosure notice become CSS.
+  // Its wording, position and on/off are behavior, read by whoever
+  // renders the notice, and must never reach a stylesheet.
+  if (theme.disclosureFontSize) {
+    vars['--genui-disclosure-font-size'] = theme.disclosureFontSize;
+  }
+  if (theme.disclosureOpacity) {
+    vars['--genui-disclosure-opacity'] = theme.disclosureOpacity;
+  }
   if (theme.spacingScale && SPACING_FACTORS[theme.spacingScale] !== undefined) {
     const factor = SPACING_FACTORS[theme.spacingScale];
     for (const [step, px] of Object.entries(SPACING_BASE)) {

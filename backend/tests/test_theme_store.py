@@ -53,6 +53,11 @@ FULL_THEME = {
     "surface2": "#121216",
     "surface3": "#1a1a20",
     "textOnAccent": "#ffffff",
+    "disclosureEnabled": "on",
+    "disclosurePosition": "below-right",
+    "disclosureText": "Contenuto generato con AI",
+    "disclosureFontSize": "13px",
+    "disclosureOpacity": "0.8",
 }
 
 
@@ -85,6 +90,54 @@ class TestContract(unittest.TestCase):
             with self.subTest(key=key, value=value):
                 with self.assertRaises(ValidationError):
                     TenantTheme(**{key: value})
+
+    def test_disclosure_notice_cannot_be_styled_into_invisibility(self):
+        """
+        The notice is a transparency obligation: it can be made smaller
+        or fainter, never unreadable. The floors live in the contract so
+        a hand-written PUT cannot go under them either.
+        """
+        for key, value in [
+            ("disclosureFontSize", "4px"),
+            ("disclosureFontSize", "10px"),
+            ("disclosureFontSize", "48px"),
+            ("disclosureOpacity", "0"),
+            ("disclosureOpacity", "0.1"),
+            ("disclosureOpacity", "0.59"),
+            ("disclosureEnabled", "maybe"),
+            ("disclosurePosition", "floating"),
+            ("disclosurePosition", "top"),
+            ("disclosurePosition", "left"),
+            ("disclosurePosition", "above-left; opacity: 0"),
+            ("disclosureOpacity", "1; visibility: hidden"),
+            ("disclosureFontSize", "12px; opacity: 0"),
+        ]:
+            with self.subTest(key=key, value=value):
+                with self.assertRaises(ValidationError):
+                    TenantTheme(**{key: value})
+
+    def test_disclosure_edges_of_the_contract_pass(self):
+        for key, value in [
+            ("disclosureFontSize", "11px"),
+            ("disclosureFontSize", "24px"),
+            ("disclosureOpacity", "0.6"),
+            ("disclosureOpacity", "1"),
+            ("disclosureOpacity", "1.0"),
+            ("disclosureEnabled", "off"),
+            ("disclosurePosition", "above-center"),
+            ("disclosurePosition", "above-right"),
+            ("disclosurePosition", "below-left"),
+        ]:
+            with self.subTest(key=key, value=value):
+                self.assertEqual(TenantTheme(**{key: value}).tokens(), {key: value})
+
+    def test_disclosure_wording_is_bounded_text(self):
+        self.assertEqual(
+            TenantTheme(disclosureText="Testo <b>libero</b> & simboli").tokens(),
+            {"disclosureText": "Testo <b>libero</b> & simboli"},
+        )
+        with self.assertRaises(ValidationError):
+            TenantTheme(disclosureText="x" * 121)
 
     def test_inherit_font_and_square_brand_pass(self):
         tokens = TenantTheme(fontFamily="inherit", radiusFull="0px").tokens()

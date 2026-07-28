@@ -29,11 +29,11 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && rollup -c && cp dist/index.d.ts dist/index.d.cts",
+    "build": "rm -rf dist && tsc --noEmit && rollup -c && cp dist/index.d.ts dist/index.d.cts",
+    "typecheck": "tsc --noEmit",
     "dev": "rollup -c -w",
     "test": "vitest run",
     "pretest": "npm run build",
-    "lint": "eslint src --ext .ts,.tsx",
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {

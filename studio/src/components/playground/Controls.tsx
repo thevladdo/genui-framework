@@ -5,6 +5,12 @@
 import { lazy, Suspense, useId, useRef, useState } from 'react';
 import styles from './Playground.module.css';
 import {
+  DISCLOSURE_MAX_FONT_PX,
+  DISCLOSURE_MIN_FONT_PX,
+  DISCLOSURE_MIN_OPACITY,
+  DISCLOSURE_POSITIONS,
+  DISCLOSURE_STATES,
+  DISCLOSURE_TEXT_MAX,
   FONT_OPTIONS,
   HEADING_WEIGHTS,
   MODES,
@@ -13,6 +19,8 @@ import {
   RADIUS_PRESETS,
   RADIUS_SM_PRESETS,
   SPACING_SCALES,
+  type DisclosureEnabled,
+  type DisclosurePosition,
   type SpacingScale,
   type StudioTheme,
   type ThemeMode,
@@ -143,6 +151,10 @@ export const Controls = ({ theme, onChange, onSave, onLoad }: ControlsProps) => 
   const colorId = useId();
   const hexId = useId();
   const fontId = useId();
+  const noticeId = useId();
+  const noticePositionId = useId();
+  const noticeSizeId = useId();
+  const noticeOpacityId = useId();
 
   // The hex field tolerates partial typing; the theme only updates on
   // valid 6-digit values so the preview never receives garbage
@@ -300,6 +312,107 @@ export const Controls = ({ theme, onChange, onSave, onLoad }: ControlsProps) => 
           <span className={styles.controlLabel}>Code font</span>
           <span className={styles.fixedValue}>JetBrains Mono (fixed)</span>
         </div>
+
+        <div className={styles.sectionHead}>AI Act &amp; GDPR</div>
+
+        <ToggleGroup
+          label="Disclosure notice"
+          options={DISCLOSURE_STATES}
+          value={theme.disclosureEnabled}
+          onChange={(v) => onChange({ disclosureEnabled: v as DisclosureEnabled })}
+          format={(option) => (option === 'on' ? 'Shown' : 'Hidden')}
+        />
+
+        <div className={styles.control}>
+          <label htmlFor={noticeId} className={styles.controlLabel}>
+            Wording
+            {theme.disclosureText === '' && (
+              <span className={styles.unsetHint}>default</span>
+            )}
+          </label>
+          <input
+            id={noticeId}
+            type="text"
+            className={styles.textField}
+            maxLength={DISCLOSURE_TEXT_MAX}
+            placeholder="AI-generated content"
+            value={theme.disclosureText}
+            onChange={(event) => onChange({ disclosureText: event.target.value })}
+          />
+        </div>
+
+        <div className={styles.control}>
+          <label htmlFor={noticePositionId} className={styles.controlLabel}>
+            Position
+          </label>
+          <select
+            id={noticePositionId}
+            className={styles.select}
+            value={theme.disclosurePosition}
+            onChange={(event) =>
+              onChange({
+                disclosurePosition: event.target.value as DisclosurePosition,
+              })
+            }
+          >
+            {DISCLOSURE_POSITIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className={styles.control}>
+          <label htmlFor={noticeSizeId} className={styles.controlLabel}>
+            Text size
+            <span className={styles.controlValue}>{theme.disclosureFontSize}</span>
+          </label>
+          <input
+            id={noticeSizeId}
+            type="range"
+            min={DISCLOSURE_MIN_FONT_PX}
+            max={DISCLOSURE_MAX_FONT_PX}
+            step={1}
+            value={parseInt(theme.disclosureFontSize, 10)}
+            onChange={(event) =>
+              onChange({ disclosureFontSize: `${event.target.value}px` })
+            }
+            className={styles.slider}
+          />
+        </div>
+
+        <div className={styles.control}>
+          <label htmlFor={noticeOpacityId} className={styles.controlLabel}>
+            Opacity
+            <span className={styles.controlValue}>
+              {Math.round(Number(theme.disclosureOpacity) * 100)}%
+            </span>
+          </label>
+          <input
+            id={noticeOpacityId}
+            type="range"
+            min={DISCLOSURE_MIN_OPACITY * 100}
+            max={100}
+            step={5}
+            value={Math.round(Number(theme.disclosureOpacity) * 100)}
+            onChange={(event) =>
+              onChange({
+                disclosureOpacity: String(Number(event.target.value) / 100),
+              })
+            }
+            className={styles.slider}
+          />
+        </div>
+
+        <p className={styles.groupHint}>
+          Zones showing AI-generated content carry this notice. It is on by
+          default and saved with the theme, so every page of this tenant words
+          it the same way. Hiding it means you inform the visitor somewhere
+          else: the machine-readable marking stays either way. The sliders stop
+          before the notice becomes unreadable, and its color follows the
+          theme's secondary text so it stays legible in light and dark.
+        </p>
       </div>
 
       {TenantThemePanel && (

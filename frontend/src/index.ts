@@ -28,9 +28,11 @@ export {
   LogoWall,
   ComponentRenderer,
   ComponentErrorBoundary,
+  GenUIDisclosureNotice,
 } from './components';
 
 export type {
+  GenUIDisclosureNoticeProps,
   TextComponentProps,
   BentoComponentProps,
   ChartComponentProps,
@@ -114,6 +116,12 @@ export type {
   PrivacyLevel,
   UseGenUIOptions,
   UseGenUIReturn,
+
+  // AI content disclosure
+  GenUIDisclosure,
+  GenUIDisclosureOptions,
+  GenUIDisclosurePosition,
+  GenUIProvenance,
 } from './types';
 
 // Utilities
@@ -131,6 +139,12 @@ export {
   initBehaviorTracker,
   getBehaviorTracker,
   stopBehaviorTracker,
+  DEFAULT_CHAT_DISCLOSURE_TEXT,
+  DEFAULT_DISCLOSURE_TEXT,
+  digitalSourceType,
+  disclosureJsonLd,
+  noticeComesFirst,
+  parseDisclosure,
 } from './utils';
 
 export type {

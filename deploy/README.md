@@ -9,6 +9,17 @@ GenUI ships on-prem: **one full deployment per customer**, on the customer's VM,
 If the deployment is the product, the deployment must be reproducible and its
 guarantees written. That is all this folder is.
 
+Four statements are written to be attached to a contract, each naming the code that implements every claim and the test that proves it, and each with a section on what it does not cover:
+
+| Statement | Audience | Question it answers |
+| --- | --- | --- |
+| [TENANT-ISOLATION.md](TENANT-ISOLATION.md) | security | Can one tenant reach another tenant's data? |
+| [OUTPUT-GUARANTEES.md](OUTPUT-GUARANTEES.md) | legal, compliance, security | What is enforced on what the model writes, regardless of the prompt? |
+| [AI-ACT.md](AI-ACT.md) | legal | Who carries the transparency obligations, what marks the generated content, and where must this system not be wired? |
+| [GDPR.md](GDPR.md) | DPO | What is processed on what basis, how are access and erasure served, what is retained, and what leaves the perimeter? |
+
+None of them says a deployment is compliant. They say what the code does, so that the assessment is a review of a document instead of a reading of a codebase.
+
 ## Bring-up
 
 ```bash
@@ -16,7 +27,10 @@ cd deploy
 cp customer.env.example customer.env   # edit: engine key, tenants, budget, CORS
 docker compose up -d --build
 ./smoke.sh                             # liveness, health, fail-closed, per-tenant scoping
+./posture.sh                           # configuration vs the compliance statements, and what leaves the perimeter
 ```
+
+The two scripts answer different questions and are kept apart on purpose. `smoke.sh` asks whether the stack is up and the tenants are isolated: it needs a running backend and stops at the first failure, because everything after a dead backend is noise. `posture.sh` reads `customer.env` and asks whether the configuration is the one the compliance statements describe: it needs nothing running, reports every finding in one pass, and prints the data flows that leave the deployment with the configuration in front of it, including the answers nobody wants.
 
 What comes up:
 

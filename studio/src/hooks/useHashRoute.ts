@@ -13,7 +13,8 @@ export type RoutePath =
   | "/zones"
   | "/audit"
   | "/policy"
-  | "/about";
+  | "/about"
+  | "/compliance";
 
 export interface HashRoute {
   path: RoutePath;
@@ -31,7 +32,8 @@ const parseHash = (): HashRoute => {
       rawPath === "/zones" ||
       rawPath === "/audit" ||
       rawPath === "/policy" ||
-      rawPath === "/about"
+      rawPath === "/about" ||
+      rawPath === "/compliance"
       ? rawPath
       : "/";
   return { path, query };

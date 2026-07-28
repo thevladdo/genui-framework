@@ -69,3 +69,42 @@ test("a token outside the contract is ignored", () => {
   assert.equal(loaded.accentColor, "#123456");
   assert.equal("backgroundImage" in loaded, false);
 });
+
+test("the disclosure config round-trips with the theme", () => {
+  const edited = {
+    ...DEFAULT_STUDIO_THEME,
+    disclosureEnabled: "off",
+    disclosurePosition: "below-center",
+    disclosureText: "Contenuto generato con AI",
+    disclosureFontSize: "12px",
+    disclosureOpacity: "0.75",
+  };
+  assert.deepEqual(themeFromTokens(themeTokens(edited)), edited);
+});
+
+test("a notice styled into invisibility is refused, floors win", () => {
+  const loaded = themeFromTokens({
+    disclosureFontSize: "3px",
+    disclosureOpacity: "0.05",
+    disclosureEnabled: "sometimes",
+    disclosurePosition: "behind",
+    disclosureText: "ok",
+  });
+  assert.equal(loaded.disclosureFontSize, DEFAULT_STUDIO_THEME.disclosureFontSize);
+  assert.equal(loaded.disclosureOpacity, DEFAULT_STUDIO_THEME.disclosureOpacity);
+  assert.equal(loaded.disclosureEnabled, DEFAULT_STUDIO_THEME.disclosureEnabled);
+  assert.equal(loaded.disclosurePosition, DEFAULT_STUDIO_THEME.disclosurePosition);
+});
+
+test("the notice wording is text, bounded, never CSS", () => {
+  const long = "x".repeat(121);
+  assert.equal(themeFromTokens({ disclosureText: long }).disclosureText, "");
+  assert.equal(
+    themeFromTokens({ disclosureText: "Testo & simboli <ok>" }).disclosureText,
+    "Testo & simboli <ok>",
+  );
+});
+
+test("unset wording means the library default, not an empty notice", () => {
+  assert.equal("disclosureText" in themeTokens(DEFAULT_STUDIO_THEME), false);
+});

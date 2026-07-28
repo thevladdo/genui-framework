@@ -880,6 +880,38 @@
   position: relative;
 }
 
+.genui-zone__disclosure {
+  display: block;
+  margin: 0;
+  font-family: var(--genui-font-family);
+  font-size: var(--genui-disclosure-font-size, var(--genui-font-size-sm));
+  line-height: var(--genui-line-height);
+  color: var(--genui-text-secondary);
+  opacity: var(--genui-disclosure-opacity, 1);
+}
+
+.genui-zone__disclosure--above-left,
+.genui-zone__disclosure--above-center,
+.genui-zone__disclosure--above-right {
+  margin-bottom: var(--genui-spacing-sm);
+}
+
+.genui-zone__disclosure--below-left,
+.genui-zone__disclosure--below-center,
+.genui-zone__disclosure--below-right {
+  margin-top: var(--genui-spacing-md);
+}
+
+.genui-zone__disclosure--above-center,
+.genui-zone__disclosure--below-center {
+  text-align: center;
+}
+
+.genui-zone__disclosure--above-right,
+.genui-zone__disclosure--below-right {
+  text-align: right;
+}
+
 .genui-zone__refreshing {
   position: absolute;
   top: var(--genui-spacing-sm);

@@ -48,6 +48,17 @@ export interface GenUITheme {
   radiusFull?: string;
   /** Heading font weight for section components (default: 700) */
   fontWeightHeading?: string;
+
+  /** AI disclosure notice, as tenant configuration */
+  disclosureEnabled?: "on" | "off";
+  /** Which side of the content the notice sits on and how it is aligned there (default: 'above-left'). */
+  disclosurePosition?: GenUIDisclosurePosition;
+  /** Wording of the notice. It is rendered as text, never as CSS */
+  disclosureText?: string;
+  /** Notice font size, 11px to 24px. The floor is deliberate: a notice nobody can read is not a notice. */
+  disclosureFontSize?: string;
+  /** Notice opacity, 0.6 to 1. Same reason for the floor as the size */
+  disclosureOpacity?: string;
 }
 
 // ============================================
@@ -422,6 +433,12 @@ export interface ResponseMeta {
   behavior?: BehaviorMeta;
   /** Present when the backend reports what its guarantee chain removed */
   sanitization?: SanitizationReport;
+  /**
+   * AI content marking of this answer: whether a model wrote it, when it
+   * was generated, and the provenance of the text. Absent when the
+   * backend has the disclosure turned off.
+   */
+  disclosure?: GenUIDisclosure;
 }
 
 export interface GenUIResponse {
@@ -463,6 +480,17 @@ export interface UserProfile {
 export type { PrivacyLevel } from "../utils/privacy";
 import type { PrivacyLevel } from "../utils/privacy";
 
+export type {
+  GenUIDisclosure,
+  GenUIDisclosureOptions,
+  GenUIDisclosurePosition,
+  GenUIProvenance,
+} from "../utils/disclosure";
+import type {
+  GenUIDisclosure,
+  GenUIDisclosurePosition,
+} from "../utils/disclosure";
+
 export interface BehaviorTrackerOptions {
   trackClicks?: boolean;
   trackScroll?: boolean;
@@ -489,25 +517,34 @@ export interface UseGenUIOptions {
    * server-side with sign_user_token() and pass it to the client.
    */
   userToken?: string;
-  /** User ID for profile management */
+  /** User ID for profile management (sent only once consent is granted) */
   userId?: string;
-  /** Enable IndexedDB persistence */
+  /** Allow IndexedDB persistence (still requires consent) */
   enablePersistence?: boolean;
   /** Enable behavior tracking (default: true) */
   enableBehaviorTracking?: boolean;
   /** Behavior tracker configuration */
   behaviorTrackingOptions?: BehaviorTrackerOptions;
   /**
-   * Privacy level of the behavior tracker (default: 'balanced' — text
-   * PII-redacted, form fields never captured, DNT/GPC honored).
-   * 'strict' = structural signals only; 'off' = raw capture (explicit choice).
+   * Capture contract of the behavior tracker, once consent is granted
+   * (default: 'balanced': text PII-redacted, form fields never
+   * captured). 'strict' = structural signals only; 'off' = raw capture
+   * (explicit choice).
    */
   privacy?: PrivacyLevel;
   /**
-   * Consent hook for your CMP: pass false until the user consents (nothing is
-   * tracked), true once granted (overrides DNT/GPC). Unset = no consent gating.
+   * Consent from your CMP. Only an explicit `true` lets the library
+   * touch the visitor's browser (IndexedDB profile and history),
+   * capture behavior, or send a userId. Unset or false, the chat still
+   * answers: without local memory and without naming anyone.
    */
   consent?: boolean;
+  /**
+   * Wording of the AI interaction notice returned in `disclosure.notice`,
+   * for the host to show at the latest at the first interaction. The
+   * exact phrasing is a legal choice, so it is yours to set.
+   */
+  disclosureText?: string;
   /** Callback when profile is updated */
   onProfileUpdate?: (profile: UserProfile) => void;
   /** Callback on API error */
@@ -531,6 +568,16 @@ export interface UseGenUIReturn {
   history: Array<{ role: "user" | "assistant"; content: string }>;
   /** Clear conversation history */
   clearHistory: () => void;
+  /**
+   * What the host needs to tell the person they are talking to an AI:
+   * a notice available before the first message, plus the marking of
+   * the last answer received.
+   */
+  disclosure: {
+    aiInteraction: boolean;
+    notice: string;
+    lastResponse: GenUIDisclosure | null;
+  };
   /** Behavior tracker instance */
   behaviorTracker: unknown | null;
   /** Track a custom element interaction */

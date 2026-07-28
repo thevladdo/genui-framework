@@ -3,13 +3,14 @@ GenUI Backend API
 FastAPI application exposing the multi-agent system for GenUI frontend.
 """
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Form, Request, Security, UploadFile
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Form, Query, Request, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from api.deps import get_profile_store
@@ -26,6 +27,7 @@ from auth.dependencies import (
     USER_TOKEN_HEADER,
     check_user_access,
     get_audit_logger,
+    get_audit_reader,
     require_admin,
     require_client,
 )
@@ -35,6 +37,7 @@ from llm.factory import llm_configured
 from config import settings
 from agents import get_orchestrator, OrchestratorResult
 from metrics.ops import get_ops_metrics
+from profiles import is_identified
 from rag import create_chunker, create_vector_store
 from schemas.components import GENUI_CONTRACT_VERSION
 from utils.redis_conn import shared_redis
@@ -111,6 +114,12 @@ class MetaInfo(BaseModel):
         description="What the guarantee chain removed: removed_urls, "
                     "dropped_components, removed_numbers, policy_violations"
     )
+    disclosure: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="AI content marking of this answer: ai_generated, "
+                    "provenance, generated_at, system. Absent when the "
+                    "operator set GENUI_DISCLOSURE_OFF"
+    )
 
 
 class QueryResponse(BaseModel):
@@ -174,6 +183,18 @@ async def lifespan(app: FastAPI):
     # Tracing (no-op unless TRACING_ENABLED=true)
     from utils.tracing import setup_tracing
     setup_tracing(app)
+
+    # Transparency posture, stated at boot: the compliant default is
+    # silent, turning it off is not. An operator who inherits a
+    # deployment must be able to read this off the logs.
+    if settings.genui_disclosure_off:
+        logger.warning(
+            "GENUI_DISCLOSURE_OFF=1: AI content disclosure is DISABLED. "
+            "Served payloads carry no marking of generated content and the "
+            "library renders no notice. By setting this you are declaring "
+            "that the transparency information for AI-generated content is "
+            "provided elsewhere in your product."
+        )
 
     # Initialize orchestrator (warms up connections)
     try:
@@ -360,6 +381,11 @@ async def process_query(
     5. Analyzes behavior data using the Behave Agent (if provided)
     6. Persists profile updates server-side and audit-logs the interaction
     """
+    # No usable identity means no data subject: the answer is generated,
+    # nothing per-user is read, and nothing per-user is written.
+    if not is_identified(request.user_id):
+        request.user_id = None
+
     check_user_access(auth, request.user_id, user_token)
 
     try:
@@ -454,6 +480,7 @@ async def process_query(
                 sentiment=meta_data["sentiment"],
                 behavior=behavior_meta,
                 sanitization=meta_data.get("sanitization"),
+                disclosure=meta_data.get("disclosure"),
             ),
         )
         
@@ -750,6 +777,16 @@ async def sync_profile(
     carry strictly higher confidence (e.g. collected while the server
     had no data).
     """
+    # A render degrades to anonymous; this route cannot, because
+    # storing the profile IS the request. Answering "synced" while
+    # storing nothing, or storing everyone under one shared key, are
+    # both worse than saying no.
+    if not is_identified(request.user_id):
+        raise HTTPException(
+            status_code=400,
+            detail="user_id must identify a person: profiles are not stored "
+                   "for anonymous or placeholder identifiers",
+        )
     check_user_access(auth, request.user_id, user_token)
     store = get_profile_store()
     merged = await store.sync_client_profile(
@@ -786,6 +823,65 @@ async def get_profile(
     return {"user_id": user_id, "profile": profile}
 
 
+@app.get("/api/v1/profile/{user_id}/export")
+async def export_user_data(
+    user_id: str,
+    auth: AuthContext = Depends(require_client),
+    user_token: Optional[str] = Security(USER_TOKEN_HEADER),
+    limit: int = Query(500, ge=1, le=2000, description="Audit entries per page"),
+    offset: int = Query(0, ge=0),
+):
+    """
+    Everything this deployment holds about one person (GDPR Art. 15).
+
+    Two things, because there are only two: the stored profile, and the
+    audit entries that name this user (renders served, queries asked,
+    impressions and clicks, profile changes and erasures). The rest of
+    the state is aggregate or tenant-level: cached renders belong to a
+    segment, event counters to a zone and an arm, themes and zone
+    configs to the operator, and none of them is keyed by a person.
+
+    Same identity guard as the other per-user routes: a badly guarded
+    export route is a data breach wearing a compliance label. The audit
+    side reuses the read path of the trail, so filtering and tenant
+    scoping cannot drift from the one the audit viewer uses; when the
+    trail lives in the host's log pipeline it says so (queryable=false)
+    rather than reporting an empty history.
+    """
+    check_user_access(auth, user_id, user_token)
+
+    store = get_profile_store()
+    profile = await store.get(auth.tenant, user_id)
+
+    reader = get_audit_reader()
+    # Blocking file reads: off the event loop, like the audit viewer route
+    audit = await asyncio.to_thread(
+        reader.query, auth.tenant, user_id=user_id, limit=limit, offset=offset
+    )
+
+    get_audit_logger().log(
+        "profile_export",
+        tenant=auth.tenant,
+        user_id=user_id,
+        key=auth.key_fingerprint,
+        profile_found=profile is not None,
+        audit_entries=len(audit["entries"]),
+    )
+
+    return {
+        "user_id": user_id,
+        "tenant": auth.tenant,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "profile": profile,
+        "audit": {
+            "source": reader.source,
+            "queryable": reader.queryable,
+            "note": reader.note,
+            **audit,
+        },
+    }
+
+
 @app.delete("/api/v1/profile/{user_id}")
 async def delete_profile(
     user_id: str,
@@ -795,8 +891,22 @@ async def delete_profile(
     """
     Erase a user profile (GDPR right-to-erasure).
 
-    The deletion itself is audit-logged; the audit record contains no
-    profile data.
+    What goes: the profile, which is the whole of the personalization
+    data held about this person. Nothing else is keyed by a user.
+
+    What stays: the audit trail. It is append-only by design, because a
+    record of what was shown to whom is worth nothing if the party who
+    showed it can rewrite it afterwards, and in a regulated deployment
+    it is also the operator's evidence of their own compliance. Rewriting
+    it on request would destroy the accountability it exists for, and in
+    the production setup it is not even ours to rewrite: the lines have
+    already left for the host's log pipeline. So it is bounded instead
+    of edited, by rotation on the file sink and by the pipeline's
+    retention policy otherwise, and the erasure itself is recorded in
+    it, so a later export shows when the right was exercised.
+
+    The response says which of the two happened, rather than reporting a
+    clean "deleted" that would overstate it.
     """
     check_user_access(auth, user_id, user_token)
     store = get_profile_store()
@@ -810,7 +920,20 @@ async def delete_profile(
         existed=existed,
     )
 
-    return {"status": "deleted", "user_id": user_id, "existed": existed}
+    return {
+        "status": "deleted",
+        "user_id": user_id,
+        "existed": existed,
+        "profile_erased": True,
+        "audit_retained": settings.audit_log_enabled,
+        "note": (
+            "The profile is erased. Audit entries naming this user are kept: "
+            "the trail is append-only accountability evidence, bounded by the "
+            "configured retention instead of edited."
+            if settings.audit_log_enabled
+            else "The profile is erased. Auditing is disabled on this deployment."
+        ),
+    }
 
 
 # Run with: uvicorn api.main:app --reload --host 0.0.0.0 --port 8000

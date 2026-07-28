@@ -105,7 +105,7 @@ export const Nav = ({ path }: NavProps) => {
     <header className={styles.nav}>
       <a href="#/" className={styles.wordmark}>
         <img src='./GenUI_Logo.png' style={{ maxHeight: "30px", marginRight: "15px" }} />
-        GenUI <span>Studio</span>
+        GenUI&nbsp;<span>Studio</span>
       </a>
 
       <nav aria-label="Sections" className={styles.tabs}>

@@ -5,7 +5,10 @@
 import { useEffect, useState } from 'react';
 import {
   ComponentRenderer,
+  GenUIDisclosureNotice,
   GenUISection,
+  noticeComesFirst,
+  parseDisclosure,
   type GenUIComponent,
   type GenUITheme,
 } from 'genui-framework';
@@ -64,6 +67,21 @@ const ColumnRender = ({
   const removed = sanitizationCount(report);
   const fallback = isFallbackRender(response.meta);
   const cache = response.meta?.cache;
+  // The preview claims to show what the visitor is served, so it shows
+  // the notice the visitor gets: this render's own marking decides
+  // whether there is one at all (a pinned-only fallback is not
+  // generated and carries none), and the tenant's saved theme decides
+  // its wording and placement.
+  const disclosure = parseDisclosure(response.meta?.disclosure);
+  const noticePosition = theme?.disclosurePosition ?? 'above-left';
+  const notice =
+    disclosure?.aiGenerated && theme?.disclosureEnabled !== 'off' ? (
+      <GenUIDisclosureNotice
+        text={theme?.disclosureText}
+        position={noticePosition}
+      />
+    ) : null;
+  const noticeFirst = noticeComesFirst(noticePosition);
 
   const sanitizationRows: Array<{ label: string; items: string[] }> = [
     { label: 'URLs removed', items: report.removedUrls },
@@ -86,9 +104,11 @@ const ColumnRender = ({
       <div className={styles.canvas}>
         {response.components.length > 0 ? (
           <GenUISection theme={theme}>
+            {noticeFirst && notice}
             <ComponentRenderer
               components={response.components as unknown as GenUIComponent[]}
             />
+            {!noticeFirst && notice}
           </GenUISection>
         ) : (
           <p className={styles.emptyNote}>
@@ -110,6 +130,16 @@ const ColumnRender = ({
           <span className={styles.metaLabel}>Personalized</span>
           <span className={styles.metaValue}>
             {response.personalization_applied ? 'yes' : 'no'}
+          </span>
+        </div>
+        <div className={styles.metaRow}>
+          <span className={styles.metaLabel}>Disclosure</span>
+          <span className={styles.metaValue}>
+            {disclosure
+              ? `${disclosure.aiGenerated ? 'AI-generated' : 'not generated'} · ${disclosure.provenance}${
+                  disclosure.generatedAt ? ` · generated ${disclosure.generatedAt}` : ''
+                }`
+              : 'no marking in the payload (GENUI_DISCLOSURE_OFF, or an older backend)'}
           </span>
         </div>
         {typeof response.meta?.confidence === 'number' && (

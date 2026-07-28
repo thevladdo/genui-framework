@@ -30,7 +30,7 @@ import {
   isPrivateElement,
   isRedactedElement,
   isFormField,
-  trackingAllowed,
+  consentGranted,
   sanitizeText,
   sanitizeValue,
 } from "../src/utils/privacy";
@@ -115,49 +115,22 @@ test("isFormField: input, textarea, select, contenteditable", () => {
   assert.equal(isFormField(el()), false);
 });
 
-// --- consent / DNT gate ------------------------------------------------------
+// --- consent gate ------------------------------------------------------------
 
-test("trackingAllowed: consent and DNT/GPC matrix", () => {
-  assert.equal(
-    trackingAllowed({ privacy: "balanced" } as any, {} as any),
-    true,
-  );
-  // explicit denial blocks everything, even 'off'
-  assert.equal(
-    trackingAllowed({ privacy: "balanced", consent: false } as any, {} as any),
-    false,
-  );
-  assert.equal(
-    trackingAllowed({ privacy: "off", consent: false } as any, {} as any),
-    false,
-  );
-  // ambient signals block unless 'off'
-  assert.equal(
-    trackingAllowed({ privacy: "balanced" } as any, { doNotTrack: "1" } as any),
-    false,
-  );
-  assert.equal(
-    trackingAllowed(
-      { privacy: "strict" } as any,
-      { globalPrivacyControl: true } as any,
-    ),
-    false,
-  );
-  assert.equal(
-    trackingAllowed({ privacy: "off" } as any, { doNotTrack: "1" } as any),
-    true,
-  );
-  // explicit consent (host CMP) overrides the ambient browser signal
-  assert.equal(
-    trackingAllowed(
-      { privacy: "balanced", consent: true } as any,
-      { doNotTrack: "1" } as any,
-    ),
-    true,
-  );
+test("consentGranted: only an explicit grant opens the gate", () => {
+  assert.equal(consentGranted(true), true);
+  assert.equal(consentGranted(false), false);
+  assert.equal(consentGranted(undefined), false);
 });
 
-test("tracker.start() is a no-op without consent", () => {
+test("tracker.start() runs on an explicit grant and on nothing else", () => {
+  // Unset consent is not consent: the tracker stays asleep at every level
+  for (const privacy of ["strict", "balanced", "off"]) {
+    const unset = newTracker({ privacy });
+    unset.start();
+    assert.equal(unset.isTracking, false, privacy);
+  }
+
   const denied = newTracker({ consent: false });
   denied.start();
   assert.equal(denied.isTracking, false);

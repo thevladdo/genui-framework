@@ -214,6 +214,24 @@ class Settings(BaseSettings):
                     "Overridable per request/registry via max_components"
     )
 
+    # AI content disclosure (transparency obligations)
+    genui_disclosure_off: bool = Field(
+        default=False,
+        description="Turn OFF the AI content disclosure: served payloads carry "
+                    "no marking and the library shows no notice. Setting it is "
+                    "a declaration that the transparency information required "
+                    "for AI-generated content is provided elsewhere in the "
+                    "product. Logged loudly at startup. Default: disclosure ON."
+    )
+    disclosure_expose_model: bool = Field(
+        default=False,
+        description="Include the model name in the disclosure block. Off by "
+                    "default: the reader has to know the content is AI "
+                    "generated, not which model wrote it, and naming it "
+                    "publishes both an attack target and the operator's "
+                    "vendor choice"
+    )
+
     # Audit Log
     audit_log_enabled: bool = Field(
         default=True,
@@ -238,8 +256,12 @@ class Settings(BaseSettings):
 
     # Server-side Profiles
     profile_ttl_seconds: int = Field(
-        default=0,
-        description="Profile retention in seconds, refreshed on write (0 = keep forever)"
+        default=90 * 24 * 3600,
+        description="Profile retention in seconds, refreshed on every write "
+                    "(default 90 days of inactivity; 0 = keep forever, which "
+                    "makes storage limitation your own policy to justify). "
+                    "Applies to the Redis store; the in-memory fallback is "
+                    "bounded by size and lost on restart"
     )
 
     # Experimentation (personalization uplift measurement)

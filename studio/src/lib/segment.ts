@@ -129,6 +129,8 @@ export interface PreviewMeta {
   confidence?: number;
   reasoning?: string;
   sanitization?: Record<string, unknown>;
+  /** AI content marking, as the backend sent it (parseDisclosure reads it) */
+  disclosure?: Record<string, unknown>;
 }
 
 export interface PreviewRenderResponse {

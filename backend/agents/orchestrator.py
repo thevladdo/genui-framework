@@ -74,6 +74,7 @@ class OrchestratorResult:
                 "topics": self.profile_analysis.topics,
                 "sentiment": self.profile_analysis.sentiment,
                 "sanitization": self.response.sanitization,
+                "disclosure": self.response.disclosure,
             }
         }
         

@@ -3,13 +3,17 @@
  * Manages the rendering and state of GenUI zones
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import type { GenUIComponent, SanitizationReport, UserProfile } from '../types';
-import type { GenUICustomComponentDef } from '../registry';
-import { getProfile, profileToApiFormat } from '../utils/indexeddb';
-import { getBehaviorTracker } from '../utils/behaviorTracker';
-import { redactPII } from '../utils/privacy';
-import { readSSEStream } from '../utils/sse';
+import { useState, useEffect, useCallback, useRef } from "react";
+import type { GenUIComponent, SanitizationReport, UserProfile } from "../types";
+import type { GenUICustomComponentDef } from "../registry";
+import { getProfile, profileToApiFormat } from "../utils/indexeddb";
+import {
+  getBehaviorTracker,
+  initBehaviorTracker,
+} from "../utils/behaviorTracker";
+import { parseDisclosure, type GenUIDisclosure } from "../utils/disclosure";
+import { consentGranted, redactPII, type PrivacyLevel } from "../utils/privacy";
+import { readSSEStream } from "../utils/sse";
 
 // ============================================
 // Types
@@ -17,7 +21,7 @@ import { readSSEStream } from '../utils/sse';
 
 export interface PinnedContent {
   /** Content type: link, article, document, custom */
-  type: 'link' | 'article' | 'document' | 'custom';
+  type: "link" | "article" | "document" | "custom";
   /** URL for links */
   url?: string;
   /** Display title */
@@ -56,7 +60,12 @@ export interface UseZoneOptions {
    */
   customComponents?: GenUICustomComponentDef[];
   /** Force a specific component type (built-in or registered custom name) */
-  preferredComponentType?: 'bento' | 'chart' | 'text' | 'buttons' | (string & {});
+  preferredComponentType?:
+    | "bento"
+    | "chart"
+    | "text"
+    | "buttons"
+    | (string & {});
   /** Maximum number of items to display */
   maxItems?: number;
   /**
@@ -67,8 +76,22 @@ export interface UseZoneOptions {
    * approved registry config when it sets one.
    */
   maxComponents?: number;
-  /** User ID for profile lookup */
+  /** User ID for profile lookup (sent only once consent is granted) */
   userId?: string;
+  /**
+   * Consent from your CMP. Without an explicit `true` the zone runs in
+   * anonymous mode: nothing is written to or read from the visitor's
+   * browser, no userId and no behavior leave the page, and the backend
+   * serves the archetype of the anonymous segment. The zone still
+   * renders, and still personalizes by segment.
+   */
+  consent?: boolean;
+  /**
+   * Capture contract of the behavior tracker, once consent is granted
+   * (default: 'balanced'). Also decides whether the auto-detected page
+   * path is PII-redacted before it is sent.
+   */
+  privacy?: PrivacyLevel;
   /** Current page path */
   currentPage?: string;
   /** Additional page context */
@@ -82,7 +105,7 @@ export interface UseZoneOptions {
    * - 'segment' (default): serve per-segment cached renders (stale-while-revalidate)
    * - 'live': always call the LLM (for genuinely dynamic zones)
    */
-  cacheStrategy?: 'segment' | 'live';
+  cacheStrategy?: "segment" | "live";
   /**
    * Progressive render via Server-Sent Events: components appear one by
    * one as the model generates them. Most useful with cacheStrategy='live';
@@ -133,6 +156,12 @@ export interface ZoneRenderMeta {
   experiment?: ZoneExperimentMeta;
   /** What the backend guarantee chain removed from the model's output */
   sanitization?: SanitizationReport;
+  /**
+   * AI content marking of this render: whether a model wrote it, when it
+   * was generated, and the provenance of the visible text. Absent when
+   * the backend has the disclosure turned off (or predates it).
+   */
+  disclosure?: GenUIDisclosure;
 }
 
 export interface UseZoneReturn {
@@ -162,14 +191,16 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
     apiKey,
     userToken,
     zoneId,
-    basePrompt = 'Show relevant content for this user',
+    basePrompt = "Show relevant content for this user",
     contextPrompt,
     pinnedContent = [],
     customComponents,
     preferredComponentType,
     maxItems = 6,
     maxComponents,
-    userId = 'anonymous',
+    userId = "anonymous",
+    consent,
+    privacy,
     currentPage,
     pageMetadata,
     loadOnMount = true,
@@ -189,7 +220,9 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
   const [isLoading, setIsLoading] = useState(loadOnMount);
   const [error, setError] = useState<Error | null>(null);
   const [meta, setMeta] = useState<ZoneRenderMeta | null>(null);
-  const [pinnedContentIncluded, setPinnedContentIncluded] = useState<string[]>([]);
+  const [pinnedContentIncluded, setPinnedContentIncluded] = useState<string[]>(
+    [],
+  );
 
   const mountedRef = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
@@ -211,42 +244,53 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
     setError(null);
 
     try {
+      // One decision, three consequences: reading the profile off the
+      // visitor's device, shipping their behavior, and naming them to
+      // the backend all need the same permission, so they are gated
+      // here and nowhere else. Denied, the request carries nothing that
+      // identifies anyone and the backend answers from the anonymous
+      // segment: degraded to a declared mode, not switched off.
+      const consented = consentGranted(consent);
+
       // Get user profile from IndexedDB
       let userProfile: Record<string, unknown> | null = null;
-      try {
-        const profile = await getProfile(userId);
-        if (profile) {
-          userProfile = profileToApiFormat(profile);
+      if (consented) {
+        try {
+          const profile = await getProfile(userId);
+          if (profile) {
+            userProfile = profileToApiFormat(profile);
+          }
+        } catch (e) {
+          console.warn("Failed to load user profile for zone:", e);
         }
-      } catch (e) {
-        console.warn('Failed to load user profile for zone:', e);
       }
 
       // Get behavior data (already sanitized at capture time by the tracker)
       let behaviorData: Record<string, unknown> | null = null;
       const tracker = getBehaviorTracker();
-      if (tracker) {
+      if (consented && tracker) {
         behaviorData = tracker.getCompactSummary();
       }
 
       // The auto-captured page path follows the tracker's privacy level; an
       // explicit currentPage prop is the integrator's own choice and goes raw
-      const privacyLevel = tracker?.getPrivacyLevel() ?? 'balanced';
+      const privacyLevel = privacy ?? tracker?.getPrivacyLevel() ?? "balanced";
       const autoPage =
-        typeof window !== 'undefined' ? window.location.pathname : undefined;
+        typeof window !== "undefined" ? window.location.pathname : undefined;
       const pagePath =
         currentPage ||
-        (autoPage && privacyLevel !== 'off' ? redactPII(autoPage) : autoPage);
+        (autoPage && privacyLevel !== "off" ? redactPII(autoPage) : autoPage);
 
       // Build request
       const requestBody = {
         zone_id: zoneId,
         // 'anonymous' is the local default, not an identity: sending it
         // would share one server-side profile across all anonymous users
-        user_id: userId && userId !== 'anonymous' ? userId : undefined,
+        user_id:
+          consented && userId && userId !== "anonymous" ? userId : undefined,
         base_prompt: basePrompt,
         context_prompt: contextPrompt,
-        pinned_content: pinnedContent.map(p => ({
+        pinned_content: pinnedContent.map((p) => ({
           type: p.type,
           url: p.url,
           title: p.title,
@@ -254,7 +298,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
           id: p.id,
           metadata: p.metadata,
         })),
-        custom_components: customComponents?.map(c => ({
+        custom_components: customComponents?.map((c) => ({
           name: c.name,
           data_schema: c.dataSchema,
           description: c.description,
@@ -274,7 +318,9 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
 
       // Applies a full /render-shaped response to local state
       const applyResponse = (data: any): GenUIComponent[] => {
-        const renderedComponents: GenUIComponent[] = (data.components || []).map((c: any) => ({
+        const renderedComponents: GenUIComponent[] = (
+          data.components || []
+        ).map((c: any) => ({
           type: c.type,
           data: c.data,
           layout: c.layout,
@@ -284,7 +330,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
         setPinnedContentIncluded(data.pinned_content_included || []);
         setMeta({
           confidence: data.meta?.confidence ?? 0.5,
-          reasoning: data.meta?.reasoning ?? '',
+          reasoning: data.meta?.reasoning ?? "",
           profileFactors: data.meta?.profile_factors ?? [],
           personalizationApplied: data.personalization_applied ?? false,
           renderedAt: data.rendered_at,
@@ -307,23 +353,28 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
           sanitization: data.meta?.sanitization
             ? {
                 removedUrls: data.meta.sanitization.removed_urls ?? [],
-                droppedComponents: data.meta.sanitization.dropped_components ?? [],
+                droppedComponents:
+                  data.meta.sanitization.dropped_components ?? [],
                 removedNumbers: data.meta.sanitization.removed_numbers ?? [],
-                policyViolations: data.meta.sanitization.policy_violations ?? [],
+                policyViolations:
+                  data.meta.sanitization.policy_violations ?? [],
               }
             : undefined,
+          disclosure: parseDisclosure(data.meta?.disclosure),
         });
 
         return renderedComponents;
       };
 
-      const endpoint = streaming ? '/api/v1/zone/render/stream' : '/api/v1/zone/render';
+      const endpoint = streaming
+        ? "/api/v1/zone/render/stream"
+        : "/api/v1/zone/render";
       const response = await fetch(`${apiUrl}${endpoint}`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          ...(apiKey ? { 'X-API-Key': apiKey } : {}),
-          ...(userToken ? { 'X-User-Token': userToken } : {}),
+          "Content-Type": "application/json",
+          ...(apiKey ? { "X-API-Key": apiKey } : {}),
+          ...(userToken ? { "X-User-Token": userToken } : {}),
         },
         body: JSON.stringify(requestBody),
         signal: controller.signal,
@@ -331,7 +382,9 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `Zone render failed: ${response.status}`);
+        throw new Error(
+          errorData.detail || `Zone render failed: ${response.status}`,
+        );
       }
 
       if (streaming && response.body) {
@@ -343,16 +396,19 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
 
         await readSSEStream(response, (event, data) => {
           if (!mountedRef.current || controller.signal.aborted) return;
-          if (event === 'component') {
-            setComponents(prev => [...prev, {
-              type: data.type,
-              data: data.data,
-              layout: data.layout,
-            }]);
-          } else if (event === 'complete') {
+          if (event === "component") {
+            setComponents((prev) => [
+              ...prev,
+              {
+                type: data.type,
+                data: data.data,
+                layout: data.layout,
+              },
+            ]);
+          } else if (event === "complete") {
             finalComponents = applyResponse(data);
-          } else if (event === 'error') {
-            streamError = new Error(data?.detail || 'Zone stream failed');
+          } else if (event === "error") {
+            streamError = new Error(data?.detail || "Zone stream failed");
           }
         });
 
@@ -368,7 +424,6 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
 
       const renderedComponents = applyResponse(data);
       onRender?.(renderedComponents);
-
     } catch (err) {
       // An aborted request was superseded (or unmounted): not an error
       if (controller.signal.aborted) return;
@@ -397,6 +452,8 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
     maxItems,
     maxComponents,
     userId,
+    consent,
+    privacy,
     currentPage,
     pageMetadata,
     cacheStrategy,
@@ -430,6 +487,18 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
     };
   }, []);
 
+  // Behavior capture used to start only from useGenUI, so a page built
+  // out of zones alone collected nothing and never said so.
+  // A zone now starts the page tracker itself, but only once consent is granted.
+  // One tracker per page: another zone that finds one running leaves it
+  // alone, since re-initializing would throw away the signals collected
+  // so far, and nobody stops it on unmount because it belongs to the page rather than to this zone.
+  useEffect(() => {
+    if (!consentGranted(consent)) return;
+    if (getBehaviorTracker()) return;
+    initBehaviorTracker({ userId, privacy, consent });
+  }, [consent, privacy, userId]);
+
   // Everything that changes WHAT this zone requests, compared BY VALUE.
   // Hosts routinely pass fresh object/array literals on every render
   // (pinnedContent={[...]}, inline pageMetadata), so depending on prop
@@ -451,6 +520,8 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
     maxItems,
     maxComponents,
     userId,
+    consent,
+    privacy,
     currentPage,
     pageMetadata,
     cacheStrategy,

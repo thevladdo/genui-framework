@@ -45,6 +45,9 @@ export type { QuoteBlockProps } from './QuoteBlock';
 export { LogoWall } from './LogoWall';
 export type { LogoWallProps } from './LogoWall';
 
+export { GenUIDisclosureNotice } from './DisclosureNotice';
+export type { GenUIDisclosureNoticeProps } from './DisclosureNotice';
+
 export { GenUISection } from './GenUISection';
 export { GenUISection as default } from './GenUISection';
 

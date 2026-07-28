@@ -22,6 +22,28 @@ from .merge import apply_profile_updates, merge_client_profile
 # profile database: without a cap it grows one dict entry per user.
 _MEMORY_MAX_PROFILES = 2000
 
+# Client-side placeholder for "no one in particular". It is a default,
+# never an identity, and a profile stored under it would be one record
+# shared by every anonymous visitor.
+_ANONYMOUS_PLACEHOLDERS = {"anonymous", "anon", "undefined", "null", "none"}
+
+
+def is_identified(user_id: Optional[str]) -> bool:
+    """
+    Whether a request carries a usable identity.
+
+    Personal data needs someone to belong to: without a real user_id
+    there is no data subject, so there is nothing to store, nothing to
+    export and nothing to erase. Blank, whitespace and the client-side
+    anonymous placeholders all mean the same thing here, and the answer
+    to all of them is the anonymous path.
+    """
+    return bool(
+        user_id
+        and user_id.strip()
+        and user_id.strip().lower() not in _ANONYMOUS_PLACEHOLDERS
+    )
+
 
 class ProfileStore:
     """Async profile storage with Redis or in-memory backend."""
@@ -73,6 +95,13 @@ class ProfileStore:
         return self._memory.get(key)
 
     async def set(self, tenant: str, user_id: str, profile: Dict[str, Any]) -> None:
+        # The one place per-user state is created, so the one place that
+        # can refuse to create it without a person to attach it to.
+        if not is_identified(user_id):
+            raise ValueError(
+                "Refusing to store a profile without an identified user_id "
+                f"(got {user_id!r})"
+            )
         key = self._key(tenant, user_id)
 
         redis = await self._get_redis()

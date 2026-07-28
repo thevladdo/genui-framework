@@ -19,6 +19,11 @@ from llm import create_llm_client
 from rag import create_vector_store, build_context_from_results
 from schemas import component_to_dict, validate_components
 from utils.content_policy_store import effective_policy
+from utils.disclosure import (
+    PROVENANCE_NONE,
+    content_provenance,
+    disclosure_block,
+)
 from utils.numeric_guard import NumericGuard
 from utils.url_guard import UrlGuard
 
@@ -136,6 +141,9 @@ class AgentResponse:
     confidence: float
     suggested_actions: List[str]
     sanitization: Dict[str, Any] = None
+    # Marking of this answer: whether a model wrote it, when, and with
+    # which provenance. None when the operator turned disclosure off.
+    disclosure: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         if self.sanitization is None:
@@ -149,6 +157,7 @@ class AgentResponse:
             "confidence": self.confidence,
             "suggested_actions": self.suggested_actions,
             "sanitization": self.sanitization,
+            "disclosure": self.disclosure,
         }
 
 
@@ -494,6 +503,16 @@ security regulations. The implementation is handled by your technical team..."
                 if isinstance(s, dict) and (not s.get("url") or guard.is_allowed(s["url"]))
             ]
 
+            # The answer is marked with what actually produced it. The
+            # prose is checked alongside the components: in a chat it is
+            # the main thing the person reads, and it is the part a
+            # model almost always writes from scratch.
+            corpus = "\n".join(
+                [query, retrieved_context or ""]
+                + tool_contexts
+                + [str(m.get("content") or "") for m in (conversation_history or [])]
+            )
+
             return AgentResponse(
                 text_response=text_response,
                 components=[
@@ -513,11 +532,23 @@ security regulations. The implementation is handled by your technical team..."
                     "removed_numbers": removed_numbers,
                     "policy_violations": policy_violations,
                 },
+                disclosure=disclosure_block(
+                    ai_generated=True,
+                    provenance=content_provenance(
+                        component_dicts + [{"data": {"content": text_response}}],
+                        corpus,
+                    ),
+                    model=self.model,
+                    enabled=not settings.genui_disclosure_off,
+                    expose_model=settings.disclosure_expose_model,
+                ),
             )
-            
+
         except Exception as e:
             logger.error(f"Agent processing failed: {e}")
-            # Return a fallback response (the error stays in the logs)
+            # Return a fallback response (the error stays in the logs).
+            # No model output reaches the user here: these two strings
+            # are written in this file, and the marking says so.
             return AgentResponse(
                 text_response="I couldn't process your request right now.",
                 components=[
@@ -526,6 +557,11 @@ security regulations. The implementation is handled by your technical team..."
                 sources=[],
                 confidence=0.0,
                 suggested_actions=["Rephrase question", "Contact support"],
+                disclosure=disclosure_block(
+                    ai_generated=False,
+                    provenance=PROVENANCE_NONE,
+                    enabled=not settings.genui_disclosure_off,
+                ),
             )
     
     def _parse_response(self, response_text: str) -> Dict[str, Any]:

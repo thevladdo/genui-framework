@@ -44,7 +44,8 @@ GenUI System is a complete customization engine for building **Generative User I
 - **Custom Components**: register _your_ design system — the LLM generates it ([guide](#-custom-components--your-design-system-as-llm-vocabulary))
 - **Premium Components**: Glassmorphism bento grids, 8 button variants, charts, styled text
 - **Progressive Render**: components stream in as the model generates them (SSE)
-- **Behavior Tracking & Events**: clicks, scrolls, impressions — uplift measured automatically, with a privacy filter (PII redaction, `data-genui-private`, DNT/consent) on by default
+- **Behavior Tracking & Events**: clicks, scrolls, impressions, with uplift measured automatically, behind a consent gate, with a privacy filter (PII redaction, `data-genui-private`) on by default
+- **Personalized without cookies**: with no consent the zone touches nothing on the device and is still curated, for an anonymous segment ([how](#consent-and-personalization-without-it))
 - **Theme System**: CSS-variable based customization
 - **Container-Responsive**: zones adapt to their own width via container queries — a sidebar embed lays out like a sidebar, not like the page
 - **Pinned Content**: guaranteed display, enforced server-side
@@ -61,7 +62,7 @@ GenUI System is a complete customization engine for building **Generative User I
 - **Output Guarantees**: schema validation + URL whitelist + numeric grounding + per-tenant content policy + no repeated content — the system guarantees, not the prompt ([how](#️-output-guarantees))
 - **Config as Data**: zone prompts, pinned content and constraints live server-side with draft / preview / approve and versions, so marketing, legal or compliance can change what a zone says without a deploy ([how](#%EF%B8%8F-zone-config-registry--config-as-data))
 - **Auth & Multi-tenancy**: API keys, per-tenant isolation, rate limiting
-- **Server-Side Profiles**: source of truth with GDPR erasure; IndexedDB is just a cache
+- **Server-Side Profiles**: source of truth with GDPR access export and erasure; IndexedDB is just a cache, and only with consent
 - **Holdout & Uplift**: control group + z-test significance — prove personalization works
 - **Audit Log**: what was shown to whom, append-only
 - **Provider-Agnostic LLM**: OpenAI, Anthropic, Gemini, any OpenAI-compatible API — by configuration
@@ -293,6 +294,8 @@ import { GenUIZone } from "genui-framework";
 
 Open the page: you'll see a loading skeleton, then the generated cards. The `debug` panel underneath tells you _why_ you're seeing what you're seeing.
 
+That zone is already in the anonymous mode: nothing is written to or read from the visitor's browser and no identifier is sent, so it needs no consent banner to run. Add `userId` and `consent={true}` (from your CMP) when you want personalization per person instead of per segment: see [Consent](#consent-and-personalization-without-it).
+
 ### Running the tests
 
 ```bash
@@ -376,7 +379,9 @@ interface GenUIZoneProps {
   maxComponents?: number; // Component budget 1..10 (unset = backend default, see below)
 
   // === User Context ===
-  userId?: string; // Stable user ID: enables server-side profile, holdout & audit trail
+  userId?: string; // Stable user ID: enables server-side profile, holdout & audit trail (sent only with consent)
+  consent?: boolean; // Consent from your CMP; without true the zone runs anonymous (no device access, no userId, no behavior)
+  privacy?: "strict" | "balanced" | "off"; // Capture contract once consent is granted (default: 'balanced')
   currentPage?: string; // Current page path
   pageMetadata?: Record<string, unknown>; // Custom page context (page-level, not per-user!)
 
@@ -386,6 +391,9 @@ interface GenUIZoneProps {
   cacheStrategy?: "segment" | "live"; // 'segment' (default): per-segment cached renders; 'live': always call the LLM (admin keys only)
   streaming?: boolean; // Progressive render via SSE (components appear as generated)
   trackEvents?: boolean; // Auto impression/click events for uplift measurement (default: true)
+
+  // === AI Disclosure ===
+  disclosure?: { text?: string; position?: "above-left" | "above-center" | "above-right" | "below-left" | "below-center" | "below-right" } | false; // visible notice (on by default); false keeps the machine-readable markup only
 
   // === Theming ===
   theme?: GenUITheme; // Theme overrides
@@ -596,6 +604,7 @@ function ChatBot() {
     clearProfile, // Reset profile
     history, // Conversation history
     clearHistory, // Clear conversation
+    disclosure, // AI interaction notice + marking of the last answer
     behaviorTracker, // Access behavior tracker
     trackInteraction, // Track custom events
     trackNavigation, // Track page navigation
@@ -605,7 +614,7 @@ function ChatBot() {
     enablePersistence: true,
     enableBehaviorTracking: true,
     privacy: "balanced", // capture contract — see "Behavior Tracking & Privacy"
-    consent: cmpConsent, // optional CMP hook: false = never track
+    consent: cmpConsent, // CMP hook: without true, nothing is tracked or stored locally
     behaviorTrackingOptions: {
       trackClicks: true,
       trackScroll: true,
@@ -651,7 +660,7 @@ const { behavior } = response.meta ?? {};
 // behavior?.uiAdjustments    [{ type, target, suggestion }] hints, advisory only
 ```
 
-It appears only when the request carried behavior data: no tracking (or `privacy: 'strict'`, DNT, consent withheld) means no analysis to report, by design. Note that `userType` **is** one of the factors of the segment key (`type=`), while `engagementScore` is **not**: the `eng=` bucket is computed deterministically from scroll depth (`>= 70` high, `>= 30` mid), never from this model-estimated score, so a segment stays reproducible.
+It appears only when the request carried behavior data: consent withheld, or `privacy: 'strict'`, means no analysis to report, by design. Note that `userType` **is** one of the factors of the segment key (`type=`), while `engagementScore` is **not**: the `eng=` bucket is computed deterministically from scroll depth (`>= 70` high, `>= 30` mid), never from this model-estimated score, so a segment stays reproducible.
 
 ### useZone — Zone-Level Control
 
@@ -674,6 +683,8 @@ const {
   basePrompt: "Show content",
   loadOnMount: true,
   refreshInterval: 30000, // Auto-refresh every 30s
+  consent: cmpConsent, // same gate as GenUIZone: without true, anonymous mode
+  privacy: "balanced", // capture contract once consent is granted
 });
 
 // Access metadata
@@ -1193,6 +1204,184 @@ The full chain (`validate → URL guard → numeric grounding → content policy
 
 ---
 
+## ⚖️ AI Act & GDPR
+
+This is engineering documentation, not legal advice. GenUI marks what a model wrote, keeps its hands off the visitor's device until you say otherwise, and gives you the mechanics for access and erasure requests. The declarations are yours, on your own deployment.
+
+### Disclosure of generated content
+
+Whoever puts GenUI into service under their own name is the provider of the AI system. The transparency obligations land there, and an open source licence does not move them: the exception in Art. 2(12) leaves Art. 50 out. So the marking ships switched on, and switching it off takes a deliberate act.
+
+Every served payload carries `meta.disclosure`:
+
+```json
+{
+  "ai_generated": true,
+  "provenance": "generated",
+  "generated_at": "2026-07-27T09:14:03+00:00",
+  "system": "genui"
+}
+```
+
+- `ai_generated` answers one question: did a model write this? A fallback render, assembled from your own pinned content after a generation failure, says `false`. Marking your own content as AI-written is a lie in exactly the direction the marking exists to prevent.
+- `generated_at` is when the content was produced. Never when it was handed out. A cached render goes to a whole segment for as long as the stale window lasts, so the block is computed into the cached payload, and every later hit repeats the generation timestamp instead of dating itself by the moment it left the cache.
+- `provenance` is `generated` (the model wrote original text), `verbatim-from-input` (a model ran, but every visible string appears word for word in your input) or `not-generated` (no model output at all).
+
+It travels on every path that serves content: sync render, SSE `complete`, batch, warmup, every cache hit, and the `/query` chat answer.
+
+**`verbatim-from-input` is evidence. It exempts nothing.** The URL whitelist and numeric grounding already know which links and numbers came from your input, so the provenance is computed from that same corpus and handed to you. Deciding what it means is your call.
+
+A zone can take every URL and every number from your input and still be pure synthetic prose. "Carbon neutral since 2019, and not slowing down" invents no fact, and a model still wrote that sentence. The exemption in Art. 50(2) covers a system that does not substantially alter the input or its semantics, and new copy alters it. So `generated` is the default, `verbatim-from-input` needs every displayed string to match, and anything unprovable falls back to `generated`. Never the other way around.
+
+**What a machine reads.** `GenUIZone` writes the marking straight into the served HTML: JSON-LD with `digitalSourceType` from the IPTC vocabulary (the one C2PA uses), plus `data-ai-generated` and `data-ai-provenance` on the zone root. No effect involved, so it is in `renderToString` output and in the first paint of a streamed render. A zone that has not answered yet is a zone about to show generated content.
+
+**What a person reads.** Where a human has to be informed, machine-readable markup does not count. The zone renders a visible line of text, on by default, styled with the `--genui-*` tokens and readable in both color modes:
+
+```tsx
+<GenUIZone
+  apiUrl={API}
+  zoneId="homepage-hero"
+  disclosure={{ text: "AI-generated content", position: "below-right" }}
+/>
+```
+
+The wording is a legal choice, so it is yours: `text` sets it, `position` moves it, `disclosure={false}` drops the visible line and keeps the machine-readable markup. It removes itself when a render turns out not to be generated.
+
+`GenUIZone` is not the only way generated content reaches a page, so the notice ships as its own component too. A host driving `useZone` and rendering the components itself owes the visitor the same line, and gets it from the same place, with the same class and the same tokens:
+
+```tsx
+import { GenUIDisclosureNotice, ComponentRenderer } from "genui-framework";
+
+{
+  meta?.disclosure?.aiGenerated && <GenUIDisclosureNotice />;
+}
+<ComponentRenderer components={components} />;
+```
+
+**Decided once, for a whole tenant.** Wording, placement and look are the same decision on every page, so they travel with the theme and are saved per tenant like the rest of the brand (Studio: Theme Playground, section AI Act & GDPR, then save for the tenant):
+
+```ts
+const theme: GenUITheme = {
+  disclosureEnabled: "on", // default; "off" hides the notice
+  disclosurePosition: "bottom", // 'top' (default) | 'bottom'
+  disclosureText: "Contenuto generato con AI",
+  disclosureFontSize: "13px", // 11px to 24px
+  disclosureOpacity: "0.8", // 0.6 to 1
+};
+```
+
+The six placements are the sides crossed with the alignments: `above-left`, `above-center`, `above-right`, `below-left`, `below-center`, `below-right`. A `disclosure` prop on a zone is the more specific statement and wins over the theme. The two size knobs stop at a floor on both ends, in the library and in the store that persists them: the notice can be made discreet, never unreadable, because one nobody can read is not a notice. Its color follows `--genui-text-secondary`, which already carries a value per color mode, so it stays legible in light and dark without a knob of its own. Wording is rendered as text and never as a CSS value.
+
+For the chat, the information that you are talking to an AI is due at the latest at the first interaction, which comes before there is any answer to label. `useGenUI` returns it up front:
+
+```tsx
+const { disclosure, query } = useGenUI({ apiUrl: API, disclosureText: "..." });
+// disclosure.notice        ready to render next to the input, from the first paint
+// disclosure.aiInteraction  true whenever answers come from a model
+// disclosure.lastResponse   marking of the answer just received (null before the first one)
+```
+
+Two settings govern all of it:
+
+| Setting                   | Default               | What it does                                                                                                                                                                                             |
+| ------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GENUI_DISCLOSURE_OFF`    | unset (disclosure ON) | Removes the block from every payload and, with it, the library's markup and notice. Setting it declares that you inform users elsewhere. Logged as a warning at every startup.                           |
+| `DISCLOSURE_EXPOSE_MODEL` | `false`               | Adds the model name to the block. Off by default: the reader has to know the content is AI-generated, not which model wrote it, and naming it publishes an attack target and your vendor choice at once. |
+
+**Honest limits.**
+
+- **Nothing here is signed.** C2PA 2.4 carries manifests in HTML and defines a `c2pa.ai-disclosure` assertion, and it would be the stronger answer. It is left out on purpose. A manifest is worth exactly what its certificate chain is worth, which means a signing identity, key custody and a revocation story, and those live in your infrastructure rather than in a package that ships as source. What GenUI emits is a declaration that whoever controls the response can strip. The block and the JSON-LD are shaped so a signature can be bolted on later without moving them.
+- **The verbatim check is textual.** Matching is substring-based on lowercased, whitespace-collapsed text. A string the model reflowed or re-punctuated reads as generated. That is the safe direction, and the only one this check is allowed to be wrong in.
+- **This marks content, not consent.** Behavior capture, the profile in IndexedDB and the lawful basis for personalization are the next subsection, and the capture contract itself is in [Behavior Tracking & Privacy](#-behavior-tracking--privacy).
+
+### Consent, and personalization without it
+
+The ePrivacy rule about storing or reading information on someone's terminal equipment is written about the terminal, not about cookies, so writing a profile into IndexedDB is inside it. Consent has to be given, and a library that a third party integrates without reading every line of it must not touch a visitor's browser because that integrator was busy.
+
+So the whole library runs off one switch:
+
+```tsx
+<GenUIZone apiUrl={API} zoneId="home" userId={user.id} consent={cmpConsent} />
+```
+
+| Without `consent={true}`                            | With `consent={true}`                             |
+| ----------------------------------------------------- | --------------------------------------------------- |
+| Nothing written to or read from IndexedDB             | Profile and chat history cached on the device       |
+| No `userId` in the render, chat or event requests     | `userId` sent, server-side profile applies          |
+| Behavior tracker never starts, no behavior in the body | Tracker runs at the `privacy` level you chose       |
+| Content served from the anonymous segment             | Content served from the visitor's own segment       |
+| The zone renders                                      | The zone renders                                    |
+
+**The degraded mode is a product level, not a failure.** Anonymous requests take the path the framework already runs for every visitor nobody logged in and for the control arm of a holdout: the segment key collapses to `anon`, and the render is generated from the segment archetype rather than from an individual. The result is personalization that stores nothing on the device, uses no persistent identifier, and computes its segment from the request in front of it. That is a page that can be personalized before anyone clicks a banner. The step up from it, once your CMP has an answer, is one prop.
+
+**This is a behavior change** for anyone already using the library, and a deliberate one: the previous default read the IndexedDB profile and started the tracker on its own. See the [CHANGELOG](./CHANGELOG.md) for the migration line. The rollback is explicit rather than accidental: pass `consent={true}` where your own lawful basis says you may.
+
+Consent settles the ambient browser signals too. Nothing runs without an explicit grant, so Do Not Track and Global Privacy Control have nothing left to block, and a visitor who answered your consent prompt has made a more specific statement than a browser-wide default.
+
+`privacy` and `consent` are available on `GenUIZone`, `useZone` and `useGenUI` with the same meaning. A zone starts the page's behavior tracker itself once consent is granted, so a page built out of zones alone is no longer silently collecting nothing; a page that also uses `useGenUI` keeps a single tracker, the first one started.
+
+### Access and erasure
+
+```bash
+# Everything held about one person (Art. 15)
+curl -H "X-API-Key: pk_live_abc" -H "X-User-Token: $TOKEN" \
+  http://localhost:8000/api/v1/profile/u-42/export
+
+# Erasure (Art. 17)
+curl -X DELETE -H "X-API-Key: pk_live_abc" -H "X-User-Token: $TOKEN" \
+  http://localhost:8000/api/v1/profile/u-42
+```
+
+The export returns the stored profile plus the audit entries that name that user, which is all of it: renders served, chat queries, impressions and clicks, profile syncs, updates and erasures. Nothing else in the system is keyed by a person. Cached renders belong to a segment, event counters to a zone and an arm, themes and zone configs to the operator. Both routes carry the same identity guard as the rest of the per-user surface: a signed `X-User-Token` whose subject matches the id, or an admin key. An export endpoint with a weak guard is a data breach with a compliance label on it.
+
+When the audit trail is going to your log pipeline (the production default), the export says `"queryable": false` with a note pointing there, rather than returning an empty history that would read as "nothing ever happened".
+
+**Erasure, honestly.** The profile is deleted. The audit entries naming that user are not, and the response says so:
+
+```json
+{ "status": "deleted", "existed": true, "profile_erased": true, "audit_retained": true, "note": "..." }
+```
+
+A record of what was shown to whom is worth nothing if the party who showed it can edit it afterwards, and in a regulated deployment that record is also the operator's own evidence. On top of that, in the production configuration those lines have already left this process for your log pipeline, so the backend could not rewrite them if it wanted to. The trail is bounded instead of edited: rotation on the file sink, your pipeline's retention policy otherwise. And the erasure is itself recorded in it, so a later export shows when the right was exercised. Whether that balance holds for your deployment is a call for your DPO, on your retention numbers, and the numbers are below.
+
+### Retention
+
+Storage limitation is configuration here, and this is the only place the defaults are written down:
+
+| Data                            | Knob                                             | Default                | Notes                                                                        |
+| --------------------------------- | -------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------ |
+| Server-side profile             | `PROFILE_TTL_SECONDS`                            | 90 days                | Refreshed on every write, so it expires after inactivity. `0` = keep forever  |
+| Audit trail (file sink)         | `AUDIT_LOG_MAX_BYTES` · `AUDIT_LOG_BACKUP_COUNT` | 50 MB × 5 files        | Size-bounded, not time-bounded: rotation drops the oldest file                |
+| Audit trail (production sink)   | your log pipeline                                | your policy            | The lines are emitted on the `genui.audit` logger and retained where they land |
+| Cached renders                  | `ZONE_CACHE_STALE_TTL`                           | 24 h                   | Per segment, never per person                                                 |
+| Event counters                  | none                                             | kept                   | Aggregate per zone and arm, no identifiers                                    |
+| IndexedDB profile and history   | the visitor                                      | until cleared          | Only written with consent; `clearProfile()` / `clearHistory()` erase it        |
+
+`PROFILE_TTL_SECONDS` applies to the Redis store; the in-memory fallback is bounded by size and lost on restart.
+
+### The documents your legal team will ask for
+
+The first thing a regulated buyer wants is not a demo. It is a document saying what the system does about the AI Act and about data protection, and most projects hand them a codebase instead. That turns a six-week evaluation into a six-month one.
+
+Two statements live in `deploy/`, written in the same shape as the isolation and output ones: a claim, a table where every row names the code that implements it and the test that proves it, and a section on what the mechanism does not cover.
+
+- [`deploy/AI-ACT.md`](deploy/AI-ACT.md), for the legal team. Who is provider and who is deployer once you put GenUI into service, why the open source exception in Art. 2(12) leaves Art. 50 exactly where it is, and one row per obligation with the symbol behind it. Then the two sections that are easy to get wrong on purpose: what the `verbatim-from-input` evidence is worth for the Art. 50(2) exemption, which is a fact to hand your counsel and never a self-granted exemption, and what the zone registry's approve actually approves, which is a configuration and not a line of generated text. It closes with the use boundaries: Annex III 4(a), 5(b), 5(c) and Art. 5, where the system helps, and where it has nothing and says so.
+- [`deploy/GDPR.md`](deploy/GDPR.md), for the DPO. A pre-filled records-of-processing table, the lawful basis mapped to what actually gets touched with the ePrivacy and CJEU reasoning attached, a data subject request runbook with the real endpoints and real curl commands, the retention numbers, a transfers table reading every relevant env var, and a DPIA input sheet that lists the risks this system genuinely carries next to the measures already in the code.
+
+There is also the configuration where nothing leaves at all, written out in full: a local OpenAI-compatible engine, embeddings inheriting it, local extraction, tracing off or pointed inside, and the audit lines going to a pipeline you host. It is a `customer.env`, not a fork.
+
+Neither document says you are compliant. They say what the code does and who still has to decide what.
+
+```bash
+cd deploy && ./posture.sh
+```
+
+That reads your `customer.env` and answers whether the deployment is configured the way those two documents describe: disclosure on, dev-open off, keys declared, retention set, audit going somewhere. Then it prints every data flow that leaves the perimeter with your configuration, and it is blunt when the answer is unwelcome, because a posture check that only reports good news is decoration. It exits non-zero on a mismatch.
+
+The references inside all four documents are held in place by `backend/tests/test_deploy_docs.py`. Rename a symbol a table cites and the suite goes red, which is the point: a compliance statement that quietly stops matching the code is worse than no statement, and it is attached to a contract.
+
+---
+
 ## 🔐 Auth, Server-Side Profiles & Audit
 
 ### API keys & multi-tenancy
@@ -1257,13 +1446,13 @@ Anonymous personalization is unaffected: requests without a `user_id` never need
 
 ### Server-side profiles (source of truth)
 
-When `userId` is provided, the **server-side profile store** (Redis, or in-memory in dev) is authoritative:
+When a `userId` identifies someone, the **server-side profile store** (Redis, or in-memory in dev) is authoritative. A request without one, and that includes the client-side placeholders like `anonymous`, creates no per-user state at all: no profile is read, seeded or written, and the render comes from the anonymous segment. The store refuses such a write at the one place per-user state is born, so no path can create a profile everyone would share.
 
 - An existing server profile **overrides** the client-supplied one.
 - With no server profile yet, the client (IndexedDB) copy seeds the store — IndexedDB is thereby demoted to a cache.
 - Agent-extracted profile updates are merged server-side (higher confidence wins) on every `/query`.
-- Endpoints: `GET /api/v1/profile/{user_id}`, `POST /api/v1/profile/sync`, and `DELETE /api/v1/profile/{user_id}` (GDPR erasure, audit-logged). All require the signed `X-User-Token` matching the `user_id` (or an admin key) — see [Signed user identity](#signed-user-identity-x-user-token).
-- Retention: `PROFILE_TTL_SECONDS` (e.g. `7776000` = auto-expire after 90 days of inactivity).
+- Endpoints: `GET /api/v1/profile/{user_id}`, `POST /api/v1/profile/sync`, `GET /api/v1/profile/{user_id}/export` (GDPR access) and `DELETE /api/v1/profile/{user_id}` (GDPR erasure, audit-logged). All require the signed `X-User-Token` matching the `user_id` (or an admin key): see [Signed user identity](#signed-user-identity-x-user-token) and [Access and erasure](#access-and-erasure).
+- Retention: `PROFILE_TTL_SECONDS`, 90 days of inactivity by default, refreshed on every write. All the retention defaults are in one table: [Retention](#retention).
 
 ### Audit log — what was shown to whom
 
@@ -1452,7 +1641,7 @@ Set `TRACING_ENABLED=true` for OpenTelemetry tracing: FastAPI request spans, `ge
 
 ## 🔧 Behavior Tracking & Privacy
 
-The framework tracks user behavior (on by default) and sends it to the backend for personalization. An integrator cannot audit every DOM node of their pages, so the tracker ships with a **safe default**: `privacy: 'balanced'`. The full capture contract per level — written so your DPO can sign off on it:
+The framework can track user behavior and send it to the backend for personalization. It does that only once `consent` is granted (see [Consent](#consent-and-personalization-without-it)), and even then an integrator cannot audit every DOM node of their pages, so the tracker ships with a **safe default**: `privacy: 'balanced'`. The full capture contract per level, written so your DPO can sign off on it:
 
 | Signal                                                    | `strict`     | `balanced` (default) | `off`                |
 | --------------------------------------------------------- | ------------ | -------------------- | -------------------- |
@@ -1467,11 +1656,11 @@ The framework tracks user behavior (on by default) and sends it to the backend f
 | `<input>`/`<textarea>`/`<select>`/contenteditable content | ❌ never     | ❌ never             | ❌ never             |
 | Elements under `data-genui-private`                       | ❌ never     | ❌ never             | ❌ never             |
 | Elements under `data-genui-redact`                        | shape only   | shape only           | shape only           |
-| Honors `navigator.doNotTrack` / Global Privacy Control    | ✅           | ✅                   | ❌ (explicit choice) |
+| Runs at all without `consent={true}`                      | ❌ never     | ❌ never             | ❌ never             |
 
 **PII redaction** replaces emails, IBANs, Italian codici fiscali and runs of 8+ digits (cards, phone numbers, account numbers, birth dates) with `[redacted]` — _before_ truncation, so a cut-off token can never leak. Free-text street addresses are **not** reliably detectable by regex: wrap address blocks in `data-genui-private` instead.
 
-> **Behavior change (2026-07)**: the tracker previously captured clicked text, titles and paths raw. It now defaults to `balanced` and honors DNT/GPC. Raw capture requires an explicit `privacy: 'off'`. `enableBehaviorTracking` still defaults to `true`. See [CHANGELOG](./CHANGELOG.md).
+> **Behavior change (2026-07)**: the tracker previously captured clicked text, titles and paths raw, and started without being asked. It now captures at the `balanced` level, and starts only on an explicit `consent={true}`. Raw capture requires `privacy: 'off'` on top of that consent. See [CHANGELOG](./CHANGELOG.md).
 
 ### Marking sensitive DOM
 
@@ -1489,15 +1678,14 @@ The framework tracks user behavior (on by default) and sends it to the backend f
 useGenUI({
   apiUrl: "http://localhost:8000",
   privacy: "strict", // 'strict' | 'balanced' (default) | 'off'
-  consent: cmpConsent, // your CMP hook (EU regime)
+  consent: cmpConsent, // your CMP hook
 });
 ```
 
-- `consent: false` — the tracker never starts, at any level. Keep it `false` until your consent banner resolves.
-- `consent: true` — explicit grant from your consent flow; overrides the ambient DNT/GPC signal.
-- `consent` unset — no consent gating; DNT/GPC still honored unless `privacy: 'off'`.
+- `consent: true`: explicit grant from your consent flow. Capture starts, at the level you chose, and the profile is cached on the device.
+- `consent: false` or unset: nothing is captured, at any level, and nothing is stored on the device. Personalization continues from the anonymous segment.
 
-Fine-grained tracker overrides live in `behaviorTrackingOptions` (they win over the top-level shortcuts). Zone impression/click events (`/events`, uplift measurement) capture only the framework's own generated content, never host page data. The auto-captured `current_page` sent by zones follows the same privacy level; an explicit `currentPage` prop is your own choice and is sent as-is.
+`privacy` picks what is captured; `consent` decides whether anything is. Fine-grained tracker overrides live in `behaviorTrackingOptions` (they win over the top-level shortcuts). Zone impression/click events (`/events`, uplift measurement) capture only the framework's own generated content, never host page data, and carry a `userId` only under the same consent. The auto-captured `current_page` sent by zones follows the same privacy level; an explicit `currentPage` prop is your own choice and is sent as-is.
 
 ### Manual Tracking
 
@@ -1713,6 +1901,7 @@ Serving endpoints take a client key; control-plane endpoints take an admin key a
 | `POST /api/v1/events`                                                          | client              | Impression / click ingestion                        | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
 | `GET /api/v1/events/stats`                                                     | admin               | CTR per arm, uplift, z-test                         | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
 | `GET /api/v1/profile/{user_id}` · `DELETE` · `POST /profile/sync`              | client + user token | Server-side profile, GDPR erasure                   | [Auth & Profiles](#-auth-server-side-profiles--audit)                    |
+| `GET /api/v1/profile/{user_id}/export`                                         | client + user token | Everything held about one person (GDPR access)      | [Access and erasure](#access-and-erasure)                                |
 | `POST /api/v1/documents` · `/upload` · `/search` · `GET` · `DELETE` · `/stats` | admin               | RAG knowledge base                                  | [Knowledge Base](#knowledge-base-rag--tenant-isolated)                   |
 | `GET/PUT/POST/DELETE /api/v1/zone/config[...]`                                 | admin               | Zone config as data: draft, approve, discard        | [Zone Registry](#%EF%B8%8F-zone-config-registry--config-as-data)         |
 | `GET /api/v1/audit`                                                            | admin               | What was shown to whom                              | [Querying the audit](#querying-the-audit)                                |

@@ -28,6 +28,12 @@ import {
   getBehaviorTracker,
   stopBehaviorTracker,
 } from '../utils/behaviorTracker';
+import {
+  DEFAULT_CHAT_DISCLOSURE_TEXT,
+  parseDisclosure,
+  type GenUIDisclosure,
+} from '../utils/disclosure';
+import { consentGranted } from '../utils/privacy';
 
 
 const generateSessionId = (): string => {
@@ -45,6 +51,24 @@ export interface UseGenUIReturnExtended extends UseGenUIReturn {
   trackNavigation: (path: string, title?: string) => void;
 }
 
+/**
+ * What a chat UI needs to tell the person who it is talking to.
+ *
+ * `notice` exists before anything has been sent, because that
+ * information is due at the latest at the first interaction: the host
+ * renders it next to the input, not after the first answer comes back.
+ * `lastResponse` is the marking of the answer just received, for hosts
+ * that also label each message.
+ */
+export interface GenUIChatDisclosure {
+  /** True whenever answers come from a model, which for this hook is always */
+  aiInteraction: boolean;
+  /** Ready-to-render wording; override it with the `disclosureText` option */
+  notice: string;
+  /** Marking of the last answer, null before the first exchange */
+  lastResponse: GenUIDisclosure | null;
+}
+
 export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtended => {
   const {
     apiUrl,
@@ -56,6 +80,7 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
     behaviorTrackingOptions,
     privacy,
     consent,
+    disclosureText,
     onProfileUpdate,
     onError,
   } = options;
@@ -65,14 +90,26 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [history, setHistory] = useState<ConversationMessage[]>([]);
   const [behaviorTracker, setBehaviorTracker] = useState<BehaviorTracker | null>(null);
-  
+  const [lastDisclosure, setLastDisclosure] = useState<GenUIDisclosure | null>(null);
+
+  // The profile and the conversation history live in IndexedDB, on the
+  // visitor's own device, so persistence needs their agreement on top of
+  // the integrator's. Denied, the chat still answers: it just answers
+  // without remembering anything locally and without naming anyone.
+  const persist = enablePersistence && consentGranted(consent);
+
   const sessionIdRef = useRef<string>(generateSessionId());
 
   // Initialize profile, history, and behavior tracker on mount
   useEffect(() => {
+    // Without consent no tracker is created at all, rather than one that
+    // exists and never captures: a dormant instance would also shadow the
+    // one a zone on the same page is entitled to start.
+    const startsTracker = enableBehaviorTracking && consentGranted(consent);
+
     const init = async () => {
       // Initialize behavior tracking
-      if (enableBehaviorTracking) {
+      if (startsTracker) {
         const tracker = initBehaviorTracker({
           sessionId: sessionIdRef.current,
           userId,
@@ -83,7 +120,7 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
         setBehaviorTracker(tracker);
       }
 
-      if (!enablePersistence) return;
+      if (!persist) return;
 
       try {
         // Load profile
@@ -103,12 +140,14 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
 
     init();
 
+    // Only stop what this hook started: on a page that also has zones,
+    // the running tracker may not be ours to shut down.
     return () => {
-      if (enableBehaviorTracking) {
+      if (startsTracker) {
         stopBehaviorTracker();
       }
     };
-  }, [userId, enablePersistence, enableBehaviorTracking, privacy, consent]);
+  }, [userId, persist, enableBehaviorTracking, privacy, consent]);
 
 
   const query = useCallback(async (text: string): Promise<GenUIResponse> => {
@@ -123,7 +162,7 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
         timestamp: new Date().toISOString(),
       };
 
-      if (enablePersistence) {
+      if (persist) {
         await addToHistory(sessionIdRef.current, userMessage);
       }
       
@@ -138,7 +177,10 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
         query: text,
         // 'anonymous' is the local default, not an identity: sending it
         // would share one server-side profile across all anonymous users
-        user_id: userId && userId !== 'anonymous' ? userId : undefined,
+        user_id:
+          consentGranted(consent) && userId && userId !== 'anonymous'
+            ? userId
+            : undefined,
         user_profile: profile ? profileToApiFormat(profile) : null,
         conversation_history: history.slice(-10).map(msg => ({
           role: msg.role,
@@ -198,8 +240,11 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
                 policyViolations: data.meta.sanitization.policy_violations ?? [],
               }
             : undefined,
+          disclosure: parseDisclosure(data.meta?.disclosure),
         },
       };
+
+      setLastDisclosure(genUIResponse.meta.disclosure ?? null);
 
       // Add assistant message to history
       const assistantMessage: ConversationMessage = {
@@ -208,14 +253,14 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
         timestamp: new Date().toISOString(),
       };
 
-      if (enablePersistence) {
+      if (persist) {
         await addToHistory(sessionIdRef.current, assistantMessage);
       }
       
       setHistory(prev => [...prev, assistantMessage]);
 
       // Handle profile updates (including behavior-derived updates)
-      if (genUIResponse.profileUpdates.shouldUpdate && enablePersistence) {
+      if (genUIResponse.profileUpdates.shouldUpdate && persist) {
         const updatedProfile = await applyProfileUpdates(
           userId,
           genUIResponse.profileUpdates.updates
@@ -239,7 +284,7 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
     } finally {
       setIsLoading(false);
     }
-  }, [apiUrl, apiKey, userToken, userId, profile, history, enablePersistence, onProfileUpdate, onError]);
+  }, [apiUrl, apiKey, userToken, userId, consent, profile, history, persist, onProfileUpdate, onError]);
 
 
   /**
@@ -255,7 +300,9 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
 
 
   /**
-   * Clear profile data
+   * Clear profile data.
+   * Erasing local data is never gated on consent: withdrawing it is
+   * exactly when someone wants their device cleaned.
    */
   const clearProfile = useCallback(async () => {
     if (enablePersistence) {
@@ -275,8 +322,8 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
 
     setHistory([]);
     sessionIdRef.current = generateSessionId();
-    
-    if (enableBehaviorTracking) {
+
+    if (enableBehaviorTracking && consentGranted(consent)) {
       const tracker = initBehaviorTracker({
         sessionId: sessionIdRef.current,
         userId,
@@ -324,6 +371,11 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
     clearProfile,
     history: history.map(msg => ({ role: msg.role, content: msg.content })),
     clearHistory: clearConversationHistory,
+    disclosure: {
+      aiInteraction: true,
+      notice: disclosureText ?? DEFAULT_CHAT_DISCLOSURE_TEXT,
+      lastResponse: lastDisclosure,
+    },
     behaviorTracker,
     trackInteraction,
     trackNavigation,

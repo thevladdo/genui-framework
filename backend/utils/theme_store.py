@@ -10,6 +10,11 @@ restyle, it can never inject CSS. Anything outside the contract is
 rejected at write time (extra="forbid") and re-checked on read, because
 Redis is shared infrastructure and this store's output crosses back into
 a browser.
+
+The disclosure tokens follow the same rule with one addition: their
+shapes also carry a readability floor, because the notice they style is
+a transparency obligation and a knob that can hide it is a knob that
+defeats it.
 """
 
 import logging
@@ -26,6 +31,8 @@ logger = logging.getLogger(__name__)
 _PX = r"^\d{1,3}px$"
 _HEX = r"^#[0-9a-fA-F]{6}$"
 _FONT_STACK = r"^[A-Za-z0-9 ,.'\"_-]{1,200}$"
+_DISCLOSURE_PX = r"^(1[1-9]|2[0-4])px$"
+_DISCLOSURE_OPACITY = r"^(0\.[6-9][0-9]?|1|1\.0+)$"
 
 
 class TenantTheme(BaseModel):
@@ -53,6 +60,13 @@ class TenantTheme(BaseModel):
     surface2: Optional[str] = Field(default=None, pattern=_HEX)
     surface3: Optional[str] = Field(default=None, pattern=_HEX)
     textOnAccent: Optional[str] = Field(default=None, pattern=_HEX)
+    disclosureEnabled: Optional[str] = Field(default=None, pattern=r"^(on|off)$")
+    disclosurePosition: Optional[str] = Field(
+        default=None, pattern=r"^(above|below)-(left|center|right)$"
+    )
+    disclosureText: Optional[str] = Field(default=None, max_length=120)
+    disclosureFontSize: Optional[str] = Field(default=None, pattern=_DISCLOSURE_PX)
+    disclosureOpacity: Optional[str] = Field(default=None, pattern=_DISCLOSURE_OPACITY)
 
     def tokens(self) -> Dict[str, Any]:
         """Only the tokens actually set, ready to be a theme prop."""
