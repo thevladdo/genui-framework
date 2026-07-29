@@ -26,7 +26,7 @@ import { CaseStudies } from './CaseStudies';
 import { QuoteBlock } from './QuoteBlock';
 import { LogoWall } from './LogoWall';
 import { ComponentErrorBoundary } from './ErrorBoundary';
-import { getRegisteredGenUIComponent } from '../registry';
+import { getRegisteredGenUIComponent, BUILTIN_TYPES } from '../registry';
 
 export interface ComponentRendererProps {
   component?: GenUIComponent;
@@ -88,6 +88,17 @@ const renderSingleComponent = (
   const key = `genui-component-${type}-${index}`;
 
   const renderComponent = (): React.ReactNode => {
+    // A host registration wins over the framework's own component of the same name.
+    const RegisteredComponent = getRegisteredGenUIComponent(type);
+    if (RegisteredComponent) {
+      return (
+        <RegisteredComponent
+          data={BUILTIN_TYPES.includes(type) ? data : component.data}
+          layout={layout}
+        />
+      );
+    }
+
     switch (type) {
       case 'text':
         return <TextComponent data={data as TextComponentData} />;
@@ -132,14 +143,6 @@ const renderSingleComponent = (
         return <LogoWall data={data} />;
 
       default: {
-        // Host-registered custom components (see registerGenUIComponent).
-        // They receive the data exactly as validated against the host's
-        // JSON schema: no snake_case -> camelCase normalization.
-        const RegisteredComponent = getRegisteredGenUIComponent(type);
-        if (RegisteredComponent) {
-          return <RegisteredComponent data={component.data} layout={layout} />;
-        }
-
         console.warn(
           `GenUI: unknown component type "${type}" (newer backend contract?), skipping`
         );

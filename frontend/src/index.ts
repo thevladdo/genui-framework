@@ -51,6 +51,7 @@ export {
   registerGenUIComponent,
   getRegisteredGenUIComponent,
   getRegisteredGenUIComponentNames,
+  BUILTIN_TYPES,
 } from './registry';
 
 export type {

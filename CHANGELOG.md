@@ -8,6 +8,17 @@ The entire history lives below, newest first.
 
 ## [Unreleased]
 
+### A registration that looked like it worked and never rendered
+
+`registry.ts` reserved 4 names while `ComponentRenderer` had explicit cases for 14, and the registry lookup sat in the switch's `default` branch. So `registerGenUIComponent('hero_banner', AcmeHero)` was accepted, stored, and then never reached: the `case 'hero_banner'` above it drew the framework's own component instead. The backend refused the same name in `custom_components` at the other end. Both halves failed silently, in opposite directions, and the README documented `hero_banner` as the example custom component, so the one snippet most likely to be copied was the one guaranteed not to work.
+
+- **The lookup runs before the switch, so a registration always wins.** The alternative was to reserve the 10 missing names and throw, which turns a dead registration into a clear error. It also throws at module scope, where hosts are told to register, so a name collision would stop the app from booting instead of dropping one component. The permissive direction is the useful one anyway, because overriding a built-in is a feature people want.
+- **Re-skinning a built-in is now the supported path.** Register under `hero_banner` and the model keeps generating `hero_banner` with the schema, the grounding and the layout coherence it already had, while your component draws it. No schema to write, no `customComponents` prop, no backend change.
+- **An override inherits the data shape of the component it replaces.** Built-in types get the camelCase payload their own component would have received, so `primary_cta` arrives as `data.primaryCta` and the override is a drop-in. Custom types still get their payload exactly as their JSON Schema declared it. Replacing a framework component means inheriting its shape, declaring your own means owning it.
+- **The name still cannot be redefined.** `custom_components` keeps refusing built-in names, because the schema is what the prompt teaches the model and what the guards validate against. A page can change the markup and never the contract.
+- **`BUILTIN_TYPES` is exported and is the single source of truth.** It drives the camelCase decision, so a section component added to the renderer and not to the list would silently start handing snake_case to its overrides. A test asserts the length.
+- **`frontend/tests/component-override.test.tsx`** covers the override winning, both payload shapes, and the list. Verified failing without the fix, so it guards the behaviour rather than restating it.
+
 ### The health probe was the most expensive route in the process
 
 The search path was already asynchronous, so the RAG the product actually runs was never the problem. The problem was `/health` and `/ready`. Both rebuilt an entire vector store per call, and building one means collection bring-up, dimension validation and an embedding client, all over the synchronous Qdrant client, all on the event loop. Three to four blocking round-trips per probe, on every replica, every few seconds. A slow Qdrant did not degrade the service: it stalled the workers through the very probes meant to notice, and an orchestrator then killed processes that were serving fine. That is the exact inverse of what a probe is for.

@@ -77,7 +77,7 @@ GenUI System is a complete customization engine for building **Generative User I
 
 ## 🎛️ GenUI Studio
 
-**GenUI Studio** is the companion web app for building with the framework and operating it: a single SPA (`studio/`, React + Vite) with the public Theme Playground plus six console tools (Segment Preview, Zones, Audit, Content Policy, Content Studio, Measurement). Run it locally with `cd studio && npm run dev`.
+**GenUI Studio** is the companion web app for building with the framework and operating it: a single SPA (`studio/`, React + Vite) with two public pages (Theme Playground, Compliance) plus six console tools (Segment Preview, Zones, Audit, Content Policy, Content Studio, Measurement). Run it locally with `cd studio && npm run dev`.
 
 <div align="center">
   <br />
@@ -151,6 +151,14 @@ The proof that personalization pays, on one page. Enter a `zone_id` and the dash
   <br /><br />
 </div>
 
+### ⚖️ Compliance
+
+Public like the Playground: no key, no backend, and it ships in the GitHub Pages build at `#/compliance`. It exists because the four statements in `deploy/` are written for a legal team and only ever get read by someone who already cloned the repository. The person deciding whether this project is worth an hour lands on the Studio instead, and used to leave without knowing any of it existed.
+
+The page answers in order what gets generated and how the system says so, what is touched on a visitor's device and what happens when consent is refused, where the data goes plus the configuration where none of it leaves the perimeter, and which rights are endpoints rather than intentions. Then it does the half a compliance page usually skips: what stays with the operator. The lawful basis, the consent platform, the impact assessment, and the two claims easiest to fudge, that approving a zone config is not editorial review of generated text, and that the use boundaries are documentation with no code path enforcing them. Mechanism and responsibility are told apart by a label and by layout, never by colour alone.
+
+The disclaimer sits at the top at reading size, because "engineering documentation, not legal advice" belongs in the argument rather than in a footnote. Nothing unimplemented is described as active: no signature claim, no human review claim, no claim of conformity anywhere. `studio/tests/compliance.test.cjs` goes red if one appears, or if one of the four linked documents gets renamed out from under the page. See [the documents your legal team will ask for](#the-documents-your-legal-team-will-ask-for).
+
 ### 🏢 Tenants in the console (and where auth begins)
 
 Every console page is scoped to one tenant, and the header of every page says which one: `Connected to <url>` plus a **tenant picker**. The scoping is not a UI convention, it is the key: an admin key resolves to exactly one tenant on the backend (`ADMIN_API_KEYS=sk_live_xyz:acme`), and the tenant of a request always comes from that key, never from the request body. `GET /api/v1/whoami` is what the console asks to learn it.
@@ -159,7 +167,7 @@ So switching tenant is switching key. Connect the second tenant's key from the p
 
 What this deliberately is **not**: an operator login. There are no accounts, no roles and no SSO here, so "one person, one login, many tenants" is not simulated with a key list. That, plus API key issuing and rotation, arrives with user auth, and until then the console tools stay local-only and admin-gated.
 
-> **Note:** the Segment Preview, the Zones editor, the Audit Viewer, the Content Studio and the Measurement dashboard require a reachable backend and an admin key, so for now they run **locally only** (`npm run dev`). On the public GitHub Pages build they show an "available locally" notice and their code is tree shaken out of the bundle. A hosted version arrives with proper user auth on the roadmap.
+> **Note:** the Segment Preview, the Zones editor, the Audit Viewer, the Content Policy editor, the Content Studio and the Measurement dashboard require a reachable backend and an admin key, so for now they run **locally only** (`npm run dev`). On the public GitHub Pages build they show an "available locally" notice and their code is tree shaken out of the bundle. The Theme Playground and the Compliance page need neither, so they are live on Pages. A hosted console arrives with proper user auth on the roadmap.
 
 ---
 
@@ -393,7 +401,18 @@ interface GenUIZoneProps {
   trackEvents?: boolean; // Auto impression/click events for uplift measurement (default: true)
 
   // === AI Disclosure ===
-  disclosure?: { text?: string; position?: "above-left" | "above-center" | "above-right" | "below-left" | "below-center" | "below-right" } | false; // visible notice (on by default); false keeps the machine-readable markup only
+  disclosure?:
+    | {
+        text?: string;
+        position?:
+          | "above-left"
+          | "above-center"
+          | "above-right"
+          | "below-left"
+          | "below-center"
+          | "below-right";
+      }
+    | false; // visible notice (on by default); false keeps the machine-readable markup only
 
   // === Theming ===
   theme?: GenUITheme; // Theme overrides
@@ -869,67 +888,233 @@ New components consume **level-2 semantic tokens** — rebrand by overriding jus
 
 ## 🧩 Custom Components — Your Design System as LLM Vocabulary
 
-The four built-in types cover generic zones, but the real power is letting the LLM generate **your** components. Registration has two halves:
+The 14 built-in types cover generic zones and the usual enterprise sections. The real value is letting the LLM generate **your** components, with your markup, your classes and your tokens.
+
+The framework never sees your JSX. It learns a name and a JSON Schema, asks the model to generate data against that schema, validates what comes back, and hands the payload to the React component you registered under that name.
+
+### Bring your own components
+
+Say Acme already has a React site and a component library: `<OfferCard />`, `<CoverageTable />`, the usual. None of that changes. What follows is what Acme adds around those components so the model can pick them and fill them.
+
+**One decision first: where the definition lives.** Both paths use the same schema and get the same guarantees.
+
+|                   | Per zone (frontend)                                    | Global (backend)                                    |
+| ----------------- | ------------------------------------------------------ | --------------------------------------------------- |
+| Declared in       | `customComponents` prop                                | `register_component_type()` at startup              |
+| Scope             | that zone, that page                                   | every zone, every tenant on the deployment          |
+| Changing it costs | a frontend deploy                                      | a backend restart                                   |
+| Fits              | one team owning one surface, or trying a component out | a design system that should be available everywhere |
+
+Acme starts on the frontend path because it needs no backend change, then promotes the component to the global registry once it is stable. Steps 1, 2 and 4 are identical either way.
+
+#### Step 1: register the component you already have
+
+Map the generated payload onto the props your component already takes. That is the whole render side.
 
 ```tsx
-// 1. Render side: name -> React component
+// acme/genui-setup.tsx
 import { registerGenUIComponent } from "genui-framework";
+import { OfferCard } from "@acme/ui";
 
-registerGenUIComponent("hero_banner", ({ data }) => (
-  <HeroBanner
-    headline={data.headline}
-    subtitle={data.subtitle}
-    ctaLabel={data.cta_label}
-    ctaUrl={data.cta_url}
+registerGenUIComponent("acme_offer_card", ({ data, layout }) => (
+  <OfferCard
+    title={data.title}
+    body={data.body}
+    price={data.price}
+    href={data.cta_url}
+    label={data.cta_label}
+    compact={layout?.width === "half"}
   />
 ));
+```
 
-// 2. Generation side: name -> JSON Schema + description (per zone)
-<GenUIZone
-  zoneId="homepage-hero"
-  apiUrl="..."
-  preferredComponentType="hero_banner"
-  customComponents={[
-    {
-      name: "hero_banner",
-      description:
-        "Full-width hero with headline, subtitle and one CTA. Use as the first component of landing zones.",
-      dataSchema: {
-        type: "object",
-        required: ["headline"],
-        properties: {
-          headline: { type: "string", maxLength: 80 },
-          subtitle: { type: "string" },
-          cta_label: { type: "string" },
-          cta_url: { type: "string" },
-        },
-      },
+Three things to get right here.
+
+**Import this file once, at module scope, before the first zone renders.** Put the import in your app entry (`main.tsx`, `_app.tsx`, the root layout). Registration happens on import, so there is no hook to call and no provider to mount.
+
+**`data` arrives exactly as your schema declared it.** Custom components are deliberately left out of the snake_case to camelCase normalization the built-ins get, so `cta_url` in the schema stays `data.cta_url` in the component. What you wrote is what you read.
+
+**Pick a name in your own namespace** for a genuinely new type: `acme_offer_card`, `acme_coverage_table`. Names are 2 to 32 characters, lowercase `[a-z0-9_-]`, starting with a letter. Registering one of the 14 built-in names is allowed and means something different, it replaces that type's rendering rather than adding a type. See [re-skinning a built-in](#re-skin-a-built-in-type-with-your-own-component).
+
+`registerGenUIComponent` returns an unregister function, which is what a test uses to clean up after itself.
+
+#### Step 2: write the schema the model reads
+
+The schema is read twice: by the LLM as documentation, and by the backend as a validator. So write it tight. Every constraint you add is a class of bad output that gets dropped before a browser ever sees it.
+
+```tsx
+// acme/genui-setup.tsx (same file)
+import type { GenUICustomComponentDef } from "genui-framework";
+
+export const ACME_OFFER_CARD: GenUICustomComponentDef = {
+  name: "acme_offer_card",
+  description:
+    "A single insurance offer with a price and one call to action. Use when the zone should push one specific product. Never more than one per zone.",
+  dataSchema: {
+    type: "object",
+    required: ["title", "cta_label", "cta_url"],
+    additionalProperties: false,
+    properties: {
+      title: { type: "string", maxLength: 60 },
+      body: { type: "string", maxLength: 180 },
+      price: { type: "string" },
+      cta_label: { type: "string", maxLength: 24 },
+      cta_url: { type: "string" },
     },
-  ]}
+  },
+  example: {
+    title: "Home cover, adjusted to your postcode",
+    body: "Same excess, recalculated monthly.",
+    price: "from 12 EUR / month",
+    cta_label: "See the quote",
+    cta_url: "/quotes/home",
+  },
+};
+```
+
+`description` is the field people skip, and then they wonder why the model reaches for the component constantly. It goes into the prompt verbatim, so write when to use it and when to stop: "use when...", "never more than one per zone".
+
+`example` is optional and worth the five lines. A filled example teaches shape faster than a schema does.
+
+`maxLength` is your layout defence. It is the only thing standing between your design and a headline that wraps to four lines.
+
+#### Step 3a: ship it from the frontend
+
+Pass the definition to the zone. That is the whole generation side.
+
+```tsx
+import { ACME_OFFER_CARD } from "./genui-setup";
+
+<GenUIZone
+  zoneId="home-hero"
+  apiUrl={process.env.NEXT_PUBLIC_GENUI_URL}
+  apiKey={process.env.NEXT_PUBLIC_GENUI_KEY}
+  consent={hasConsent}
+  basePrompt="Show one relevant offer for this visitor"
+  customComponents={[ACME_OFFER_CARD]}
+  preferredComponentType="acme_offer_card"
 />;
 ```
 
-What the framework guarantees for custom components:
+`useZone` takes the same option for hosts that render the payload themselves. On the wire it becomes `custom_components: [{ name, data_schema, description, example }]` on `POST /zone/render`, which is also how a host that is not React declares its own vocabulary.
 
-- The JSON Schema is shown to the LLM (name, description, schema, optional `example`), so the model knows when and how to use the component.
-- Generated data is **validated against the schema** server-side (jsonschema); invalid components are dropped and reported in `meta.sanitization`.
-- The **URL whitelist applies recursively**: URL-named fields (`url`, `link`, `href`, `src`, `image`, `*_url`, …), absolute URLs and markdown links anywhere in the payload are checked; dangerous schemes are always stripped.
-- Custom definitions are part of the **zone cache key**: changing a schema invalidates cached renders automatically.
-- The registered React component receives `data` exactly as validated (no key renaming).
+#### Step 3b: ship it from the backend
 
-Backend embedders can register types globally instead of per request:
+Once the component is stable, Acme moves the definition server-side so every zone and every page gets it without a frontend build. Same schema, written in Python.
 
 ```python
+# acme_components.py, next to the backend
 from schemas import register_component_type
 
 register_component_type(
-    "hero_banner",
-    data_schema={...},
-    description="Full-width hero with headline and CTA",
+    "acme_offer_card",
+    description=(
+        "A single insurance offer with a price and one call to action. "
+        "Use when the zone should push one specific product. Never more than one per zone."
+    ),
+    data_schema={
+        "type": "object",
+        "required": ["title", "cta_label", "cta_url"],
+        "additionalProperties": False,
+        "properties": {
+            "title": {"type": "string", "maxLength": 60},
+            "body": {"type": "string", "maxLength": 180},
+            "price": {"type": "string"},
+            "cta_label": {"type": "string", "maxLength": 24},
+            "cta_url": {"type": "string"},
+        },
+    },
+    example={
+        "title": "Home cover, adjusted to your postcode",
+        "cta_label": "See the quote",
+        "cta_url": "/quotes/home",
+    },
 )
 ```
 
-> Custom names: 2-32 chars, lowercase `[a-z0-9_-]`, starting with a letter. Built-in names cannot be overridden.
+Registration has to happen before the app serves its first render, and it needs no fork. Import your module, then the app, from one thin entry point:
+
+```python
+# acme_app.py
+import acme_components  # noqa: F401  (registers on import)
+from api.main import app  # noqa: F401
+```
+
+```bash
+uvicorn acme_app:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+Every worker imports the entry point, so every worker gets the registry. The frontend still needs step 1: the backend knows the schema, the browser knows the JSX, and neither one can supply the other's half.
+
+Per-zone definitions are merged **over** the global registry for that single render, so one zone can override a global type by name without touching the deployment. Invalid entries are skipped with a log line instead of failing the render.
+
+#### Step 4: check that it actually worked
+
+```bash
+curl -X POST http://localhost:8000/api/v1/zone/render \
+  -H "X-API-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"zone_id":"home-hero","base_prompt":"Show one relevant offer",
+       "custom_components":[{"name":"acme_offer_card",
+         "description":"A single insurance offer with a price and one CTA.",
+         "data_schema":{"type":"object","required":["title"],
+           "properties":{"title":{"type":"string"}}}}]}'
+```
+
+Read the answer in this order.
+
+1. **A component of your type in `components[]`** means the model saw the schema and used it. Done.
+2. **`meta.sanitization.dropped_components`** is where your component goes when its data failed your schema. A type that never appears anywhere else and always lands here means the description and the schema are telling the model two different stories.
+3. **Nothing of your type anywhere** usually means the name was rejected before the prompt was built. Grep the backend log for `Skipping invalid custom component`. A reserved built-in name and a missing `data_schema` are the two causes.
+4. **A console warning naming an unknown type** in the browser means the backend generated it and the frontend never registered it. Step 1 did not run, or it ran after the first render. In development you get a visible placeholder instead of a silent gap.
+
+### Re-skin a built-in type with your own component
+
+Steps 1 to 4 teach the model a word it did not have. There is a second case, and for a company like Acme it is usually the first one they want: the model already knows the word, and Acme just wants it drawn in their own markup.
+
+`hero_banner` is a good example. The backend already has a schema for it, already grounds its numbers, already enforces the `with-image` / `text-only` coherence, already knows from the prompt when a hero belongs at the top of a zone. Acme does not want to re-invent any of that. Acme wants their `<AcmeHero />`.
+
+Register under the built-in name and that is what happens.
+
+```tsx
+import { registerGenUIComponent } from "genui-framework";
+import { AcmeHero } from "@acme/ui";
+
+registerGenUIComponent("hero_banner", ({ data }) => (
+  <AcmeHero
+    title={data.headline}
+    sub={data.subheadline}
+    cta={data.primaryCta}
+    kind={data.variant}
+  />
+));
+```
+
+No `customComponents` prop, no schema, no backend change. The zone keeps generating `hero_banner` exactly as before and your component draws it.
+
+**A registration always wins over the framework's component of the same name.** The lookup runs before the built-in dispatch, so there is no ordering to get right and no way to end up with a registration that silently does nothing.
+
+**An override receives the same camelCase payload as the component it replaces.** `primary_cta` on the wire reaches you as `data.primaryCta`, so an override is a drop-in for the built-in and you can read [the component reference](#-components) for the shape. Custom types keep receiving their payload exactly as their own schema declared it, in whatever casing you wrote. The rule is simple: replacing a framework component means inheriting its data shape, declaring your own means owning it.
+
+**What you cannot do is redefine what the name means.** Sending `hero_banner` in `custom_components` is still refused by the backend, and that is deliberate: the schema is what the prompt teaches the model and what the guards validate against, so letting one page redefine it would make the guarantee chain depend on whoever is calling. You change the markup. The contract stays the framework's.
+
+So the two halves split cleanly:
+
+| You want                               | Register under    | Declare a schema          | Data shape you get             |
+| -------------------------------------- | ----------------- | ------------------------- | ------------------------------ |
+| A type the framework has no idea about | your own name     | yes, per zone or globally | your schema's keys, untouched  |
+| The framework's type, your markup      | the built-in name | no                        | the built-in's camelCase shape |
+
+One practical note. An override is global to the bundle, which is the point (register once, every zone gets it), so it is not the tool for making one page's hero look different. For that, use the theme tokens or `GenUISection`. Reach for an override when your design system, and not the framework, should own how a type looks everywhere.
+
+### What the framework guarantees for custom components
+
+- The name, description, schema and optional example go into the prompt, so the model knows when and how to use the component.
+- Generated data is **validated against your JSON Schema** server-side (jsonschema). Components that fail are dropped and reported in `meta.sanitization`, never rendered.
+- The **URL whitelist applies recursively** to your payload: URL-named fields (`url`, `link`, `href`, `src`, `image`, `*_url`, …), absolute URLs and markdown links at any depth are checked against the whitelist, and dangerous schemes are always stripped. Your component cannot receive a link the model invented.
+- The **content policy scans the whole payload** at any depth, and a custom component containing a banned term is dropped like any other. Redundancy, the component budget and pinned enforcement apply to it too.
+- **Numeric grounding is the exception, and it is worth knowing.** It reads the shapes it knows (`stats_banner` values, `pricing_cards` prices, `chart` points, `case_studies` metrics), so a number inside a custom payload is not traced back to the input. If your component displays a figure that must be real, put it in `pinned_content` or keep it in a grounded built-in type. [`deploy/OUTPUT-GUARANTEES.md`](deploy/OUTPUT-GUARANTEES.md) states the same limit.
+- Custom definitions are **part of the zone cache key**, so editing a schema invalidates cached renders on its own.
+- Names are checked on both sides: 2 to 32 characters, lowercase `[a-z0-9_-]`, starting with a letter. Built-in names are refused as _definitions_ (you cannot redefine what `hero_banner` means) and accepted as _registrations_ (you can draw it yourself).
 
 ---
 
@@ -1144,8 +1329,8 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 4
 
 **What a slow Qdrant does.** The same rule, applied to the vector database. Search runs on the async client, and every remaining Qdrant call (health probe, document upload, listing, deletion, stats) runs in the worker's threadpool, so a slow answer never occupies the event loop that is serving renders next to it. The connection is opened once per process instead of once per request, but the health answer is still a live round-trip: a reused connection can report `qdrant_connected: false` and it will, because it asks. `QDRANT_TIMEOUT_SECONDS` (default `2`, matching the Redis socket cap) bounds every call, so an unresponsive Qdrant costs one slow operation. Raise it if you bulk-index large documents into a remote instance; the upload response reports `chunks_indexed`, so a cap set too tight shows up there instead of hiding.
 
-| Knob                     | Default | Meaning                                                              |
-| ------------------------ | ------- | -------------------------------------------------------------------- |
+| Knob                     | Default | Meaning                                                                |
+| ------------------------ | ------- | ---------------------------------------------------------------------- |
 | `QDRANT_TIMEOUT_SECONDS` | `2`     | Per-call timeout for every Qdrant request (probe, index, list, search) |
 
 ---
@@ -1178,12 +1363,12 @@ With BYOK the LLM bill is on **your** key, and the client `pk_` key is public (i
 - **Over the cap, chat stops instead of degrading.** A zone render has a cached copy to fall back on, so its degradation is invisible. A chat answer has none: the answer itself is the expensive call, and serving it without the accessory analyses would save the small half of the cost while spending the large one. So the request returns 429 and says which knob to turn.
 - **Provider timeout.** `LLM_TIMEOUT_SECONDS` bounds every LLM and embedding call; a slow or cold provider endpoint fails the request instead of holding it (and a worker slot) open for the SDK default of 10 minutes.
 
-| Knob                    | Default   | Meaning                                                           |
-| ----------------------- | --------- | ----------------------------------------------------------------- |
+| Knob                    | Default   | Meaning                                                                                |
+| ----------------------- | --------- | -------------------------------------------------------------------------------------- |
 | `LLM_BUDGET_PER_HOUR`   | `0` (off) | Max LLM generations per tenant per hour, zones and chat together; set it in production |
-| `ZONE_BATCH_MAX`        | `10`      | Max zones per batch-render request                                |
-| `LLM_TIMEOUT_SECONDS`   | `60`      | Per-call provider timeout (LLM + embeddings); empty = SDK default |
-| `RATE_LIMIT_PER_MINUTE` | `120`     | Requests per client key per minute (batches count as N)           |
+| `ZONE_BATCH_MAX`        | `10`      | Max zones per batch-render request                                                     |
+| `LLM_TIMEOUT_SECONDS`   | `60`      | Per-call provider timeout (LLM + embeddings); empty = SDK default                      |
+| `RATE_LIMIT_PER_MINUTE` | `120`     | Requests per client key per minute (batches count as N)                                |
 
 Sizing `LLM_BUDGET_PER_HOUR`: at steady state zone generations are rare (misses on new segments plus one refresh per cached key per `ZONE_CACHE_FRESH_TTL` window). Count your zones times your active segments, add headroom for a cold start, then add the chat: chat is not cached, so every message spends two or three generations of the same budget. Remember the budget is per tenant, not per key. The rate limit protects request volume; the budget protects the LLM wallet. They are independent caps and the stricter one wins.
 
@@ -1311,13 +1496,13 @@ So the whole library runs off one switch:
 <GenUIZone apiUrl={API} zoneId="home" userId={user.id} consent={cmpConsent} />
 ```
 
-| Without `consent={true}`                            | With `consent={true}`                             |
-| ----------------------------------------------------- | --------------------------------------------------- |
-| Nothing written to or read from IndexedDB             | Profile and chat history cached on the device       |
-| No `userId` in the render, chat or event requests     | `userId` sent, server-side profile applies          |
-| Behavior tracker never starts, no behavior in the body | Tracker runs at the `privacy` level you chose       |
-| Content served from the anonymous segment             | Content served from the visitor's own segment       |
-| The zone renders                                      | The zone renders                                    |
+| Without `consent={true}`                               | With `consent={true}`                         |
+| ------------------------------------------------------ | --------------------------------------------- |
+| Nothing written to or read from IndexedDB              | Profile and chat history cached on the device |
+| No `userId` in the render, chat or event requests      | `userId` sent, server-side profile applies    |
+| Behavior tracker never starts, no behavior in the body | Tracker runs at the `privacy` level you chose |
+| Content served from the anonymous segment              | Content served from the visitor's own segment |
+| The zone renders                                       | The zone renders                              |
 
 **The degraded mode is a product level, not a failure.** Anonymous requests take the path the framework already runs for every visitor nobody logged in and for the control arm of a holdout: the segment key collapses to `anon`, and the render is generated from the segment archetype rather than from an individual. The result is personalization that stores nothing on the device, uses no persistent identifier, and computes its segment from the request in front of it. That is a page that can be personalized before anyone clicks a banner. The step up from it, once your CMP has an answer, is one prop.
 
@@ -1346,7 +1531,13 @@ When the audit trail is going to your log pipeline (the production default), the
 **Erasure, honestly.** The profile is deleted. The audit entries naming that user are not, and the response says so:
 
 ```json
-{ "status": "deleted", "existed": true, "profile_erased": true, "audit_retained": true, "note": "..." }
+{
+  "status": "deleted",
+  "existed": true,
+  "profile_erased": true,
+  "audit_retained": true,
+  "note": "..."
+}
 ```
 
 A record of what was shown to whom is worth nothing if the party who showed it can edit it afterwards, and in a regulated deployment that record is also the operator's own evidence. On top of that, in the production configuration those lines have already left this process for your log pipeline, so the backend could not rewrite them if it wanted to. The trail is bounded instead of edited: rotation on the file sink, your pipeline's retention policy otherwise. And the erasure is itself recorded in it, so a later export shows when the right was exercised. Whether that balance holds for your deployment is a call for your DPO, on your retention numbers, and the numbers are below.
@@ -1355,14 +1546,14 @@ A record of what was shown to whom is worth nothing if the party who showed it c
 
 Storage limitation is configuration here, and this is the only place the defaults are written down:
 
-| Data                            | Knob                                             | Default                | Notes                                                                        |
-| --------------------------------- | -------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------ |
-| Server-side profile             | `PROFILE_TTL_SECONDS`                            | 90 days                | Refreshed on every write, so it expires after inactivity. `0` = keep forever  |
-| Audit trail (file sink)         | `AUDIT_LOG_MAX_BYTES` · `AUDIT_LOG_BACKUP_COUNT` | 50 MB × 5 files        | Size-bounded, not time-bounded: rotation drops the oldest file                |
-| Audit trail (production sink)   | your log pipeline                                | your policy            | The lines are emitted on the `genui.audit` logger and retained where they land |
-| Cached renders                  | `ZONE_CACHE_STALE_TTL`                           | 24 h                   | Per segment, never per person                                                 |
-| Event counters                  | none                                             | kept                   | Aggregate per zone and arm, no identifiers                                    |
-| IndexedDB profile and history   | the visitor                                      | until cleared          | Only written with consent; `clearProfile()` / `clearHistory()` erase it        |
+| Data                          | Knob                                             | Default         | Notes                                                                          |
+| ----------------------------- | ------------------------------------------------ | --------------- | ------------------------------------------------------------------------------ |
+| Server-side profile           | `PROFILE_TTL_SECONDS`                            | 90 days         | Refreshed on every write, so it expires after inactivity. `0` = keep forever   |
+| Audit trail (file sink)       | `AUDIT_LOG_MAX_BYTES` · `AUDIT_LOG_BACKUP_COUNT` | 50 MB × 5 files | Size-bounded, not time-bounded: rotation drops the oldest file                 |
+| Audit trail (production sink) | your log pipeline                                | your policy     | The lines are emitted on the `genui.audit` logger and retained where they land |
+| Cached renders                | `ZONE_CACHE_STALE_TTL`                           | 24 h            | Per segment, never per person                                                  |
+| Event counters                | none                                             | kept            | Aggregate per zone and arm, no identifiers                                     |
+| IndexedDB profile and history | the visitor                                      | until cleared   | Only written with consent; `clearProfile()` / `clearHistory()` erase it        |
 
 `PROFILE_TTL_SECONDS` applies to the Redis store; the in-memory fallback is bounded by size and lost on restart.
 
@@ -1386,6 +1577,8 @@ cd deploy && ./posture.sh
 That reads your `customer.env` and answers whether the deployment is configured the way those two documents describe: disclosure on, dev-open off, keys declared, retention set, audit going somewhere. Then it prints every data flow that leaves the perimeter with your configuration, and it is blunt when the answer is unwelcome, because a posture check that only reports good news is decoration. It exits non-zero on a mismatch.
 
 The references inside all four documents are held in place by `backend/tests/test_deploy_docs.py`. Rename a symbol a table cites and the suite goes red, which is the point: a compliance statement that quietly stops matching the code is worse than no statement, and it is attached to a contract.
+
+All four are also summarised for a human being at `#/compliance` in the Studio, public and with no backend behind it, so an evaluator can read the argument before deciding to clone anything. See [Compliance](#%EF%B8%8F-compliance).
 
 ---
 
@@ -1650,20 +1843,20 @@ Set `TRACING_ENABLED=true` for OpenTelemetry tracing: FastAPI request spans, `ge
 
 The framework can track user behavior and send it to the backend for personalization. It does that only once `consent` is granted (see [Consent](#consent-and-personalization-without-it)), and even then an integrator cannot audit every DOM node of their pages, so the tracker ships with a **safe default**: `privacy: 'balanced'`. The full capture contract per level, written so your DPO can sign off on it:
 
-| Signal                                                    | `strict`     | `balanced` (default) | `off`                |
-| --------------------------------------------------------- | ------------ | -------------------- | -------------------- |
-| Click coordinates, element tag/id/class, heatmap zones    | ✅           | ✅                   | ✅                   |
-| Scroll depth & direction                                  | ✅           | ✅                   | ✅                   |
-| Hover (tag, id, duration)                                 | ✅           | ✅                   | ✅                   |
-| Navigation paths                                          | PII-redacted | PII-redacted         | raw                  |
-| Page titles & referrer                                    | ❌           | PII-redacted         | raw                  |
-| Clicked element text (max 50 chars)                       | ❌           | PII-redacted         | raw                  |
-| Link `href`s                                              | ❌           | PII-redacted         | raw                  |
-| `trackInteraction` metadata strings (any nesting)         | ❌           | PII-redacted         | raw                  |
-| `<input>`/`<textarea>`/`<select>`/contenteditable content | ❌ never     | ❌ never             | ❌ never             |
-| Elements under `data-genui-private`                       | ❌ never     | ❌ never             | ❌ never             |
-| Elements under `data-genui-redact`                        | shape only   | shape only           | shape only           |
-| Runs at all without `consent={true}`                      | ❌ never     | ❌ never             | ❌ never             |
+| Signal                                                    | `strict`     | `balanced` (default) | `off`      |
+| --------------------------------------------------------- | ------------ | -------------------- | ---------- |
+| Click coordinates, element tag/id/class, heatmap zones    | ✅           | ✅                   | ✅         |
+| Scroll depth & direction                                  | ✅           | ✅                   | ✅         |
+| Hover (tag, id, duration)                                 | ✅           | ✅                   | ✅         |
+| Navigation paths                                          | PII-redacted | PII-redacted         | raw        |
+| Page titles & referrer                                    | ❌           | PII-redacted         | raw        |
+| Clicked element text (max 50 chars)                       | ❌           | PII-redacted         | raw        |
+| Link `href`s                                              | ❌           | PII-redacted         | raw        |
+| `trackInteraction` metadata strings (any nesting)         | ❌           | PII-redacted         | raw        |
+| `<input>`/`<textarea>`/`<select>`/contenteditable content | ❌ never     | ❌ never             | ❌ never   |
+| Elements under `data-genui-private`                       | ❌ never     | ❌ never             | ❌ never   |
+| Elements under `data-genui-redact`                        | shape only   | shape only           | shape only |
+| Runs at all without `consent={true}`                      | ❌ never     | ❌ never             | ❌ never   |
 
 **PII redaction** replaces emails, IBANs, Italian codici fiscali and runs of 8+ digits (cards, phone numbers, account numbers, birth dates) with `[redacted]` — _before_ truncation, so a cut-off token can never leak. Free-text street addresses are **not** reliably detectable by regex: wrap address blocks in `data-genui-private` instead.
 
@@ -1726,14 +1919,14 @@ function navigateTo(path: string) {
 
 The knowledge base feeds the AI real content to curate (and its URLs feed the whitelist). **Every operation is scoped to the tenant of the API key**: tenant A can never retrieve, list, or delete tenant B's documents. Documents indexed before tenant isolation belong to the `default` tenant. All endpoints require an **admin key**.
 
-| Endpoint                            | What it does                                                                                                                                                                                    |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/v1/documents/upload`     | Upload a **file** (PDF, DOCX, HTML, TXT, MD — max 10 MB, multipart): text extracted server-side, semantically chunked, indexed. Images (PNG/JPG/WEBP/TIFF) too with a capable extractor backend |
-| `POST /api/v1/documents`            | Upload raw text (JSON: `content` + `metadata`)                                                                                                                                                  |
-| `GET /api/v1/documents`             | List the tenant's documents with chunk counts                                                                                                                                                   |
-| `POST /api/v1/documents/search`     | Preview what the AI would retrieve for a query (passages + similarity scores) — content debugging                                                                                               |
-| `DELETE /api/v1/documents/{source}` | Delete a document (tenant-scoped, audit-logged)                                                                                                                                                 |
-| `GET /api/v1/documents/stats`       | Collection stats incl. the tenant's chunk count                                                                                                                                                 |
+| Endpoint                                 | What it does                                                                                                                                                                                    |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/v1/documents/upload`          | Upload a **file** (PDF, DOCX, HTML, TXT, MD — max 10 MB, multipart): text extracted server-side, semantically chunked, indexed. Images (PNG/JPG/WEBP/TIFF) too with a capable extractor backend |
+| `POST /api/v1/documents`                 | Upload raw text (JSON: `content` + `metadata`)                                                                                                                                                  |
+| `GET /api/v1/documents`                  | List the tenant's documents with chunk counts                                                                                                                                                   |
+| `POST /api/v1/documents/search`          | Preview what the AI would retrieve for a query (passages + similarity scores) — content debugging                                                                                               |
+| `DELETE /api/v1/documents/{source_name}` | Delete a document (tenant-scoped, audit-logged)                                                                                                                                                 |
+| `GET /api/v1/documents/stats`            | Collection stats incl. the tenant's chunk count                                                                                                                                                 |
 
 ```bash
 # Upload a PDF (url becomes linkable by the AI via the whitelist)
@@ -1961,7 +2154,7 @@ genui-framework/
 │   │                                     # content_policy_store, theme_store, tenant_json_store,
 │   │                                     # audit (write + read), rate_limit, json_stream, tracing
 │   ├── config/settings.py                # All env-driven configuration
-│   ├── tests/                            # 465 unit tests (unittest-compatible; opt-in live LLM)
+│   ├── tests/                            # 526 unit tests (unittest-compatible; opt-in live LLM)
 │   ├── Dockerfile                        # Container image
 │   └── docker-compose.yml                # Qdrant + Redis
 │
@@ -1982,10 +2175,12 @@ genui-framework/
 │   └── rollup.config.js
 │
 ├── deploy/                               # docker-compose, customer.env, OUTPUT-GUARANTEES.md,
-│                                         # TENANT-ISOLATION.md, smoke.sh
-├── studio/                               # Vite SPA control plane: Theme Playground (public) +
-│                                         # six local-only tools (Segment Preview, Zones,
-│                                         # Audit, Content Policy, Content Studio, Measure)
+│                                         # TENANT-ISOLATION.md, AI-ACT.md, GDPR.md,
+│                                         # smoke.sh, posture.sh
+├── studio/                               # Vite SPA control plane: Theme Playground and
+│                                         # Compliance (public) + six local-only tools
+│                                         # (Segment Preview, Zones, Audit, Content Policy,
+│                                         # Content Studio, Measure)
 └── CHANGELOG.md
 ```
 
