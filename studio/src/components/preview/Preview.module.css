@@ -174,3 +174,95 @@
 .sanitList li {
   overflow-wrap: anywhere;
 }
+.configHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agentTrigger {
+  flex: 0 0 auto;
+  padding: 9px 16px;
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-sm);
+  background: transparent;
+  color: var(--st-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 160ms var(--st-ease), border-color 160ms var(--st-ease);
+}
+
+.agentTrigger:hover {
+  color: var(--st-text);
+  border-color: var(--st-accent);
+}
+
+.agentModal {
+  width: min(680px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.agentHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agentGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.agentButton {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 16px;
+  border: none;
+  border-radius: var(--st-radius-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: filter 160ms var(--st-ease);
+}
+
+.agentButton:hover {
+  filter: brightness(1.1);
+}
+
+.agentName {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.agentNote {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.agentStatus {
+  margin: 0;
+  color: var(--st-text-muted);
+  font-size: 13px;
+}
+
+.agentBrief {
+  min-height: 220px;
+  font-family: var(--st-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.agentActions {
+  display: flex;
+  justify-content: flex-end;
+}

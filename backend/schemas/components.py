@@ -60,6 +60,7 @@ class BentoCard(_SchemaModel):
     link: Optional[str] = None
     image: Optional[str] = None
     badge: Optional[str] = None
+    featured: Optional[bool] = None
     action: Optional[CardAction] = None
     metadata: Optional[Dict[str, Any]] = None
 
@@ -174,16 +175,61 @@ class StepsSectionData(_SchemaModel):
         return self
 
 
+class StatChange(_SchemaModel):
+    """
+    How a metric moved, and separately whether that is good news.
+
+    `direction` is a fact about the number. `sentiment` is a reading of
+    that fact, and the two are not the same: cost per acquisition and
+    churn go down when things go well.
+    """
+    direction: Literal["up", "down"]
+    value: Optional[str] = Field(default=None, max_length=16)
+    sentiment: Optional[Literal["good", "bad"]] = None
+
+
 class StatItem(_SchemaModel):
+    """A figure with its label: the shape shared by every metric grid."""
     value: str = Field(..., min_length=1, max_length=24)
     label: str = Field(..., min_length=1)
     description: Optional[str] = None
 
 
+class MovingStat(StatItem):
+    """
+    A metric that can also carry how it moved.
+
+    Only the type that draws the movement declares it. A field no renderer
+    reads still reaches the model in the JSON schema, costs tokens in every
+    request and invites a number nobody will ever check, which is how a
+    shared metric model turned into an ungrounded delta on a type that
+    shows none.
+    """
+    change: Optional[StatChange] = None
+
+
 class StatsBannerData(_SchemaModel):
-    """Numeric metrics grid: pure text, values typically from RAG."""
-    stats: List[StatItem] = Field(..., min_length=1, max_length=8)
+    """
+    Numeric metrics grid: pure text, values typically from RAG.
+
+    Everything past `stats` and `columns` is optional and off by default,
+    so a payload written before the section could carry a narration
+    renders exactly as it did. `layout: "split"` puts that narration
+    beside the grid, and it needs a title: two columns with an empty one
+    is the hole this project refuses everywhere else.
+    """
+    stats: List[MovingStat] = Field(..., min_length=1, max_length=8)
     columns: Optional[Literal[2, 3, 4]] = None
+    eyebrow: Optional[str] = Field(default=None, max_length=32)
+    title: Optional[str] = None
+    description: Optional[str] = None
+    layout: Literal["grid", "split"] = "grid"
+
+    @model_validator(mode="after")
+    def _split_needs_something_to_put_beside(self) -> "StatsBannerData":
+        if self.layout == "split" and not self.title:
+            raise ValueError("layout 'split' requires a title")
+        return self
 
 
 class TestimonialItem(_SchemaModel):
@@ -282,6 +328,114 @@ class CaseStudiesData(_SchemaModel):
     heading: Optional[str] = None
     subheading: Optional[str] = None
     cases: List[CaseStudyItem] = Field(..., min_length=1, max_length=6)
+
+
+class ComparisonBar(_SchemaModel):
+    """
+    One column of a comparison.
+
+    `value` is a plain number (the numeric claim, grounded downstream)
+    and `suffix` carries the unit, so the renderer can size the bar
+    against the series maximum instead of against a hundred.
+    """
+    label: str = Field(..., min_length=1, max_length=32)
+    value: float = Field(..., ge=0)
+    suffix: Optional[str] = Field(default=None, max_length=8)
+    highlighted: Optional[bool] = None
+    callout: Optional[str] = Field(default=None, max_length=80)
+
+
+class ComparisonBarsData(_SchemaModel):
+    """
+    Values set side by side, at most one of them the operator's own.
+
+    The callout belongs to the highlighted bar: a bubble over a column
+    that is not the subject of the comparison points at nothing, so the
+    component is refused rather than rendered pointing at the wrong one.
+    """
+    title: str = Field(..., min_length=1)
+    subtitle: Optional[str] = None
+    bars: List[ComparisonBar] = Field(..., min_length=2, max_length=6)
+
+    @model_validator(mode="after")
+    def _highlight_coherence(self) -> "ComparisonBarsData":
+        if sum(1 for bar in self.bars if bar.highlighted) > 1:
+            raise ValueError("at most one bar may be highlighted")
+        if any(bar.callout and not bar.highlighted for bar in self.bars):
+            raise ValueError("only the highlighted bar may carry a callout")
+        return self
+
+
+class TrendPoint(_SchemaModel):
+    """One point of the curve: the label places it, the value is the claim."""
+    label: str = Field(..., min_length=1, max_length=24)
+    value: float
+
+
+class MetricsTrendData(_SchemaModel):
+    """
+    Scale and direction in one section: a grid of figures, a curve under it.
+
+    The two halves carry different truth rules, so they fail differently.
+    A metric that cannot be traced is removed and the others stay, the
+    way the numeric grid already works. A series point that cannot be
+    traced takes the whole curve, the way a chart already works, because
+    a curve missing a point is a different curve and not an imprecise
+    one. What is left is a grid of metrics, which is a finished shape:
+    the section stops telling the growth and tells the scale.
+    """
+    title: str = Field(..., min_length=1)
+    tail: Optional[str] = None
+    metrics: List[StatItem] = Field(..., min_length=2, max_length=6)
+    series: List[TrendPoint] = Field(default_factory=list, max_length=24)
+
+    @model_validator(mode="after")
+    def _series_needs_two_points(self) -> "MetricsTrendData":
+        if len(self.series) < 2:
+            self.series = []
+        return self
+
+
+class FaqEntry(_SchemaModel):
+    """One question and its answer. The answer may carry simple markdown."""
+    question: str = Field(..., min_length=1, max_length=200)
+    answer: str = Field(..., min_length=1)
+
+
+class FaqData(_SchemaModel):
+    """
+    Questions taken from the input, not questions that sound plausible.
+
+    Two entries is the floor: a single question is not a list of frequent
+    ones, it is a paragraph wearing a disclosure widget.
+    """
+    title: str = Field(..., min_length=1)
+    intro: Optional[str] = None
+    items: List[FaqEntry] = Field(..., min_length=2, max_length=12)
+
+
+class ProsConsData(_SchemaModel):
+    """
+    Two columns of items, taken from the input, never balanced by invention.
+
+    A component that shows an empty column states something ("there are no
+    drawbacks"), so an empty column is not a column: whatever survives is
+    rendered as a full-width single column, and with nothing on either side
+    the component is refused.
+    """
+    title: Optional[str] = None
+    pros_heading: Optional[str] = Field(default=None, max_length=32)
+    cons_heading: Optional[str] = Field(default=None, max_length=32)
+    pros: List[str] = Field(default_factory=list, max_length=10)
+    cons: List[str] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def _needs_a_side(self) -> "ProsConsData":
+        self.pros = [item.strip() for item in self.pros if item and item.strip()]
+        self.cons = [item.strip() for item in self.cons if item and item.strip()]
+        if not self.pros and not self.cons:
+            raise ValueError("pros_cons needs at least one item on one side")
+        return self
 
 
 class QuoteData(_SchemaModel):
@@ -383,6 +537,26 @@ class CaseStudiesComponentModel(_ComponentBase):
     data: CaseStudiesData
 
 
+class ComparisonBarsComponentModel(_ComponentBase):
+    type: Literal["comparison_bars"]
+    data: ComparisonBarsData
+
+
+class MetricsTrendComponentModel(_ComponentBase):
+    type: Literal["metrics_trend"]
+    data: MetricsTrendData
+
+
+class FaqComponentModel(_ComponentBase):
+    type: Literal["faq"]
+    data: FaqData
+
+
+class ProsConsComponentModel(_ComponentBase):
+    type: Literal["pros_cons"]
+    data: ProsConsData
+
+
 class QuoteComponentModel(_ComponentBase):
     type: Literal["quote"]
     data: QuoteData
@@ -407,6 +581,10 @@ GenUIComponentModel = Annotated[
         ContentGridComponentModel,
         HeroBannerComponentModel,
         CaseStudiesComponentModel,
+        ComparisonBarsComponentModel,
+        MetricsTrendComponentModel,
+        FaqComponentModel,
+        ProsConsComponentModel,
         QuoteComponentModel,
         LogoWallComponentModel,
     ],

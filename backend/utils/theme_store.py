@@ -56,6 +56,8 @@ class TenantTheme(BaseModel):
     accentColor: Optional[str] = Field(default=None, pattern=_HEX)
     fontFamily: Optional[str] = Field(default=None, pattern=_FONT_STACK)
     fontWeightHeading: Optional[str] = Field(default=None, pattern=r"^[1-9]00$")
+    successColor: Optional[str] = Field(default=None, pattern=_HEX)
+    errorColor: Optional[str] = Field(default=None, pattern=_HEX)
     surface1: Optional[str] = Field(default=None, pattern=_HEX)
     surface2: Optional[str] = Field(default=None, pattern=_HEX)
     surface3: Optional[str] = Field(default=None, pattern=_HEX)

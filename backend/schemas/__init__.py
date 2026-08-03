@@ -20,8 +20,10 @@ from .components import (
     zone_output_json_schema,
 )
 from .registry import (
+    BUILTIN_TYPE_DOCS,
     BUILTIN_TYPES,
     ComponentTypeDef,
+    builtin_catalog,
     get_registered_types,
     merge_custom_types,
     register_component_type,
@@ -30,6 +32,7 @@ from .registry import (
 
 __all__ = [
     "BUILTIN_TYPES",
+    "BUILTIN_TYPE_DOCS",
     "BentoCard",
     "BentoData",
     "ButtonDef",
@@ -42,6 +45,7 @@ __all__ = [
     "TextData",
     "ZoneAgentOutput",
     "apply_component_budget",
+    "builtin_catalog",
     "component_to_dict",
     "downgrade_image_variants",
     "get_registered_types",

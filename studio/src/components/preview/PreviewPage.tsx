@@ -12,6 +12,7 @@ import type { RenderProfile } from '../../lib/segment';
 import { getSession, sessionId, type AdminSession } from '../../lib/session';
 import { ConnectGate } from '../studio/ConnectGate';
 import { ConsoleHeader } from '../studio/ConsoleHeader';
+import { AgentPromptModal } from './AgentPromptModal';
 import { AudienceMatrix } from './AudienceMatrix';
 
 const PINNED_PLACEHOLDER = `[
@@ -32,6 +33,7 @@ const PreviewWorkbench = ({
   const [contextPrompt, setContextPrompt] = useState('Homepage, above the fold.');
   const [pinnedJson, setPinnedJson] = useState(PINNED_PLACEHOLDER);
   const [llmConfigured, setLlmConfigured] = useState<boolean | null>(null);
+  const [agentOpen, setAgentOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,7 +82,16 @@ const PreviewWorkbench = ({
       <ConsoleHeader session={session} onSession={onSession} />
 
       <section className={`st-glass ${studioStyles.testerCard}`}>
-        <h2 className="st-section-title">Zone config</h2>
+        <div className={styles.configHead}>
+          <h2 className="st-section-title">Zone config</h2>
+          <button
+            type="button"
+            className={styles.agentTrigger}
+            onClick={() => setAgentOpen(true)}
+          >
+            Draft with an AI assistant
+          </button>
+        </div>
         <p className={studioStyles.testerSub}>
           The prompt and pinned content a page would ship for this zone.
           Every audience below is rendered live against this exact config.
@@ -140,6 +151,8 @@ const PreviewWorkbench = ({
       </section>
 
       <AudienceMatrix session={session} buildPayload={buildPayload} />
+
+      {agentOpen && <AgentPromptModal onClose={() => setAgentOpen(false)} />}
     </main>
   );
 };

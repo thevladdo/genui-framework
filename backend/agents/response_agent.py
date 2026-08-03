@@ -17,7 +17,7 @@ import json
 from config import settings
 from llm import create_llm_client
 from rag import get_vector_store, build_context_from_results
-from schemas import component_to_dict, validate_components
+from schemas import builtin_catalog, component_to_dict, validate_components
 from utils.content_policy_store import effective_policy
 from utils.disclosure import (
     PROVENANCE_NONE,
@@ -169,6 +169,31 @@ class ResponseAgent:
     for personalized responses. Outputs structured data for GenUI rendering.
     """
     
+    # What this surface exposes: every built-in type except "hero_banner".
+    EXPOSED_TYPES = (
+        "text", "bento", "chart", "buttons",
+        "tabs_feature", "steps_section", "stats_banner",
+        "testimonial_carousel", "pricing_cards", "content_grid",
+        "case_studies", "comparison_bars", "metrics_trend", "faq", "pros_cons", "quote", "logo_wall",
+    )
+
+    # Advice that holds in a chat answer and nowhere else.
+    SURFACE_NOTES = {
+        "steps_section": (
+            "Leave autoplay off here: the transcript scrolls while the reader\n"
+            "is still reading, and a component that advances on its own steals\n"
+            "attention from the text."
+        ),
+        "testimonial_carousel": (
+            "Leave autoplay off here, for the same reason as the steps: an\n"
+            "answer is read, not watched."
+        ),
+        "comparison_bars": (
+            "Good answer to a 'how does this compare' question. Keep it to the\n"
+            "few bars the question is actually about."
+        ),
+    }
+
     SYSTEM_PROMPT = """You are a helpful assistant that provides informative, personalized responses.
 Your responses should be structured to enable dynamic UI generation.
 
@@ -186,7 +211,7 @@ When responding, you MUST output valid JSON with this structure:
     "text_response": "Your main response text",
     "components": [
         {
-            "type": "text|bento|chart|buttons|tabs_feature|steps_section|stats_banner|testimonial_carousel|pricing_cards|content_grid|hero_banner",
+            "type": \"""" + "|".join(EXPOSED_TYPES) + """\",
             "data": { ... component-specific data ... },
             "layout": { ... optional layout hints ... }
         }
@@ -198,64 +223,15 @@ When responding, you MUST output valid JSON with this structure:
 
 Component types and their data structures:
 
-1. "text" - Simple text response
-   data: { "content": "markdown text", "style": "normal|emphasis|note" }
+""" + builtin_catalog(EXPOSED_TYPES, SURFACE_NOTES) + """
 
-2. "bento" - Card grid layout
-   data: { 
-       "cards": [
-           { "title": "...", "description": "...", "icon": "...", "link": "..." }
-       ],
-       "columns": 2-4
-   }
+IMAGE RULE: every layout "with-image" REQUIRES the matching image URL, and that
+URL must come from the input. No image available? Use "text-only" - that shape is
+designed to look complete without images.
 
-3. "chart" - Data visualization
-   data: {
-       "chart_type": "bar|line|pie|area|donut",
-       "title": "Chart Title",
-       "data": [{ "label": "...", "value": ... }],
-       "x_axis": "...",
-       "y_axis": "..."
-   }
-
-4. "buttons" - Action buttons with links
-   data: {
-       "buttons": [
-           { "label": "...", "url": "...", "style": "primary|secondary|outline|ghost|shine|gooey|expandIcon|ringHover" }
-       ]
-   }
-
-5. "tabs_feature" - Tabbed feature section (plan comparison, product categories)
-   data: { "heading": "...", "badge?": "...", "tabs": [{ "label": "...", "icon?": "emoji",
-     "content": { "layout": "with-image|text-only", "title": "...", "description?": "...",
-       "button?": {"label","url"}, "image_url?": "..." } }] }
-
-6. "steps_section" - Step sequence (onboarding, how-it-works)
-   data: { "layout": "with-image|text-only", "steps": [{"title","description?","image_url?"}],
-     "autoplay?": true, "interval?": 4000 }
-
-7. "stats_banner" - Numeric metrics grid, text only (use RAG facts, never invent numbers)
-   data: { "stats": [{"value": "10M", "label": "...", "description?": "..."}], "columns?": 2-4 }
-
-8. "testimonial_carousel" - Quotes with optional avatar
-   data: { "testimonials": [{"quote","name","role?","company?","avatar_url?"}], "autoplay?": true }
-
-9. "pricing_cards" - Plan grid; "detailed" adds a comparison table
-   data: { "variant": "compact|detailed", "plans": [{"name","price","period?","description?",
-     "features": ["..."], "cta?": {"label","url"}, "highlighted?": true, "flag?": "Recommended"}] }
-
-10. "content_grid" - Blog/news cards, per-item image-optional
-   data: { "columns?": 2-4, "items": [{"layout": "with-image|text-only", "title",
-     "category?", "excerpt?", "image_url?", "url?", "date?"}] }
-
-11. "hero_banner" - Hero section
-   data: { "variant": "split|centered|minimal", "headline", "subheadline?", "badge?",
-     "primary_cta?": {"label","url"}, "secondary_cta?": {"label","url"}, "image_url?" }
-   ("split" REQUIRES image_url; use "centered" or "minimal" without an image)
-
-IMAGE RULE: every layout/variant "with-image" REQUIRES the matching image URL,
-and that URL must come from the input. No image available? Use "text-only" /
-"centered" / "minimal" - these variants are designed to look complete without images.
+WIDTH: an answer is read inside the chat column, which can be narrow. Where a
+type offers a compact shape, prefer it: two columns rather than four, the
+"compact" pricing variant rather than "detailed", short labels.
 
 Guidelines:
 - Use the provided context from documents to inform your answers

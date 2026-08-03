@@ -72,7 +72,7 @@ test('card with both link and action keeps a single non-nested anchor', async ()
   act(() => root.unmount());
 });
 
-test('columns are capped by card count (1 card never gets a 3-col grid)', async () => {
+test('one card takes the whole width, never a third of it', async () => {
   const container = document.createElement('div');
   const root = createRoot(container);
   await act(async () => {
@@ -81,14 +81,13 @@ test('columns are capped by card count (1 card never gets a 3-col grid)', async 
     );
   });
 
-  const grid = container.querySelector('.genui-bento');
-  expect(grid!.className).toContain('genui-bento--cols-1');
-  expect(grid!.className).not.toContain('genui-bento--cols-3');
+  const card = container.querySelector('.genui-bento-card');
+  expect(card!.className).toContain('genui-bento-card--w12');
 
   act(() => root.unmount());
 });
 
-test('columns stay as requested when there are enough cards', async () => {
+test('three cards become a lead card with two beside it', async () => {
   const container = document.createElement('div');
   const root = createRoot(container);
   await act(async () => {
@@ -102,9 +101,10 @@ test('columns stay as requested when there are enough cards', async () => {
     );
   });
 
-  expect(container.querySelector('.genui-bento')!.className).toContain(
-    'genui-bento--cols-3',
+  const widths = [...container.querySelectorAll('.genui-bento-card')].map(
+    (card) => card.className.match(/genui-bento-card--w(\d+)/)![1],
   );
+  expect(widths).toEqual(['8', '4', '4']);
 
   act(() => root.unmount());
 });

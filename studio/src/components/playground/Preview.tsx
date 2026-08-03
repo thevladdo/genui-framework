@@ -8,12 +8,16 @@ import {
   ButtonsComponent,
   CaseStudies,
   ChartComponent,
+  ComparisonBars,
   ContentGrid,
+  Faq,
   GenUIDisclosureNotice,
   GenUISection,
   HeroBanner,
   LogoWall,
+  MetricsTrend,
   PricingCards,
+  ProsCons,
   QuoteBlock,
   StatsBanner,
   StepsSection,
@@ -43,13 +47,12 @@ const BUTTON_VARIANTS = [
   'shine', 'gooey', 'expandIcon', 'ringHover',
 ] as const;
 
-const BENTO_DATA = {
+const BENTO_SIX = {
   cards: [
     {
-      title: 'Bento Caption Rail',
-      description: 'Featured surface with badge and hover motion.',
-      badge: 'Featured',
-      image: gridImgA,
+      title: 'Six cards, one lead',
+      description: 'The cells are unequal on purpose.',
+      image: avatarImg
     },
     {
       title: 'Glass Caption Rail',
@@ -57,8 +60,19 @@ const BENTO_DATA = {
       image: gridImgB,
     },
     {
+      title: 'Claims',
+      description: 'Fills beside the lead.',
+      image: gridImgA
+    },
+    {
       title: 'Text-Only Degradation',
       description: 'No photo, so no glass to blur: the accent gradient takes the whole card and the text moves up into it.',
+    },
+    {
+      title: 'Support', description: 'Marked featured, so it takes the large cell whatever its position in the list.',
+      badge: 'Featured',
+      featured: true,
+      image: stepsImg,
     },
   ],
   columns: 3 as const,
@@ -194,7 +208,9 @@ export const Preview = ({ theme }: { theme: StudioTheme }) => {
         </section>
 
         <section className={sectionClass}>
-          <p className="st-code-label">{'// stats banner'}</p>
+          <p className="st-code-label">
+            {'// stats banner: the bare grid, then split with narration and movement'}
+          </p>
           <StatsBanner
             data={{
               stats: [
@@ -202,6 +218,38 @@ export const Preview = ({ theme }: { theme: StudioTheme }) => {
                 { value: '99.9%', label: 'Uptime', description: 'last 12 months' },
                 { value: '−82%', label: 'LLM cost', description: 'with segment cache' },
                 { value: '+34%', label: 'CTR uplift' },
+              ],
+            }}
+          />
+          <div style={{ height: 120 }} />
+          <StatsBanner
+            data={{
+              layout: 'split',
+              eyebrow: 'Platform',
+              title: 'This is the start of something new',
+              description:
+                'The same type as above, with the narration beside the grid instead of a row of numbers with nothing around them.',
+              stats: [
+                {
+                  value: '500,000',
+                  label: 'Monthly active users',
+                  change: { direction: 'up', value: '+20.1%', sentiment: 'good' },
+                },
+                {
+                  value: '20,105',
+                  label: 'Daily active users',
+                  change: { direction: 'down', value: '-2%', sentiment: 'bad' },
+                },
+                {
+                  value: '$523,520',
+                  label: 'Monthly recurring revenue',
+                  change: { direction: 'up', value: '+8%', sentiment: 'good' },
+                },
+                {
+                  value: '$1,052',
+                  label: 'Cost per acquisition',
+                  change: { direction: 'down', value: '-2%' },
+                },
               ],
             }}
           />
@@ -292,6 +340,175 @@ export const Preview = ({ theme }: { theme: StudioTheme }) => {
         </section>
 
         <section className={sectionClass}>
+          <p className="st-code-label">
+            {'// metrics with trend: full, then without the curve, then two metrics only'}
+          </p>
+          <MetricsTrend
+            data={{
+              title: 'Powering teams with real-time insight,',
+              tail: 'and the months that got us there.',
+              metrics: [
+                { value: '50,000+', label: 'Projects managed' },
+                { value: '99.9%', label: 'Uptime', description: 'last 12 months' },
+                { value: '1,200+', label: 'Enterprise clients' },
+                { value: '1.2s', label: 'Avg. response time' },
+              ],
+              series: [
+                { label: 'Jan', value: 20 },
+                { label: 'Feb', value: 40 },
+                { label: 'Mar', value: 36 },
+                { label: 'Apr', value: 80 },
+                { label: 'May', value: 72 },
+                { label: 'Jun', value: 130 },
+                { label: 'Jul', value: 160 },
+              ],
+            }}
+          />
+          <div style={{ height: 120 }} />
+          <MetricsTrend
+            data={{
+              title: 'The same section with no series to draw.',
+              metrics: [
+                { value: '340', label: 'Contacts imported' },
+                { value: '2', label: 'Automations live' },
+                { value: '6', label: 'Seats in use' },
+              ],
+              series: [],
+            }}
+          />
+          <div style={{ height: 120 }} />
+          <MetricsTrend
+            data={{
+              title: 'Two metrics, which is the floor.',
+              metrics: [
+                { value: '14', label: 'Days left in trial' },
+                { value: '40%', label: 'Onboarding complete' },
+              ],
+              series: [
+                { label: 'Week 1', value: 10 },
+                { label: 'Week 2', value: 40 },
+              ],
+            }}
+          />
+        </section>
+
+        <section className={sectionClass}>
+          <p className="st-code-label">
+            {'// comparison bars: full form, then two bars without callout, then no highlight at all'}
+          </p>
+          <ComparisonBars
+            data={{
+              title: 'Time to first personalized page',
+              subtitle: 'Days from signup to a zone serving real traffic.',
+              bars: [
+                { label: 'GenUI', value: 4, suffix: 'd', highlighted: true, callout: 'Live in under a week' },
+                { label: 'Suite A', value: 11, suffix: 'd' },
+                { label: 'Suite B', value: 18, suffix: 'd' },
+                { label: 'In-house', value: 45, suffix: 'd' },
+              ],
+            }}
+          />
+          <div style={{ height: 120 }} />
+          <ComparisonBars
+            data={{
+              title: 'Cost per thousand renders',
+              bars: [
+                { label: 'Segment cache', value: 0.4, suffix: '$', highlighted: true },
+                { label: 'Per request', value: 2.2, suffix: '$' },
+              ],
+            }}
+          />
+          <div style={{ height: 120 }} />
+          <ComparisonBars
+            data={{
+              title: 'Where the reading time goes',
+              bars: [
+                { label: 'Hero', value: 38, suffix: '%' },
+                { label: 'Cards', value: 27, suffix: '%' },
+                { label: 'Pricing', value: 21, suffix: '%' },
+                { label: 'Footer', value: 14, suffix: '%' },
+              ],
+            }}
+          />
+        </section>
+
+        <section className={sectionClass}>
+          <p className="st-code-label">
+            {'// faq: native details and summary, with the intro and then without'}
+          </p>
+          <Faq
+            data={{
+              title: 'Frequently asked questions',
+              intro: 'Answers to what people ask most. Open one and the others close, where the browser supports it.',
+              items: [
+                {
+                  question: 'Does this need JavaScript to open?',
+                  answer: 'No. It is `details` and `summary`, so it opens, closes and answers the keyboard in server rendered HTML.',
+                },
+                {
+                  question: 'Can an answer carry a link?',
+                  answer: 'Yes, and it goes through the same URL whitelist as everything else: a link that was not in your input does not survive.',
+                },
+                {
+                  question: 'Are these questions marked up for search engines?',
+                  answer: 'Deliberately not. The zone already declares that a model wrote this content, and claiming the same text is the site official FAQ would say the opposite.',
+                },
+              ],
+            }}
+          />
+          <div style={{ height: 96 }} />
+          <Faq
+            data={{
+              title: 'The same section with no introduction',
+              items: [
+                { question: 'What changes without the intro?', answer: 'The header is the title alone, with no gap where a paragraph would have been.' },
+                { question: 'How many entries fit?', answer: 'Two to twelve. One is a paragraph wearing a disclosure widget.' },
+              ],
+            }}
+          />
+        </section>
+
+        <section className={sectionClass}>
+          <p className="st-code-label">
+            {'// pros and cons: both sides, then one side only (full width), then no title'}
+          </p>
+          <ProsCons
+            data={{
+              title: 'Serverless rendering',
+              pros: [
+                'Cheap to run: you pay per render, not per idle hour',
+                'Scales with traffic spikes **without** capacity planning',
+                'Zero configuration to get the first zone live',
+              ],
+              cons: [
+                'Cold starts add latency on the first request',
+                'No offline mode for local development',
+              ],
+            }}
+          />
+          <div style={{ height: 120 }} />
+          <ProsCons
+            data={{
+              title: 'What the documents actually said',
+              prosHeading: 'Documented',
+              consHeading: 'Not documented',
+              pros: [
+                'Two benefits were stated in the source material',
+                'Nothing was written to balance the columns',
+              ],
+              cons: [],
+            }}
+          />
+          <div style={{ height: 120 }} />
+          <ProsCons
+            data={{
+              pros: ['Ships today', 'One dependency'],
+              cons: ['Needs a migration', 'No admin UI yet'],
+            }}
+          />
+        </section>
+
+        <section className={sectionClass}>
           <p className="st-code-label">{'// quote / manifesto: full attribution vs statement-only (degrades)'}</p>
           <QuoteBlock
             data={{
@@ -303,7 +520,7 @@ export const Preview = ({ theme }: { theme: StudioTheme }) => {
               logoLabel: 'Northwind',
             }}
           />
-          <div style={{ height: 48 }} />
+          <div style={{ height: 64 }} />
           <QuoteBlock
             data={{
               quote: 'We do not sell hours. We sell the difference between before and after.',
@@ -328,7 +545,7 @@ export const Preview = ({ theme }: { theme: StudioTheme }) => {
               ],
             }}
           />
-          <div style={{ height: 48 }} />
+          <div style={{ height: 64 }} />
           <LogoWall
             data={{
               heading: 'Our stack',
@@ -357,8 +574,8 @@ export const Preview = ({ theme }: { theme: StudioTheme }) => {
         </section>
 
         <section className={sectionClass}>
-          <p className="st-code-label">{'// containers'}</p>
-          <BentoComponent data={BENTO_DATA} />
+          <p className="st-code-label">{'// bento container'}</p>
+          <BentoComponent data={BENTO_SIX} />
         </section>
 
         <section className={sectionClass}>

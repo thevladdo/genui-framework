@@ -137,7 +137,8 @@ optgroup {
 [data-accent-light='true'] .genui-button--primary,
 [data-accent-light='true'] .genui-button--shine,
 [data-accent-light='true'] .genui-button--gooey,
-[data-accent-light='true'] .genui-button--expandIcon {
+[data-accent-light='true'] .genui-button--expandIcon,
+[data-accent-light='true'] .genui-compare__callout {
   color: #0a0a0c;
 }
 

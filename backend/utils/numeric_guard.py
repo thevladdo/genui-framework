@@ -9,12 +9,24 @@ documents, page context). Ungrounded numbers are removed and reported
 in meta.sanitization.removed_numbers.
 
 Enforced scope (fields whose value IS a numeric claim):
-- stats_banner: each stat's `value` (an ungrounded stat is removed;
-  a banner left empty is dropped)
+- stats_banner: each stat's `value` AND its change `value` (the delta
+  shown beside the figure is a claim like the figure: an ungrounded
+  one removes the whole stat, and a banner left empty is dropped)
 - pricing_cards: each plan's `price` (an ungrounded plan is removed;
   a grid left empty is dropped)
 - chart: each data point's `value` (one ungrounded point drops the
   WHOLE chart: a series missing one bar misleads)
+- comparison_bars: each bar's `value` (one ungrounded value drops the
+  WHOLE comparison, for the same reason and more so: a comparison
+  with the unverifiable competitor quietly removed reads better than
+  the truth, so removing is worse than not showing)
+- case_studies: each metric's `value` (an ungrounded figure is removed;
+  the case keeps its prose)
+- metrics_trend: BOTH rules at once, one per half. A metric behaves like
+  a stat, an ungrounded one is removed and the others stay; a series
+  point behaves like a chart point, an ungrounded one takes the whole
+  curve. What is left is the grid of metrics, which is a finished
+  section, and below two surviving metrics there is no grid either
 
 Honest limits (documented, never promised as more):
 - Grounding is verbatim modulo formatting: "1,200", "1200" and 1200.0
@@ -123,7 +135,9 @@ class NumericGuard:
             data = component.get("data", {})
             if ctype == "stats_banner":
                 data["stats"] = [
-                    s for s in data.get("stats", []) if self._check(s.get("value"))
+                    s for s in data.get("stats", [])
+                    if self._check(s.get("value"))
+                    and self._check((s.get("change") or {}).get("value"))
                 ]
                 if not data["stats"]:
                     continue
@@ -136,6 +150,18 @@ class NumericGuard:
             elif ctype == "chart":
                 if not all(self._check(p.get("value")) for p in data.get("data", [])):
                     continue
+            elif ctype == "comparison_bars":
+                bars = data.get("bars", [])
+                if len(bars) < 2 or not all(self._check(b.get("value")) for b in bars):
+                    continue
+            elif ctype == "metrics_trend":
+                data["metrics"] = [
+                    m for m in data.get("metrics", []) if self._check(m.get("value"))
+                ]
+                if len(data["metrics"]) < 2:
+                    continue
+                if not all(self._check(p.get("value")) for p in data.get("series") or []):
+                    data["series"] = []
             elif ctype == "case_studies":
                 for case in data.get("cases", []):
                     case["metrics"] = [

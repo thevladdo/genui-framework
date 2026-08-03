@@ -23,6 +23,10 @@ import { PricingCards } from './PricingCards';
 import { ContentGrid } from './ContentGrid';
 import { HeroBanner } from './HeroBanner';
 import { CaseStudies } from './CaseStudies';
+import { ComparisonBars } from './ComparisonBars';
+import { MetricsTrend } from './MetricsTrend';
+import { Faq } from './Faq';
+import { ProsCons } from './ProsCons';
 import { QuoteBlock } from './QuoteBlock';
 import { LogoWall } from './LogoWall';
 import { ComponentErrorBoundary } from './ErrorBoundary';
@@ -135,6 +139,18 @@ const renderSingleComponent = (
 
       case 'case_studies':
         return <CaseStudies data={data} />;
+
+      case 'comparison_bars':
+        return <ComparisonBars data={data} />;
+
+      case 'metrics_trend':
+        return <MetricsTrend data={data} />;
+
+      case 'faq':
+        return <Faq data={data} />;
+
+      case 'pros_cons':
+        return <ProsCons data={data} />;
 
       case 'quote':
         return <QuoteBlock data={data} />;

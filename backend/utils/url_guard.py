@@ -276,22 +276,30 @@ class UrlGuard:
             self._walk_custom(data)
         return component
 
-    def _walk_custom(self, node: Any) -> None:
+    def _walk_custom(self, node: Any, key: str = "") -> None:
         if isinstance(node, dict):
-            for key in list(node.keys()):
-                value = node[key]
+            for child_key in list(node.keys()):
+                value = node[child_key]
                 if isinstance(value, str):
-                    cleaned = self._sanitize_custom_string(key, value)
+                    cleaned = self._sanitize_custom_string(child_key, value)
                     if cleaned is None:
-                        node.pop(key)
+                        node.pop(child_key)
                     else:
-                        node[key] = cleaned
+                        node[child_key] = cleaned
                 elif isinstance(value, (dict, list)):
-                    self._walk_custom(value)
+                    self._walk_custom(value, child_key)
         elif isinstance(node, list):
+            kept: List[Any] = []
             for item in node:
+                if isinstance(item, str):
+                    cleaned = self._sanitize_custom_string(key, item)
+                    if cleaned is not None and cleaned.strip():
+                        kept.append(cleaned)
+                    continue
                 if isinstance(item, (dict, list)):
-                    self._walk_custom(item)
+                    self._walk_custom(item, key)
+                kept.append(item)
+            node[:] = kept
 
     def _sanitize_custom_string(self, key: str, value: str) -> Optional[str]:
         """

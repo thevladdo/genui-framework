@@ -49,6 +49,8 @@ FULL_THEME = {
     "accentColor": "#3b82f6",
     "fontFamily": "'Inter', system-ui, sans-serif",
     "fontWeightHeading": "700",
+    "successColor": "#22c55e",
+    "errorColor": "#ef4444",
     "surface1": "#0a0a0c",
     "surface2": "#121216",
     "surface3": "#1a1a20",
@@ -86,6 +88,7 @@ class TestContract(unittest.TestCase):
             ("mode", "dark; color: red"),
             ("spacingScale", "base) var(--x"),
             ("fontWeightHeading", "700; content: 'x'"),
+            ("successColor", "#22c55e; background: url(//evil.test/x)"),
         ]:
             with self.subTest(key=key, value=value):
                 with self.assertRaises(ValidationError):

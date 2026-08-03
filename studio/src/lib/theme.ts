@@ -44,6 +44,8 @@ export interface StudioTheme {
   surface2: string;
   surface3: string;
   textOnAccent: string;
+  successColor: string;
+  errorColor: string;
   disclosureEnabled: DisclosureEnabled;
   disclosurePosition: DisclosurePosition;
   disclosureText: string;
@@ -115,6 +117,8 @@ export const DEFAULT_STUDIO_THEME: StudioTheme = {
   surface2: "",
   surface3: "",
   textOnAccent: "",
+  successColor: "",
+  errorColor: "",
   disclosureEnabled: "on",
   disclosurePosition: "above-left",
   disclosureText: "",
@@ -164,6 +168,8 @@ const VALIDATORS: { [K in keyof StudioTheme]: (v: string) => boolean } = {
   surface2: isOptionalHex,
   surface3: isOptionalHex,
   textOnAccent: isOptionalHex,
+  successColor: isOptionalHex,
+  errorColor: isOptionalHex,
   disclosureEnabled: (v) => (DISCLOSURE_STATES as string[]).includes(v),
   disclosurePosition: (v) => DISCLOSURE_POSITIONS.some((p) => p.value === v),
   // '' = the library's own wording. Any other value is shown as text,
@@ -231,6 +237,8 @@ export const toGenUITheme = (theme: StudioTheme): GenUITheme => {
   if (theme.surface2) result.surface2 = theme.surface2;
   if (theme.surface3) result.surface3 = theme.surface3;
   if (theme.textOnAccent) result.textOnAccent = theme.textOnAccent;
+  if (theme.successColor) result.successColor = theme.successColor;
+  if (theme.errorColor) result.errorColor = theme.errorColor;
   return result;
 };
 
@@ -294,6 +302,9 @@ export const exportAsCSS = (theme: StudioTheme): string => {
   if (theme.surface3) lines.push(`  --genui-surface-3: ${theme.surface3};`);
   if (theme.textOnAccent)
     lines.push(`  --genui-text-on-accent: ${theme.textOnAccent};`);
+  if (theme.successColor)
+    lines.push(`  --genui-success-color: ${theme.successColor};`);
+  if (theme.errorColor) lines.push(`  --genui-error-color: ${theme.errorColor};`);
   lines.push(`  --genui-disclosure-font-size: ${theme.disclosureFontSize};`);
   lines.push(`  --genui-disclosure-opacity: ${theme.disclosureOpacity};`);
 

@@ -114,7 +114,9 @@ def _input_numeric_guard(fixture):
 
 
 def _displayed_numbers(components):
-    """The numeric claims a render displays: stat values, prices, chart points."""
+    """
+    The numeric claims a render displays: stat values, prices, chart points, comparison bars.
+    """
     for component in components:
         data = component.get("data", {})
         ctype = component.get("type")
@@ -124,6 +126,11 @@ def _displayed_numbers(components):
             yield from (p.get("price") for p in data.get("plans", []))
         elif ctype == "chart":
             yield from (p.get("value") for p in data.get("data", []))
+        elif ctype == "comparison_bars":
+            yield from (b.get("value") for b in data.get("bars", []))
+        elif ctype == "metrics_trend":
+            yield from (m.get("value") for m in data.get("metrics", []))
+            yield from (p.get("value") for p in data.get("series", []))
 
 
 def _output_urls(node, key=None):
@@ -248,6 +255,28 @@ class TestInvariantChecker(unittest.TestCase):
             "stats": [{"value": "97%", "label": "Satisfaction"}]}}]
         violations = check_invariants(fixture, components)
         self.assertTrue(any("grounding" in v for v in violations), violations)
+
+    def test_ungrounded_comparison_bar_is_flagged(self):
+        fixture = self._fixture(allowed_types=("bento", "comparison_bars"))
+        components = self._clean_output() + [{"type": "comparison_bars", "data": {
+            "title": "Delivery time",
+            "bars": [{"label": "Us", "value": 2}, {"label": "Them", "value": 9}]}}]
+        violations = check_invariants(fixture, components)
+        self.assertTrue(any("grounding" in v for v in violations), violations)
+
+    def test_ungrounded_metric_and_series_point_are_both_flagged(self):
+        fixture = self._fixture(allowed_types=("bento", "metrics_trend"))
+        base = {"title": "T", "metrics": [{"value": "2", "label": "A"}, {"value": "3", "label": "B"}]}
+        metric_case = self._clean_output() + [{"type": "metrics_trend", "data": {
+            **base, "metrics": base["metrics"] + [{"value": "77", "label": "C"}]}}]
+        self.assertTrue(
+            any("grounding" in v for v in check_invariants(fixture, metric_case))
+        )
+        series_case = self._clean_output() + [{"type": "metrics_trend", "data": {
+            **base, "series": [{"label": "Jan", "value": 2}, {"label": "Feb", "value": 91}]}}]
+        self.assertTrue(
+            any("grounding" in v for v in check_invariants(fixture, series_case))
+        )
 
     def test_incoherent_layout_is_flagged(self):
         fixture = self._fixture(allowed_types=("bento", "content_grid"))

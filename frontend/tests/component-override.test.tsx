@@ -102,5 +102,5 @@ test('every type the renderer draws is listed as built-in', () => {
   for (const name of ['bento', 'chart', 'text', 'buttons', 'hero_banner', 'logo_wall']) {
     expect(BUILTIN_TYPES).toContain(name);
   }
-  expect(BUILTIN_TYPES).toHaveLength(14);
+  expect(BUILTIN_TYPES).toHaveLength(18);
 });

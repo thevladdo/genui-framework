@@ -48,6 +48,10 @@ export interface GenUITheme {
   radiusFull?: string;
   /** Heading font weight for section components (default: 700) */
   fontWeightHeading?: string;
+  /** Positive tone, e.g. the pros column (default: '#22c55e') */
+  successColor?: string;
+  /** Negative tone, e.g. the cons column and error states (default: '#ef4444') */
+  errorColor?: string;
 
   /** AI disclosure notice, as tenant configuration */
   disclosureEnabled?: "on" | "off";
@@ -80,6 +84,8 @@ export interface BentoCard {
   image?: string;
   /** Optional badge text */
   badge?: string;
+  /** The card that leads the bento: one per grid, it gets the large cell */
+  featured?: boolean;
   /** Optional action button */
   action?: {
     label: string;
@@ -220,15 +226,34 @@ export interface StepsSectionData {
   interval?: number;
 }
 
+export interface StatChange {
+  /** What the number did: a fact */
+  direction: "up" | "down";
+  /** The delta shown beside the value, e.g. "+20.1%" */
+  value?: string;
+  /** Whether that movement is good news: a reading, never inferred */
+  sentiment?: "good" | "bad";
+}
+
 export interface StatItem {
   value: string;
   label: string;
   description?: string;
 }
 
+/** A metric that can also carry how it moved: only the grid draws one */
+export interface MovingStat extends StatItem {
+  change?: StatChange;
+}
+
 export interface StatsBannerData {
-  stats: StatItem[];
+  stats: MovingStat[];
   columns?: 2 | 3 | 4;
+  eyebrow?: string;
+  title?: string;
+  description?: string;
+  /** "split" puts the narration beside the grid and needs a title */
+  layout?: "grid" | "split";
 }
 
 export interface TestimonialItem {
@@ -310,6 +335,59 @@ export interface CaseStudiesData {
   cases: CaseStudyItem[];
 }
 
+export interface ComparisonBar {
+  label: string;
+  /** Plain number: the unit lives in `suffix`, the scale in the series */
+  value: number;
+  suffix?: string;
+  /** At most one bar per comparison: the one the page belongs to */
+  highlighted?: boolean;
+  /** Short note above the highlighted bar */
+  callout?: string;
+}
+
+export interface ComparisonBarsData {
+  title: string;
+  subtitle?: string;
+  bars: ComparisonBar[];
+}
+
+export interface TrendPoint {
+  label: string;
+  value: number;
+}
+
+export interface MetricsTrendData {
+  title: string;
+  /** Second half of the title's sentence, in a quieter tone */
+  tail?: string;
+  metrics: StatItem[];
+  /** Two points or more, or no curve at all */
+  series: TrendPoint[];
+}
+
+export interface FaqEntry {
+  question: string;
+  /** Simple markdown, rendered through the sanitized renderer */
+  answer: string;
+}
+
+export interface FaqData {
+  title: string;
+  intro?: string;
+  items: FaqEntry[];
+}
+
+export interface ProsConsData {
+  title?: string;
+  /** Column headings, in the language of the page (default: Pros / Cons) */
+  prosHeading?: string;
+  consHeading?: string;
+  /** Item text, simple markdown, rendered through the sanitized renderer */
+  pros: string[];
+  cons: string[];
+}
+
 export interface QuoteData {
   quote: string;
   author?: string;
@@ -349,6 +427,10 @@ export type ComponentType =
   | "content_grid"
   | "hero_banner"
   | "case_studies"
+  | "comparison_bars"
+  | "metrics_trend"
+  | "faq"
+  | "pros_cons"
   | "quote"
   | "logo_wall";
 
@@ -365,6 +447,10 @@ export type ComponentData =
   | ContentGridData
   | HeroBannerData
   | CaseStudiesData
+  | ComparisonBarsData
+  | MetricsTrendData
+  | FaqData
+  | ProsConsData
   | QuoteData
   | LogoWallData;
 

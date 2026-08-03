@@ -39,6 +39,18 @@ export type { HeroBannerProps } from './HeroBanner';
 export { CaseStudies } from './CaseStudies';
 export type { CaseStudiesProps } from './CaseStudies';
 
+export { ComparisonBars } from './ComparisonBars';
+export type { ComparisonBarsProps } from './ComparisonBars';
+
+export { MetricsTrend } from './MetricsTrend';
+export type { MetricsTrendProps } from './MetricsTrend';
+
+export { Faq } from './Faq';
+export type { FaqProps } from './Faq';
+
+export { ProsCons } from './ProsCons';
+export type { ProsConsProps } from './ProsCons';
+
 export { QuoteBlock } from './QuoteBlock';
 export type { QuoteBlockProps } from './QuoteBlock';
 

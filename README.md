@@ -42,7 +42,7 @@ GenUI System is a complete customization engine for building **Generative User I
 
 - **GenUIZone**: Declarative zones with 25+ configurable props
 - **Custom Components**: register _your_ design system — the LLM generates it ([guide](#-custom-components--your-design-system-as-llm-vocabulary))
-- **Premium Components**: Glassmorphism bento grids, 8 button variants, charts, styled text
+- **Premium Components**: Bento grids whose cells follow the leading card, 8 button variants, charts, styled text
 - **Progressive Render**: components stream in as the model generates them (SSE)
 - **Behavior Tracking & Events**: clicks, scrolls, impressions, with uplift measured automatically, behind a consent gate, with a privacy filter (PII redaction, `data-genui-private`) on by default
 - **Personalized without cookies**: with no consent the zone touches nothing on the device and is still curated, for an anonymous segment ([how](#consent-and-personalization-without-it))
@@ -107,6 +107,14 @@ Watch GenUI do the thing it exists for: the LLM curating a zone per audience, li
   <br /><br />
 </div>
 
+Writing a realistic config by hand means inventing a business, an account state and a dozen image URLs that resolve. **Draft with an AI assistant** hands that job out. It opens with a brief that asks whether to build around your real site or an invented one, and the answer comes back as the four fields, ready to paste. The audiences stay yours: they are the columns.
+
+<div align="center">
+  <br />
+  <img src="./studio/screenshots/Studio_Segment_Preview_Draft.png" alt="GenUI Studio — Segment Preview draft with AI Assistant" width="100%" height="auto" />
+  <br /><br />
+</div>
+
 ### 🗂️ Zones
 
 Zone governance for non-developers. The page lists every zone of the tenant (registry entries plus the zones your site actually rendered, each tagged `ungoverned` / `draft` / `approved`) and lets an operator edit the governed config (prompts, pinned content, component constraints) as a **draft**. A draft never touches production: you preview it with the same audience matrix as the Segment Preview (the backend resolves the saved draft via `preview_draft`, always a live bypass), and only an explicit **Approve** turns it into what every render of that zone serves. Every transition (draft saved, approved, discarded, deleted) lands in the audit log with the admin key fingerprint that did it. See [Zone Config Registry](#%EF%B8%8F-zone-config-registry--config-as-data) for the backend model.
@@ -153,7 +161,7 @@ The proof that personalization pays, on one page. Enter a `zone_id` and the dash
 
 ### ⚖️ Compliance
 
-Public like the Playground: no key, no backend, and it ships in the GitHub Pages build at `#/compliance`. It exists because the four statements in `deploy/` are written for a legal team and only ever get read by someone who already cloned the repository. The person deciding whether this project is worth an hour lands on the Studio instead, and used to leave without knowing any of it existed.
+Public like the Playground: no key, no backend, and it ships in the GitHub Pages build at `#/compliance` ([see live](https://thevladdo.github.io/genui-framework/#/compliance)). It exists because the four statements in `deploy/` are written for a legal team and only ever get read by someone who already cloned the repository. The person deciding whether this project is worth an hour lands on the Studio instead, and used to leave without knowing any of it existed.
 
 The page answers in order what gets generated and how the system says so, what is touched on a visitor's device and what happens when consent is refused, where the data goes plus the configuration where none of it leaves the perimeter, and which rights are endpoints rather than intentions. Then it does the half a compliance page usually skips: what stays with the operator. The lawful basis, the consent platform, the impact assessment, and the two claims easiest to fudge, that approving a zone config is not editorial review of generated text, and that the use boundaries are documentation with no code path enforcing them. Mechanism and responsibility are told apart by a label and by layout, never by colour alone.
 
@@ -853,20 +861,30 @@ import { TextComponent } from "genui-framework";
 
 ### Enterprise Section Components
 
-Ten section-level components for editorial, e-commerce, insurance, SaaS, agency/studio and corporate portals — same token system, same validation pipeline, all **image-optional by design**: every image-bearing variant declares `layout: "with-image" | "text-only"` (or a hero `variant`), the backend schema enforces coherence (`with-image` without an `image_url` is rejected), and the text-only shape is a _designed_ alternative (accent gradients, emphasized typography), never a card with a hole.
+Fourteen section-level components for editorial, e-commerce, insurance, SaaS, agency/studio and corporate portals — same token system, same validation pipeline, all **image-optional by design**: every image-bearing variant declares `layout: "with-image" | "text-only"` (or a hero `variant`), the backend schema enforces coherence (`with-image` without an `image_url` is rejected), and the text-only shape is a _designed_ alternative (accent gradients, emphasized typography), never a card with a hole.
 
-| Type                   | Use case                                                       | Image-optional           |
-| ---------------------- | -------------------------------------------------------------- | ------------------------ |
-| `tabs_feature`         | plan comparison, SaaS highlights, product categories           | per-tab `content.layout` |
-| `steps_section`        | onboarding, how-it-works, purchase flow (autoplay + progress)  | section `layout`         |
-| `stats_banner`         | numeric metrics ("10M users") — populate from RAG facts        | text-only by design      |
-| `testimonial_carousel` | quotes with avatar → initials fallback                         | avatar optional          |
-| `pricing_cards`        | plan grid; `variant: "detailed"` adds a comparison table       | text-only by design      |
-| `content_grid`         | blog/news cards                                                | per-item `layout`        |
-| `hero_banner`          | hero: `split` (requires image) · `centered` · `minimal`        | variant chain fallback   |
-| `case_studies`         | studio/agency projects: summary + grounded metrics (count-up)  | image + metrics optional |
-| `quote`                | a single large editorial quote / manifesto                     | logo + avatar optional   |
-| `logo_wall`            | clients / technologies / partners; hover reveal on overall cta | logos drop if imageless  |
+| Type                   | Use case                                                              | Image-optional           |
+| ---------------------- | --------------------------------------------------------------------- | ------------------------ |
+| `tabs_feature`         | plan comparison, SaaS highlights, product categories                  | per-tab `content.layout` |
+| `steps_section`        | onboarding, how-it-works, purchase flow (autoplay + progress)         | section `layout`         |
+| `stats_banner`         | numeric metrics, alone or beside a narration, with optional movement  | text-only by design      |
+| `testimonial_carousel` | quotes with avatar → initials fallback                                | avatar optional          |
+| `pricing_cards`        | plan grid; `variant: "detailed"` adds a comparison table              | text-only by design      |
+| `content_grid`         | blog/news cards                                                       | per-item `layout`        |
+| `hero_banner`          | hero: `split` (requires image) · `centered` · `minimal`               | variant chain fallback   |
+| `case_studies`         | studio/agency projects: summary + grounded metrics (count-up)         | image + metrics optional |
+| `quote`                | a single large editorial quote / manifesto                            | logo + avatar optional   |
+| `logo_wall`            | clients / technologies / partners; hover reveal on overall cta        | logos drop if imageless  |
+| `comparison_bars`      | 2-6 grounded figures side by side, at most one highlighted            | text + shape only        |
+| `pros_cons`            | advantages and limits from the input; one side degrades to full width | text + icon shape only   |
+| `metrics_trend`        | headline figures plus the curve behind them; the curve is optional    | text + hand drawn SVG    |
+| `faq`                  | questions that open onto their answers, on native `details`           | text only                |
+
+#### What each surface may generate
+
+Both generating surfaces read the same dictionary, and each one declares what it exposes. A zone render can use every type. A chat answer uses all of them except `hero_banner`: a hero is the device that opens and frames a page, so inside a conversational answer it is a banner dropped mid-sentence, while every other type presents content, and content reads well on both surfaces.
+
+The description the model reads sits next to the type declaration in `backend/schemas/registry.py` (`BUILTIN_TYPE_DOCS`), so a type is described once. What only holds on one surface stays with that surface: bento is preferred in zones and charts are used sparingly there, while a chat answer is told to leave autoplay off (a transcript scrolls while the reader reads) and to prefer compact shapes (the chat column can be narrow).
 
 ```json
 {
@@ -884,11 +902,15 @@ Ten section-level components for editorial, e-commerce, insurance, SaaS, agency/
 
 New components consume **level-2 semantic tokens** — rebrand by overriding just these: `--genui-surface-1/2/3`, `--genui-border-subtle/strong`, `--genui-text-primary/secondary/tertiary/on-accent`, `--genui-radius-sm/md/lg/full`, `--genui-shadow-sm/md/lg`. Dark is the default; switch any subtree with `[data-theme="light"]` (or re-assert `[data-theme="dark"]` when nesting).
 
+`comparison_bars` adds no knobs of its own: the highlighted bar takes `--genui-accent-color`, the other bars `--genui-surface-3`, and every bar the corner radius (`--genui-radius-md`). Rebranding the tokens above rebrands the comparison with them.
+
+Two tokens carry meaning rather than decoration: `--genui-success-color` and `--genui-error-color` (theme keys `successColor` and `errorColor`, both with a control in the Playground) color the positive and negative sides of `pros_cons`. Override them to bring the two sides into your palette. Nothing relies on color alone to say which side is which, so a palette that loses the green and red distinction still reads.
+
 ---
 
 ## 🧩 Custom Components — Your Design System as LLM Vocabulary
 
-The 14 built-in types cover generic zones and the usual enterprise sections. The real value is letting the LLM generate **your** components, with your markup, your classes and your tokens.
+The 18 built-in types cover generic zones and the usual enterprise sections. The real value is letting the LLM generate **your** components, with your markup, your classes and your tokens.
 
 The framework never sees your JSX. It learns a name and a JSON Schema, asks the model to generate data against that schema, validates what comes back, and hands the payload to the React component you registered under that name.
 
@@ -934,7 +956,7 @@ Three things to get right here.
 
 **`data` arrives exactly as your schema declared it.** Custom components are deliberately left out of the snake_case to camelCase normalization the built-ins get, so `cta_url` in the schema stays `data.cta_url` in the component. What you wrote is what you read.
 
-**Pick a name in your own namespace** for a genuinely new type: `acme_offer_card`, `acme_coverage_table`. Names are 2 to 32 characters, lowercase `[a-z0-9_-]`, starting with a letter. Registering one of the 14 built-in names is allowed and means something different, it replaces that type's rendering rather than adding a type. See [re-skinning a built-in](#re-skin-a-built-in-type-with-your-own-component).
+**Pick a name in your own namespace** for a genuinely new type: `acme_offer_card`, `acme_coverage_table`. Names are 2 to 32 characters, lowercase `[a-z0-9_-]`, starting with a letter. Registering one of the 18 built-in names is allowed and means something different, it replaces that type's rendering rather than adding a type. See [re-skinning a built-in](#re-skin-a-built-in-type-with-your-own-component).
 
 `registerGenUIComponent` returns an unregister function, which is what a test uses to clean up after itself.
 
@@ -1112,7 +1134,7 @@ One practical note. An override is global to the bundle, which is the point (reg
 - Generated data is **validated against your JSON Schema** server-side (jsonschema). Components that fail are dropped and reported in `meta.sanitization`, never rendered.
 - The **URL whitelist applies recursively** to your payload: URL-named fields (`url`, `link`, `href`, `src`, `image`, `*_url`, …), absolute URLs and markdown links at any depth are checked against the whitelist, and dangerous schemes are always stripped. Your component cannot receive a link the model invented.
 - The **content policy scans the whole payload** at any depth, and a custom component containing a banned term is dropped like any other. Redundancy, the component budget and pinned enforcement apply to it too.
-- **Numeric grounding is the exception, and it is worth knowing.** It reads the shapes it knows (`stats_banner` values, `pricing_cards` prices, `chart` points, `case_studies` metrics), so a number inside a custom payload is not traced back to the input. If your component displays a figure that must be real, put it in `pinned_content` or keep it in a grounded built-in type. [`deploy/OUTPUT-GUARANTEES.md`](deploy/OUTPUT-GUARANTEES.md) states the same limit.
+- **Numeric grounding is the exception, and it is worth knowing.** It reads the shapes it knows (`stats_banner` values and changes, `pricing_cards` prices, `chart` points, `case_studies` metrics, `comparison_bars` values, `metrics_trend` metrics and series points), so a number inside a custom payload is not traced back to the input. If your component displays a figure that must be real, put it in `pinned_content` or keep it in a grounded built-in type. [`deploy/OUTPUT-GUARANTEES.md`](deploy/OUTPUT-GUARANTEES.md) states the same limit.
 - Custom definitions are **part of the zone cache key**, so editing a schema invalidates cached renders on its own.
 - Names are checked on both sides: 2 to 32 characters, lowercase `[a-z0-9_-]`, starting with a letter. Built-in names are refused as _definitions_ (you cannot redefine what `hero_banner` means) and accepted as _registrations_ (you can draw it yourself).
 
@@ -1183,7 +1205,7 @@ The framework's defaults live in `:root` (override them globally to retheme ever
 
 ### Per-tenant theme (the theme as stored config)
 
-A theme can also live on the backend, per tenant, instead of only in your code. The Studio's Theme Playground saves it there and loads it back from the sidebar tenant bar, and the Segment Preview renders with it, so a rebrand has a home that can be reviewed, revisited and seen in context.
+A theme can also live on the backend, per tenant, instead of only in your code. The Studio's Theme Playground saves it there and loads it back from the sidebar tenant bar. The Segment Preview reads it again before every run, so a theme saved while the preview is open lands on the next render instead of the next navigation. A rebrand has a home that can be reviewed, revisited and seen in context.
 
 | Method | Endpoint        | Key             | What it does                                                                                            |
 | ------ | --------------- | --------------- | ------------------------------------------------------------------------------------------------------- |
@@ -1383,10 +1405,10 @@ What reaches the frontend is guaranteed by the system, not by prompt obedience:
 1. **Provider-native structured output** — the ZoneAgent constrains generation with `response_format` (JSON schema derived from the component schemas, falling back to JSON mode).
 2. **Schema validation** — every generated component is validated against Pydantic schemas (`backend/schemas/`) server-side. Invalid components are dropped individually and reported in `meta.sanitization.dropped_components`; one malformed component never breaks the zone.
 3. **URL whitelist (hard rule)** — a generated URL survives **only if it existed in the input**: pinned content, developer prompts, RAG documents, or page context. Invented links/images are stripped (`meta.sanitization.removed_urls`), buttons left without a valid URL are dropped, markdown links collapse to plain text — in components _and_ in the `/query` chat prose. Dangerous schemes (`javascript:`, `data:`, …) are always blocked, even with the whitelist disabled (`URL_WHITELIST_ENABLED=false`). **Links and images are whitelisted separately**: an input URL that arrived as a link can never be reused as an `<img src>` (that renders as a broken image, not as content), so only URLs that genuinely came from an image source can back one — and a `with-image` variant whose image was stripped degrades to its text-only shape instead of showing a hole.
-4. **Numeric grounding (hard rule)** — a number displayed _as_ the content — a `stats_banner` value, a `pricing_cards` price, a `chart` data point — survives **only if its digits trace to a number present in the input** (verbatim modulo formatting: `1,200`, `1200` and `1200.0` all match). Ungrounded stats/plans are removed (`meta.sanitization.removed_numbers`); one ungrounded chart point drops the whole chart. Scope honesty: this guarantees the digits existed in your input, not the semantics of the sentence around them, and numbers inside prose are deliberately not touched. `NUMERIC_GROUNDING_ENABLED=false` opts out.
+4. **Numeric grounding (hard rule)** — a number displayed _as_ the content — a `stats_banner` value and its change, a `pricing_cards` price, a `chart` data point, a `case_studies` metric, a `comparison_bars` value, a `metrics_trend` metric or series point — survives **only if its digits trace to a number present in the input** (verbatim modulo formatting: `1,200`, `1200` and `1200.0` all match). Ungrounded stats, plans and case metrics are removed (`meta.sanitization.removed_numbers`); one ungrounded chart point drops the whole chart, and one ungrounded bar drops the whole comparison, because removing the competitor whose figure could not be verified would leave a comparison more flattering than the truth. `metrics_trend` carries both rules at once, one per half: an ungrounded metric leaves alone, an ungrounded series point takes the whole curve and the grid of metrics stays. Scope honesty: this guarantees the digits existed in your input, not the semantics of the sentence around them, and numbers inside prose are deliberately not touched. `NUMERIC_GROUNDING_ENABLED=false` opts out.
 5. **Per-tenant content policy** — banned terms never reach the page: a component containing one is dropped, chat text is redacted, hits are reported in `meta.sanitization.policy_violations`. Terms merge two sources: the `CONTENT_POLICY` env (JSON, per tenant + `"*"`, the deployment-wide seed) and a per-tenant store an admin edits live from the Studio (Console -> Content Policy) with no redeploy. Term matching is lexical (word-boundary, case-insensitive) — tone constraints remain prompt-level best-effort, and we say so.
 6. **No zone that says the same thing twice**: the components of a zone are read top to bottom as one band, but the model writes them in one shot, so it will spend its second component repeating the first one's link under the first one's wording (a hero with two CTAs to the same URL, then a full-width card echoing the primary CTA). Enforced deterministically: the same link target twice inside one component loses the repeat, an element with the same target _and_ the same wording as an earlier component is removed, and a component emptied that way is dropped whole (reported in `meta.sanitization.dropped_components`). Scope honesty: semantic redundancy is not judged, so the same link under genuinely different wording survives; that half stays prompt-level. `DEDUP_COMPONENTS_ENABLED=false` opts out.
-7. **Pinned content enforcement** — pinned items are verified on the _actual output_ (by URL/title) after generation; missing ones are appended automatically. `pinned_content_included` is computed, not model-claimed. Presence is read from the whole component tree, so a pinned link the model used as a hero CTA or a plan button counts as shown and is not appended a second time. It runs after the steps above, so a pinned item is never deduplicated away.
+7. **Pinned content enforcement** — pinned items are verified on the _actual output_ (by URL/title) after generation; missing ones are appended automatically. `pinned_content_included` is computed, not model-claimed. Presence is read from the whole component tree, so a pinned link the model used as a hero CTA or a plan button counts as shown and is not appended a second time. It runs after the steps above, so a pinned item is never deduplicated away. One exception, and it is the reason images work at all: an item of `type: "image"` is **material, not content**. An image URL can only reach a render by being pinned, since the whitelist refuses everything else, so pinning a photo means "you may use this". An unused one is not appended as a card, and one the model does use counts as included like any other item.
 8. **Frontend defense in depth** — rendered `href`/`src` pass through `sanitizeUrl()` regardless of origin.
 9. **Versioned contract, graceful skew** — every response carries `contract_version` (exposed as `meta.contractVersion`). When an already-deployed frontend bundle meets a newer backend, unknown component types are **skipped silently in production** (a `console.warn` for developers, an inline error box only in dev builds) — a backend deploy never prints internal errors into the end user's page.
 
@@ -2064,7 +2086,7 @@ Content-Type: application/json
       "type": "bento",
       "data": {
         "cards": [
-          { "title": "Annual Report", "link": "/reports/annual", ... },
+          { "title": "Annual Report", "link": "/reports/annual", "featured": true, ... },
           { "title": "Green Initiative", "link": "/sustainability", ... }
         ],
         "columns": 3

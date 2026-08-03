@@ -39,6 +39,7 @@ from llm.embeddings import EmbeddingConfigError
 from rag import get_vector_store, build_context_from_results
 from schemas import (
     apply_component_budget,
+    builtin_catalog,
     component_to_dict,
     downgrade_image_variants,
     merge_custom_types,
@@ -128,6 +129,19 @@ _SHOWN_TITLE_FIELDS = (
 )
 
 
+def _is_material(item: Dict[str, Any]) -> bool:
+    """
+    True for a pinned item that is raw material rather than content to show.
+
+    An image URL can only reach a render by being pinned, because the URL
+    whitelist refuses anything the input did not carry. So pinning a photo
+    means "you may use this", never "put this on the page", and its title
+    and description are notes for whoever composes the zone, not copy for
+    the visitor.
+    """
+    return str(item.get("type", "")).lower() == "image"
+
+
 def _collect_shown(node: Any, links: Set[str], titles: Set[str]) -> None:
     """
     Collect every URL and every visible title in a component's data.
@@ -160,6 +174,26 @@ class ZoneAgent:
     to generate personalized zone content.
     """
 
+    # What this surface exposes: a zone is a band of a page, so the whole
+    # vocabulary applies. The order is the order the catalog presents.
+    EXPOSED_TYPES = (
+        "bento", "text", "chart", "buttons",
+        "tabs_feature", "steps_section", "stats_banner",
+        "testimonial_carousel", "pricing_cards", "content_grid", "hero_banner",
+        "case_studies", "comparison_bars", "metrics_trend", "faq", "pros_cons", "quote", "logo_wall",
+    )
+
+    # Advice that holds on a page zone and nowhere else. The facts about a
+    # type live with the type; this is what a zone adds to them.
+    SURFACE_NOTES = {
+        "bento": "PREFERRED for content zones.",
+        "text": (
+            "Never a description of the page, the audience, or your choices -\n"
+            'that goes in "reasoning".'
+        ),
+        "chart": "Use sparingly in zones.",
+    }
+
     SYSTEM_PROMPT = """You are a content curator AI that generates personalized UI components for website zones.
 
 Your task is to select and organize content that is most relevant to the user based on:
@@ -172,7 +206,7 @@ You MUST output valid JSON with this structure:
 {
     "components": [
         {
-            "type": "bento|chart|text|buttons|tabs_feature|steps_section|stats_banner|testimonial_carousel|pricing_cards|content_grid|hero_banner|case_studies|quote|logo_wall",
+            "type": \"""" + "|".join(EXPOSED_TYPES) + """\",
             "data": { ... component-specific data ... },
             "layout": { ... optional layout hints ... }
         }
@@ -186,77 +220,7 @@ You MUST output valid JSON with this structure:
 
 COMPONENT TYPES:
 
-1. "bento" - Grid of content cards (PREFERRED for content zones)
-   data: {
-       "cards": [
-           {
-               "title": "Card Title",
-               "description": "Brief description",
-               "icon": "emoji or icon name",
-               "link": "https://...",
-               "image": "image_url (optional)",
-               "badge": "NEW (optional)",
-               "metadata": { ... any extra data ... }
-           }
-       ],
-       "columns": 2-4
-   }
-
-2. "text" - Short body copy the visitor reads (a section intro or lede),
-   never a description of the page, the audience, or your choices - that
-   goes in "reasoning". "style" is purely visual, not a cue to explain.
-   data: { "content": "markdown text", "style": "normal|emphasis|note|heading" }
-
-3. "chart" - Data visualization (use sparingly in zones)
-   data: { "chart_type": "bar|line|pie|area|donut", "title": "...", "data": [{"label": "...", "value": 0}] }
-
-4. "buttons" - Action buttons
-   data: { "buttons": [{ "label": "...", "url": "...", "style": "primary|secondary|outline|ghost|shine|gooey|expandIcon|ringHover" }] }
-
-5. "tabs_feature" - Tabbed feature section (plan comparison, product categories)
-   data: { "heading": "...", "badge?": "...", "tabs": [{ "label": "...", "icon?": "emoji",
-     "content": { "layout": "with-image|text-only", "title": "...", "description?": "...",
-       "button?": {"label","url"}, "image_url?": "..." } }] }
-
-6. "steps_section" - Step sequence (onboarding, how-it-works)
-   data: { "layout": "with-image|text-only", "steps": [{"title","description?","image_url?"}],
-     "autoplay?": true, "interval?": 4000 }
-
-7. "stats_banner" - Numeric metrics grid, text only (use RAG facts, never invent numbers)
-   data: { "stats": [{"value": "10M", "label": "...", "description?": "..."}], "columns?": 2-4 }
-
-8. "testimonial_carousel" - Quotes with optional avatar
-   data: { "testimonials": [{"quote","name","role?","company?","avatar_url?"}], "autoplay?": true }
-
-9. "pricing_cards" - Plan grid; "detailed" adds a comparison table
-   data: { "variant": "compact|detailed", "plans": [{"name","price","period?","description?",
-     "features": ["..."], "cta?": {"label","url"}, "highlighted?": true, "flag?": "Recommended"}] }
-
-10. "content_grid" - Blog/news cards, per-item image-optional
-   data: { "columns?": 2-4, "items": [{"layout": "with-image|text-only", "title",
-     "category?", "excerpt?", "image_url?", "url?", "date?"}] }
-
-11. "hero_banner" - Hero section
-   data: { "variant": "split|centered|minimal", "headline", "subheadline?", "badge?",
-     "primary_cta?": {"label","url"}, "secondary_cta?": {"label","url"}, "image_url?" }
-   ("split" REQUIRES image_url; use "centered" or "minimal" without an image)
-
-12. "case_studies" - Editorial project/case studies (studios, agencies, portfolios)
-   data: { "heading?", "subheading?", "cases": [{"title", "summary?", "name?",
-     "role?", "image_url?", "metrics?": [{"value","label","description?"}]}] }
-   Only include what the input gives: no image, no metrics, no name/role are all
-   fine and degrade cleanly. Never invent figures, names or roles.
-
-13. "quote" - A single large editorial quote / manifesto
-   data: { "quote", "author?", "role?", "avatar_url?", "logo_url?", "logo_label?" }
-   Author, role, avatar and top logo are each optional; omit any you were not
-   given rather than inventing it.
-
-14. "logo_wall" - A grid of logos (clients, technologies, partners)
-   data: { "heading?", "logos": [{"image_url", "alt", "url?"}], "cta_label?", "cta_url?" }
-   Label the wall for what it shows ("Selected clients", "Our stack"), not always
-   "clients". Each logo needs a real image URL from the input; drop logos with no
-   image. Only set cta_label + cta_url when there is a real overview link.
+""" + builtin_catalog(EXPOSED_TYPES, SURFACE_NOTES) + """
 
 IMAGE RULE: every layout/variant "with-image" REQUIRES the matching image URL,
 and that URL must come from the input. No image available? Use "text-only" /
@@ -288,10 +252,11 @@ CRITICAL RULES:
    text-only variant. A link used as an image is removed and the image
    breaks.
 
-6. NEVER INVENT NUMBERS: Every stat value, price, and chart value MUST be
-   copied as it appears in the input (same digits, same magnitude - do not
-   convert "10,000,000" into "10M"). Numbers not present in the input will
-   be removed by the system.
+6. NEVER INVENT NUMBERS: Every figure a component shows AS its content (stat
+   value, price, chart point, comparison bar) MUST be copied as it appears in
+   the input (same digits, same magnitude - do not convert "10,000,000" into
+   "10M"). Numbers not present in the input will be removed by the system,
+   and in a comparison one unverifiable figure removes the whole component.
 
 7. CONTENT RELEVANCE: Use retrieved documents to populate cards with real content
    from the knowledge base when available.
@@ -678,6 +643,10 @@ CRITICAL RULES:
         buttons only: a pinned link the model used as a hero CTA, a pricing
         plan's button or a content_grid item is on the page, and appending a
         card for it would show the visitor the same link twice.
+
+Pinned images are the exception, for the reason given on
+        _is_material: they are material for the components, so an unused one
+        is not appended. One the model does use counts as included.
         """
         if not pinned_content:
             return components, []
@@ -695,7 +664,7 @@ CRITICAL RULES:
             title = (item.get("title") or "").strip().lower()
             if (url and normalize_url(str(url)) in links) or (title and title in titles):
                 included.append(identifier)
-            else:
+            elif not _is_material(item):
                 missing.append(item)
 
         if missing:
@@ -990,6 +959,8 @@ CRITICAL RULES:
         pinned_ids = []
 
         for item in request.pinned_content or []:
+            if _is_material(item):
+                continue
             card = {
                 "title": item.get("title", "Untitled"),
                 "description": item.get("description", ""),

@@ -1,0 +1,59 @@
+{
+  "description": "Company proof-point zone whose figures live in the prompt and in a retrieved report. The recorded response falsifies both halves of the same component: one metric that appears nowhere in the input, and one series point that appears nowhere either. The metric must leave alone with the other two intact, the point must take the whole curve, and the section must survive as a grid.",
+  "request": {
+    "zone_id": "proof-zone",
+    "base_prompt": "Show how large we are and how we got here. We serve 50,000 teams at 99.9% uptime.",
+    "context_prompt": "About page, under the founding story.",
+    "pinned_content": [],
+    "preferred_component_type": null,
+    "max_items": 4,
+    "current_page": "/about",
+    "page_metadata": {},
+    "archetype": {}
+  },
+  "retrieved": [
+    {
+      "content": "Quarterly report: signups ran 20 in January, 40 in February, 60 in March and 80 in April. Enterprise accounts reached 1,200.",
+      "metadata": {},
+      "score": 0.68
+    }
+  ],
+  "invariants": {
+    "allowed_types": ["metrics_trend", "text"]
+  },
+  "llm_response": {
+    "components": [
+      {
+        "type": "metrics_trend",
+        "data": {
+          "title": "Where we are today,",
+          "tail": "and the months that got us here.",
+          "metrics": [
+            { "value": "50,000", "label": "Teams served" },
+            { "value": "99.9%", "label": "Uptime" },
+            { "value": "1,200", "label": "Enterprise accounts" },
+            { "value": "4,300", "label": "Cities covered" }
+          ],
+          "series": [
+            { "label": "Jan", "value": 20 },
+            { "label": "Feb", "value": 40 },
+            { "label": "Mar", "value": 60 },
+            { "label": "Apr", "value": 95 }
+          ]
+        }
+      },
+      {
+        "type": "text",
+        "data": {
+          "content": "Every figure here comes from the quarterly report.",
+          "style": "note"
+        }
+      }
+    ],
+    "pinned_included": [],
+    "personalization_applied": false,
+    "confidence": 0.81,
+    "reasoning": "Anonymous visitor on the about page: lead with scale, then the trend behind it.",
+    "profile_factors": []
+  }
+}

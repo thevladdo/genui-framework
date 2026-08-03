@@ -260,6 +260,22 @@ _HERO_CTA_ENVELOPE = {
 }
 
 
+_HERO_IMAGE_ENVELOPE = {
+    "components": [
+        {"type": "hero_banner", "data": {
+            "variant": "split",
+            "headline": "Build faster with a clearer workflow",
+            "image_url": "https://cdn.example/hero.jpg",
+        }},
+    ],
+    "pinned_included": [],
+    "personalization_applied": False,
+    "confidence": 0.9,
+    "reasoning": "hero with a pinned image",
+    "profile_factors": [],
+}
+
+
 def _zone_request(tenant="acme"):
     return ZoneRenderRequest(
         zone_id="stats-zone",
@@ -393,6 +409,58 @@ class TestZoneChain(unittest.TestCase):
         self.assertEqual([c["type"] for c in result.components], ["hero_banner", "bento"])
         cards = result.components[1]["data"]["cards"]
         self.assertEqual([c["title"] for c in cards], ["Security whitepaper"])
+
+    def test_unused_pinned_image_is_material_not_a_card(self):
+        """
+        An image URL can only reach a render by being pinned, so pinning a
+        photo means "you may use this". Appending the unused ones would put
+        a card linking to a raw JPEG on the page.
+        """
+        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+                          llm_client=_FakeLLM(_HERO_CTA_ENVELOPE))
+        request = _redundant_request()
+        request.pinned_content = [
+            {"type": "image", "title": "Portrait", "url": "https://cdn.example/p.jpg"},
+            {"type": "link", "title": "Security whitepaper", "url": "https://example.com/security"},
+        ]
+        result = asyncio.run(agent.render_zone_async(request))
+
+        cards = [
+            card
+            for component in result.components
+            if component["type"] == "bento"
+            for card in component["data"]["cards"]
+        ]
+        self.assertEqual([c["title"] for c in cards], ["Security whitepaper"])
+        self.assertNotIn("https://cdn.example/p.jpg", result.pinned_content_included)
+
+    def test_pinned_image_the_model_did_use_still_counts_as_included(self):
+        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+                          llm_client=_FakeLLM(_HERO_IMAGE_ENVELOPE))
+        request = _redundant_request()
+        request.base_prompt += " Hero art: https://cdn.example/hero.jpg"
+        request.pinned_content = [
+            {"type": "image", "title": "Hero art", "url": "https://cdn.example/hero.jpg"}
+        ]
+        result = asyncio.run(agent.render_zone_async(request))
+
+        self.assertEqual([c["type"] for c in result.components], ["hero_banner"])
+        self.assertEqual(result.pinned_content_included, ["https://cdn.example/hero.jpg"])
+
+    def test_fallback_render_shows_content_not_material(self):
+        agent = ZoneAgent(model="test", vector_store=_EmptyStore(), llm_client=None)
+        request = _redundant_request()
+        request.pinned_content = [
+            {"type": "image", "title": "Portrait, neutral background",
+             "url": "https://cdn.example/p.jpg"},
+            {"type": "link", "title": "Security whitepaper",
+             "url": "https://example.com/security"},
+        ]
+        result = agent._fallback_render(request)
+
+        cards = result.components[0]["data"]["cards"]
+        self.assertEqual([c["title"] for c in cards], ["Security whitepaper"])
+        self.assertEqual(result.pinned_content_included, ["https://example.com/security"])
 
     @unittest.skipUnless(HAVE_API_DEPS, "requires fastapi (backend venv)")
     def test_outcome_lands_in_meta_sanitization(self):

@@ -2,7 +2,7 @@
  * Audience matrix: can preview a draft with the samw component.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ComponentRenderer,
   GenUIDisclosureNotice,
@@ -111,10 +111,20 @@ const ColumnRender = ({
             {!noticeFirst && notice}
           </GenUISection>
         ) : (
-          <p className={styles.emptyNote}>
-            No components came back for this audience (nothing generated,
-            or everything was removed by the guarantee chain below).
-          </p>
+          <>
+            <p className={styles.emptyNote}>
+              {fallback
+                ? 'No generation ran, and there was no pinned content for the fallback to fall back on.'
+                : removed === 0
+                  ? 'The guarantee chain removed nothing, so the model returned an empty zone. That happens when the input carries nothing to curate for this audience: no pinned content, and nothing retrieved from the knowledge base.'
+                  : 'Everything generated for this audience was removed before serving: see what the guarantee chain took out, below.'}
+            </p>
+            {typeof response.meta?.reasoning === 'string' && response.meta.reasoning && (
+              <p className={styles.emptyNote}>
+                Model reasoning: {response.meta.reasoning}
+              </p>
+            )}
+          </>
         )}
       </div>
 
@@ -136,9 +146,8 @@ const ColumnRender = ({
           <span className={styles.metaLabel}>Disclosure</span>
           <span className={styles.metaValue}>
             {disclosure
-              ? `${disclosure.aiGenerated ? 'AI-generated' : 'not generated'} · ${disclosure.provenance}${
-                  disclosure.generatedAt ? ` · generated ${disclosure.generatedAt}` : ''
-                }`
+              ? `${disclosure.aiGenerated ? 'AI-generated' : 'not generated'} · ${disclosure.provenance}${disclosure.generatedAt ? ` · generated ${disclosure.generatedAt}` : ''
+              }`
               : 'no marking in the payload (GENUI_DISCLOSURE_OFF, or an older backend)'}
           </span>
         </div>
@@ -189,27 +198,37 @@ export const AudienceMatrix = ({ session, buildPayload }: AudienceMatrixProps) =
   const [busy, setBusy] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [tenantTheme, setTenantTheme] = useState<GenUITheme | null>(null);
+  const [themeError, setThemeError] = useState<string | null>(null);
+
+  // Read again before every run, not once at mount.
+  const loadTenantTheme = useCallback(async () => {
+    try {
+      const stored = await getTenantTheme(session);
+      setTenantTheme(stored.theme ? genUIThemeFromTokens(stored.theme) : null);
+      setThemeError(null);
+    } catch (e) {
+      setTenantTheme(null);
+      setThemeError(e instanceof Error ? e.message : 'Could not read the saved theme.');
+    }
+  }, [session]);
 
   useEffect(() => {
-    let current = true;
-    getTenantTheme(session)
-      .then((stored) => {
-        if (current && stored.theme) setTenantTheme(genUIThemeFromTokens(stored.theme));
-      })
-      .catch(() => undefined);
-    return () => { current = false; };
-  }, [session]);
+    void loadTenantTheme();
+  }, [loadTenantTheme]);
 
   const patchDraft = (id: number, patch: Partial<SegmentDraft>) =>
     setDrafts((current) =>
       current.map((d) => (d.id === id ? { ...d, ...patch } : d)),
     );
 
+  const focusRow = useRef<number | null>(null);
+
   const addDraft = () => {
     setDrafts((current) => [
       ...current,
       { id: nextId, role: '', interests: '', userType: '', engagement: '' },
     ]);
+    focusRow.current = nextId;
     setNextId((n) => n + 1);
   };
 
@@ -233,15 +252,18 @@ export const AudienceMatrix = ({ session, buildPayload }: AudienceMatrixProps) =
     }
 
     setBusy(true);
-    const entries = await Promise.all(
-      payloads.map(async ([id, payload]): Promise<[number, ColumnResult]> => {
-        try {
-          return [id, { response: await renderZone(session, payload) }];
-        } catch (e) {
-          return [id, { error: e instanceof Error ? e.message : 'Render failed' }];
-        }
-      }),
-    );
+    const [entries] = await Promise.all([
+      Promise.all(
+        payloads.map(async ([id, payload]): Promise<[number, ColumnResult]> => {
+          try {
+            return [id, { response: await renderZone(session, payload) }];
+          } catch (e) {
+            return [id, { error: e instanceof Error ? e.message : 'Render failed' }];
+          }
+        }),
+      ),
+      loadTenantTheme(),
+    ]);
     setResults(Object.fromEntries(entries));
     setBusy(false);
   };
@@ -263,9 +285,11 @@ export const AudienceMatrix = ({ session, buildPayload }: AudienceMatrixProps) =
           </button>
         )}
         <span className={styles.themeNote}>
-          {tenantTheme
-            ? `Rendered with the theme saved for ${session.tenant}`
-            : `No theme saved for ${session.tenant}: library defaults`}
+          {themeError
+            ? `Could not read the theme saved for ${session.tenant} (${themeError}): library defaults`
+            : tenantTheme
+              ? `Rendered with the theme saved for ${session.tenant}`
+              : `No theme saved for ${session.tenant}: library defaults`}
         </span>
       </div>
 
@@ -297,6 +321,12 @@ export const AudienceMatrix = ({ session, buildPayload }: AudienceMatrixProps) =
                   <label className={studioStyles.fieldLabel} htmlFor={`pv-role-${draft.id}`}>Role</label>
                   <input
                     id={`pv-role-${draft.id}`}
+                    ref={(el) => {
+                      if (el && focusRow.current === draft.id) {
+                        focusRow.current = null;
+                        el.focus();
+                      }
+                    }}
                     type="text"
                     className={studioStyles.field}
                     placeholder="e.g. developer"

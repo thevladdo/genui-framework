@@ -283,7 +283,18 @@ export const Controls = ({ theme, onChange, onSave, onLoad }: ControlsProps) => 
             value={theme.textOnAccent}
             onChange={(textOnAccent) => onChange({ textOnAccent })}
           />
+          <BrandColor
+            label="Positive tone"
+            value={theme.successColor}
+            onChange={(successColor) => onChange({ successColor })}
+          />
+          <BrandColor
+            label="Negative tone"
+            value={theme.errorColor}
+            onChange={(errorColor) => onChange({ errorColor })}
+          />
         </details>
+
 
         <div className={styles.control}>
           <label htmlFor={fontId} className={styles.controlLabel}>UI font</label>

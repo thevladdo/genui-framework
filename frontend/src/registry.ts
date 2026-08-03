@@ -74,6 +74,10 @@ export const BUILTIN_TYPES: readonly string[] = [
   "content_grid",
   "hero_banner",
   "case_studies",
+  "comparison_bars",
+  "metrics_trend",
+  "faq",
+  "pros_cons",
   "quote",
   "logo_wall",
 ];

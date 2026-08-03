@@ -90,6 +90,12 @@ const themeToCSSVars = (theme: GenUITheme): Record<string, string> => {
   if (theme.fontWeightHeading) {
     vars['--genui-font-weight-heading'] = theme.fontWeightHeading;
   }
+  if (theme.successColor) {
+    vars['--genui-success-color'] = theme.successColor;
+  }
+  if (theme.errorColor) {
+    vars['--genui-error-color'] = theme.errorColor;
+  }
   // Only the two visual knobs of the disclosure notice become CSS.
   // Its wording, position and on/off are behavior, read by whoever
   // renders the notice, and must never reach a stylesheet.

@@ -6,6 +6,7 @@
 import React from "react";
 import type { BentoComponentData, BentoCard } from "../types";
 import { sanitizeUrl } from "../utils/sanitizeUrl";
+import { bentoSpanClass, bentoSpans, featuredFirst } from "../utils/bentoLayout";
 
 export interface BentoComponentProps {
   data: BentoComponentData;
@@ -14,9 +15,10 @@ export interface BentoComponentProps {
 
 interface CardProps {
   card: BentoCard;
+  spanClass: string;
 }
 
-const Card: React.FC<CardProps> = ({ card }) => {
+const Card: React.FC<CardProps> = ({ card, spanClass }) => {
   const { title, description, badge, action } = card;
   const link = sanitizeUrl(card.link);
   const image = sanitizeUrl(card.image);
@@ -72,7 +74,8 @@ const Card: React.FC<CardProps> = ({ card }) => {
   // would collapse every card into the same cell in the simple layout.
   // Image-optional degradation: without a cover the card gets an
   // accent-tinted gradient (CSS) instead of an empty dark box
-  const cardClass = `genui-bento-card ${image ? '' : 'genui-bento-card--text-only'}`.trim();
+  const cardClass =
+    `genui-bento-card ${spanClass} ${image ? '' : 'genui-bento-card--text-only'}`.trim();
 
   if (link && !hasAction) {
     return (
@@ -95,20 +98,24 @@ export const BentoComponent: React.FC<BentoComponentProps> = ({
   className = "",
 }) => {
   const { cards, columns = 3, gap } = data;
+  const list = Array.isArray(cards) ? cards : [];
 
   // A grid with more columns than cards squeezes the cards into a
   // fraction of the zone (1 card + columns:3 = a 1/3-width sliver).
-  const cols = Math.max(1, Math.min(columns, 4, cards?.length || 1));
-
-  const colClass =
-    `genui-bento genui-bento--cols-${cols} ${className}`.trim();
+  const cols = Math.max(1, Math.min(columns, 4, list.length || 1));
+  const ordered = featuredFirst(list);
+  const spans = bentoSpans(ordered.length, cols);
 
   const style: React.CSSProperties = gap ? { gap: `${gap}px` } : {};
 
   return (
-    <div className={colClass} style={style}>
-      {cards.map((card, index) => (
-        <Card key={`${card.title}-${index}`} card={card} />
+    <div className={`genui-bento ${className}`.trim()} style={style}>
+      {ordered.map((card, index) => (
+        <Card
+          key={`${card.title}-${index}`}
+          card={card}
+          spanClass={bentoSpanClass(spans[index])}
+        />
       ))}
     </div>
   );

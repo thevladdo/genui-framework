@@ -1,0 +1,78 @@
+{
+  "description": "Evaluation zone with the figures split between the prompt and a retrieved benchmark. The recorded response holds two comparisons: the first invents one competitor's number next to two grounded ones (the whole component must fall, never just the invented bar, because a comparison with the awkward competitor removed flatters), the second is fully grounded and must survive the chain intact.",
+  "request": {
+    "zone_id": "compare-zone",
+    "base_prompt": "The visitor is comparing onboarding effort across vendors. Our onboarding completes in 4 days.",
+    "context_prompt": "Benchmark methodology: https://acme.example/benchmark",
+    "pinned_content": [],
+    "preferred_component_type": null,
+    "max_items": 4,
+    "current_page": "/compare",
+    "page_metadata": {},
+    "archetype": {
+      "role": "operations"
+    }
+  },
+  "retrieved": [
+    {
+      "content": "Independent benchmark: Northwind Suite completes onboarding in 11 days and Vertex Suite in 18 days, measured on identical datasets.",
+      "metadata": {
+        "url": "https://acme.example/benchmark"
+      },
+      "score": 0.71
+    }
+  ],
+  "invariants": {
+    "allowed_types": ["comparison_bars", "text"]
+  },
+  "llm_response": {
+    "components": [
+      {
+        "type": "comparison_bars",
+        "data": {
+          "title": "Time to first live zone",
+          "subtitle": "Days from signup to production",
+          "bars": [
+            {
+              "label": "Acme",
+              "value": 4,
+              "suffix": "d",
+              "highlighted": true,
+              "callout": "Live in under a week"
+            },
+            { "label": "Northwind", "value": 11, "suffix": "d" },
+            { "label": "Vertex", "value": 25, "suffix": "d" }
+          ]
+        }
+      },
+      {
+        "type": "comparison_bars",
+        "data": {
+          "title": "Onboarding effort",
+          "bars": [
+            {
+              "label": "Acme",
+              "value": 4,
+              "suffix": "d",
+              "highlighted": true
+            },
+            { "label": "Northwind", "value": 11, "suffix": "d" },
+            { "label": "Vertex", "value": 18, "suffix": "d" }
+          ]
+        }
+      },
+      {
+        "type": "text",
+        "data": {
+          "content": "All three figures come from the same benchmark run on identical datasets.",
+          "style": "note"
+        }
+      }
+    ],
+    "pinned_included": [],
+    "personalization_applied": true,
+    "confidence": 0.72,
+    "reasoning": "Operations role evaluating vendors: lead with the onboarding comparison and state the source of the figures.",
+    "profile_factors": ["role"]
+  }
+}

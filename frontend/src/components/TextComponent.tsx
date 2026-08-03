@@ -10,9 +10,8 @@
  */
 
 import React from 'react';
-import ReactMarkdown from 'react-markdown';
 import type { TextComponentData } from '../types';
-import { sanitizeUrl } from '../utils/sanitizeUrl';
+import { SafeMarkdown } from './SafeMarkdown';
 
 export interface TextComponentProps {
   data: TextComponentData;
@@ -35,19 +34,7 @@ export const TextComponent: React.FC<TextComponentProps> = ({
 
   return (
     <div className={wrapperClass}>
-      <ReactMarkdown
-        // Strip dangerous/non-allowed URLs from links and images
-        urlTransform={(url) => sanitizeUrl(url) ?? ''}
-        components={{
-          a: ({ children, ...props }) => (
-            <a {...props} target="_blank" rel="noopener noreferrer">
-              {children}
-            </a>
-          ),
-        }}
-      >
-        {safeContent}
-      </ReactMarkdown>
+      <SafeMarkdown>{safeContent}</SafeMarkdown>
     </div>
   );
 };
