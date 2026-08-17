@@ -10,11 +10,13 @@ from auth import AuthContext
 from config import settings
 from profiles import ProfileStore
 from utils.rate_limit import RateLimiter
+from utils.tenant_counter import TenantCounter
 from zones import ZoneConfigStore
 
 _profile_store: Optional[ProfileStore] = None
 _zone_config_store: Optional[ZoneConfigStore] = None
 _llm_budget: Optional[RateLimiter] = None
+_corpus_size: Optional[TenantCounter] = None
 
 
 def get_profile_store() -> ProfileStore:
@@ -54,9 +56,47 @@ def get_llm_budget() -> RateLimiter:
     return _llm_budget
 
 
+def get_corpus_size() -> TenantCounter:
+    """
+    Running token total of each tenant's knowledge base.
+
+    Kept while indexing rather than recomputed: the threshold that decides
+    whether new chunks get their context is read on every upload.
+    A scan of the whole collection to answer it would be paid every time.
+    """
+    global _corpus_size
+    if _corpus_size is None:
+        _corpus_size = TenantCounter(
+            key_prefix="genui:corpustokens:",
+            redis_url=settings.redis_url,
+        )
+    return _corpus_size
+
+
 def budget_tenant(auth: AuthContext) -> Optional[str]:
     """Tenant to charge for a generation; None (exempt) for admin keys."""
     return None if auth.is_admin else auth.tenant
+
+
+async def allow_indexing_budget(tenant: Optional[str], calls: int) -> bool:
+    """
+    Whether this tenant can afford `calls` generations at indexing time.
+
+    Indexing spend goes through the same per-tenant cap as renders and
+    chat, and deliberately does NOT take the admin exemption that
+    budget_tenant() grants: that exemption exists so an operator's own
+    request is not throttled, while this is thousands of generations
+    billed to the tenant's key which is exactly what the cap is for.
+
+    Returns False instead of raising. A document that does not fit the
+    budget is indexed without context rather than left half indexed: the
+    caller decides, and every outcome is a state that can be stated.
+    """
+    if calls <= 0:
+        return True
+    if not tenant:
+        return True
+    return await get_llm_budget().allow(tenant, cost=calls)
 
 
 async def charge_llm_budget(tenant: Optional[str], cost: int = 1) -> None:

@@ -120,6 +120,7 @@ def fake_settings(**overrides):
         qdrant_timeout_seconds=2,
         top_k_retrieval=5,
         similarity_threshold=0.35,
+        hybrid_retrieval=True,
         use_semantic_chunking=True,
         breakpoint_percentile_threshold=95,
         buffer_size=1,
@@ -369,6 +370,7 @@ class FakeQdrantServer:
 
     def __init__(self):
         self.collections = {}
+        self.sparse_configs = {}
         self.upserts = []
         self.searches = []
 
@@ -378,10 +380,13 @@ class _FakeCollectionsList:
         self.collections = [SimpleNamespace(name=n) for n in names]
 
 
-def _collection_info(size):
+def _collection_info(size, sparse=None):
     return SimpleNamespace(
         config=SimpleNamespace(
-            params=SimpleNamespace(vectors=SimpleNamespace(size=size))
+            params=SimpleNamespace(
+                vectors=SimpleNamespace(size=size),
+                sparse_vectors=sparse,
+            )
         ),
         points_count=0,
         vectors_count=0,
@@ -400,10 +405,15 @@ def fake_qdrant_modules(server):
             return _FakeCollectionsList(list(self._server.collections))
 
         def get_collection(self, name):
-            return _collection_info(self._server.collections[name])
+            return _collection_info(
+                self._server.collections[name],
+                self._server.sparse_configs.get(name),
+            )
 
-        def create_collection(self, collection_name, vectors_config):
+        def create_collection(self, collection_name, vectors_config,
+                              sparse_vectors_config=None):
             self._server.collections[collection_name] = vectors_config.size
+            self._server.sparse_configs[collection_name] = sparse_vectors_config
 
         def create_payload_index(self, **kwargs):
             return None
@@ -443,10 +453,13 @@ def fake_qdrant_modules(server):
     for name in (
         "VectorParams", "Filter", "FieldCondition", "MatchValue", "MatchAny",
         "IsEmptyCondition", "PayloadField", "PointStruct", "FilterSelector",
+        "SparseVector", "SparseVectorParams", "Prefetch", "FusionQuery",
     ):
         setattr(models_mod, name, type(name, (_Model,), {}))
     models_mod.Distance = SimpleNamespace(COSINE="Cosine")
     models_mod.PayloadSchemaType = SimpleNamespace(KEYWORD="keyword")
+    models_mod.Modifier = SimpleNamespace(IDF="idf")
+    models_mod.Fusion = SimpleNamespace(RRF="rrf")
     http_mod.models = models_mod
     qdrant_client.http = http_mod
 

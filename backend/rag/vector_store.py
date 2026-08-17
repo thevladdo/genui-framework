@@ -4,9 +4,12 @@ Handles embedding storage, retrieval, and similarity search.
 """
 
 import logging
+import re
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 from functools import lru_cache
+from collections import Counter
+from zlib import crc32
 import uuid
 import asyncio
 
@@ -17,6 +20,7 @@ from auth.keys import DEFAULT_TENANT
 from config import settings
 from llm.embeddings import EmbeddingClient, EmbeddingConfigError, create_embedding_client
 from .chunker import SemanticChunk
+from .contextualizer import estimate_tokens
 from utils.cache import cacheable, clear_cache
 
 logger = logging.getLogger(__name__)
@@ -24,6 +28,61 @@ logger = logging.getLogger(__name__)
 # Hard cap when scanning the collection for document listings
 _LIST_SCROLL_PAGE = 256
 _LIST_MAX_POINTS = 50_000
+DENSE_VECTOR = ""
+LEXICAL_VECTOR = "lexical"
+_FUSION_CANDIDATES = 20
+_TOKEN = re.compile(r"[a-z0-9]{2,}")
+
+
+def point_id_for(tenant: Optional[str], chunk_id: str) -> str:
+    """
+    The id of a chunk's point, derived from what the chunk is rather than
+    drawn at random.
+
+    A random id made every upload an insert, so uploading a document twice
+    stored it twice and a search then found the same passage under two
+    points. Deriving it means the second upload overwrites the first, which
+    is what an upsert is for.
+    """
+    return str(uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"genui:{tenant or DEFAULT_TENANT}:{chunk_id}",
+    ))
+
+
+def indexable_text(chunk: SemanticChunk) -> str:
+    """
+    What the vectors are built from: the chunk, preceded by the lines that
+    situate it when it has them.
+
+    The payload keeps `chunk.content` untouched, so this text reaches the
+    index and nothing else. That is the whole safety argument of the
+    technique here: the corpus the URL whitelist and the numeric grounding
+    judge from is built out of retrieved content, and generated lines never
+    get into it.
+    """
+    return f"{chunk.context}\n\n{chunk.content}" if chunk.context else chunk.content
+
+
+def lexical_vector(text: str) -> qmodels.SparseVector:
+    """
+    A chunk (or a query) as term frequencies, keyed by a stable hash of the
+    term.
+
+    Dense embeddings are good at paraphrase and blind to the exact token: a
+    product code, an acronym, the name of a clause, a word that means one
+    precise thing in the customer's domain. This is the other half of that.
+
+    The corpus statistic that turns raw counts into a ranking (IDF) is
+    computed by the engine over the collection itself. Nothing here keeps a
+    term table in step with documents entering and leaving, which is the
+    state that would drift out of sync in silence.
+    """
+    counts = Counter(crc32(token.encode()) for token in _TOKEN.findall(text.lower()))
+    return qmodels.SparseVector(
+        indices=list(counts.keys()),
+        values=[float(count) for count in counts.values()],
+    )
 
 
 @dataclass
@@ -76,6 +135,10 @@ class QdrantVectorStore:
         # Embeddings are checked against it so a model/collection mismatch
         # fails loudly instead of corrupting or silently skipping batches
         self._collection_dim: Optional[int] = None
+
+        # Whether the collection carries the lexical vector (capability) and whether searches fuse the two rankings (behavior).
+        self.has_lexical = False
+        self.hybrid = False
         self._ensure_collection()
 
     def _ensure_collection(self):
@@ -95,7 +158,13 @@ class QdrantVectorStore:
                             size=self._collection_dim,
                             distance=qmodels.Distance.COSINE,
                         ),
+                        sparse_vectors_config={
+                            LEXICAL_VECTOR: qmodels.SparseVectorParams(
+                                modifier=qmodels.Modifier.IDF,
+                            ),
+                        },
                     )
+                    self.has_lexical = True
 
                     # Create payload indices for filtering
                     self.client.create_payload_index(
@@ -124,6 +193,7 @@ class QdrantVectorStore:
 
             if exists:
                 logger.info(f"Collection {self.collection_name} already exists")
+                self.has_lexical = self._declares_lexical()
                 self._collection_dim = self._existing_vector_size()
                 known = self.embed_model.dimension_if_known()
                 if self._collection_dim and known and known != self._collection_dim:
@@ -146,9 +216,33 @@ class QdrantVectorStore:
             except Exception:
                 pass  # already exists
 
+            self.hybrid = self.has_lexical and settings.hybrid_retrieval
+            logger.info(
+                "Retrieval mode for %s: %s",
+                self.collection_name,
+                "hybrid (dense + lexical)" if self.hybrid else "dense only",
+            )
+
         except Exception as e:
             logger.error(f"Error ensuring collection: {e}")
             raise
+
+    def _declares_lexical(self) -> bool:
+        """
+        Whether the collection carries the lexical vector.
+
+        A collection created before that vector existed cannot gain it:
+        Qdrant refuses to add a vector name to a live collection. Such a
+        deployment keeps serving dense-only searches and moves to hybrid by
+        indexing into a new collection (QDRANT_COLLECTION), never through a
+        silent forced reindex hidden behind an upgrade.
+        """
+        try:
+            params = self.client.get_collection(self.collection_name).config.params
+            return LEXICAL_VECTOR in (getattr(params, "sparse_vectors", None) or {})
+        except Exception as e:
+            logger.warning(f"Could not read the sparse vector config: {e}")
+            return False
 
     def _existing_vector_size(self) -> Optional[int]:
         """Vector size of the existing collection; None if undeterminable."""
@@ -242,8 +336,8 @@ class QdrantVectorStore:
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
             
-            # Generate embeddings for batch
-            texts = [chunk.content for chunk in batch]
+            # What gets indexed is the chunk with its context in front; what gets stored is the chunk.
+            texts = [indexable_text(chunk) for chunk in batch]
             try:
                 embeddings = self._generate_embeddings_batch(texts)
             except EmbeddingConfigError:
@@ -257,7 +351,7 @@ class QdrantVectorStore:
             # Prepare points for Qdrant
             points = []
             for chunk, embedding in zip(batch, embeddings):
-                point_id = str(uuid.uuid4())
+                point_id = point_id_for(tenant, chunk.chunk_id)
                 
                 payload = {
                     "content": chunk.content,
@@ -265,11 +359,19 @@ class QdrantVectorStore:
                     "source_document": chunk.source_document,
                     "tenant": tenant or DEFAULT_TENANT,
                     **chunk.metadata,
+                    "contextualized": bool(chunk.context),
                 }
-                
+
+                indexed_text = indexable_text(chunk)
                 points.append(qmodels.PointStruct(
                     id=point_id,
-                    vector=embedding,
+                    vector=(
+                        {
+                            DENSE_VECTOR: embedding,
+                            LEXICAL_VECTOR: lexical_vector(indexed_text),
+                        }
+                        if self.has_lexical else embedding
+                    ),
                     payload=payload,
                 ))
             
@@ -339,16 +441,26 @@ class QdrantVectorStore:
                         match=qmodels.MatchValue(value=value),
                     ))
         qdrant_filter = qmodels.Filter(must=conditions)
-        
+
         # Perform search using async client
         try:
-            results = await self.async_client.query_points(
-                collection_name=self.collection_name,
-                query=query_embedding,
-                limit=top_k,
-                score_threshold=score_threshold,
-                query_filter=qdrant_filter,
-            )
+            if self.hybrid:
+                results = await self.async_client.query_points(
+                    collection_name=self.collection_name,
+                    prefetch=self._fusion_branches(
+                        query, query_embedding, qdrant_filter, score_threshold, top_k
+                    ),
+                    query=qmodels.FusionQuery(fusion=qmodels.Fusion.RRF),
+                    limit=top_k,
+                )
+            else:
+                results = await self.async_client.query_points(
+                    collection_name=self.collection_name,
+                    query=query_embedding,
+                    limit=top_k,
+                    score_threshold=score_threshold,
+                    query_filter=qdrant_filter,
+                )
             points = results.points
         except Exception as e:
             logger.error(f"Search failed: {e}")
@@ -367,17 +479,59 @@ class QdrantVectorStore:
         
         return retrieval_results
     
-    def delete_by_source(self, source_document: str, tenant: Optional[str] = None) -> bool:
+    def _fusion_branches(
+        self,
+        query: str,
+        query_embedding: List[float],
+        qdrant_filter: qmodels.Filter,
+        score_threshold: Optional[float],
+        top_k: int,
+    ) -> List[qmodels.Prefetch]:
+        """
+        The two candidate lists the engine fuses, in the engine: fusing them
+        here would mean carrying both full rankings back and reordering them
+        in Python.
+
+        Both branches carry the tenant filter. A lexical branch that forgot
+        it would be a leak across tenants, not a relevance defect.
+
+        The similarity threshold stays on the dense branch, where it means
+        what it was configured to mean. The fused score is a rank score on a
+        different scale entirely, and cutting that with a cosine number would
+        empty every result set.
+        """
+        depth = max(_FUSION_CANDIDATES, top_k)
+        branches = [
+            qmodels.Prefetch(
+                query=query_embedding,
+                using=DENSE_VECTOR,
+                limit=depth,
+                filter=qdrant_filter,
+                score_threshold=score_threshold,
+            ),
+        ]
+
+        lexical = lexical_vector(query)
+        if lexical.indices:
+            branches.append(qmodels.Prefetch(
+                query=lexical,
+                using=LEXICAL_VECTOR,
+                limit=depth,
+                filter=qdrant_filter,
+            ))
+        return branches
+
+    def delete_by_source(self, source_document: str, tenant: Optional[str] = None) -> int:
         """
         Delete all chunks from a specific source document, within a tenant.
 
-        Args:
-            source_document: The source identifier to delete
-            tenant: Tenant scope (a tenant can only delete its own documents)
-
-        Returns:
-            True if deletion was successful
+        Returns the tokens removed, so the caller can take them off the
+        corpus total. Without that the total only ever grows, and a corpus
+        that has shrunk below the threshold goes on paying to index with
+        context because a number nobody maintains says it is still large.
+        Negative means the deletion failed.
         """
+        removed_tokens = self._source_tokens(source_document, tenant)
         try:
             self.client.delete(
                 collection_name=self.collection_name,
@@ -396,11 +550,48 @@ class QdrantVectorStore:
             logger.info(f"Deleted chunks from source: {source_document} (tenant: {tenant or DEFAULT_TENANT})")
             # Cached search results may still reference the deleted content
             clear_cache()
-            return True
+            return removed_tokens
 
         except Exception as e:
             logger.error(f"Deletion failed for {source_document}: {e}")
-            return False
+            return -1
+
+    def _source_tokens(self, source_document: str, tenant: Optional[str]) -> int:
+        """
+        Tokens held by one document, read before it is deleted.
+
+        One scroll over one document's payloads, on an operation that
+        happens rarely and is already scanning to delete.
+        """
+        total = 0
+        offset = None
+        try:
+            while True:
+                points, offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=qmodels.Filter(must=[
+                        qmodels.FieldCondition(
+                            key="source_document",
+                            match=qmodels.MatchValue(value=source_document),
+                        ),
+                        self._tenant_condition(tenant),
+                    ]),
+                    limit=_LIST_SCROLL_PAGE,
+                    offset=offset,
+                    with_payload=["content"],
+                    with_vectors=False,
+                )
+                total += sum(
+                    estimate_tokens((point.payload or {}).get("content", ""))
+                    for point in points
+                )
+                if offset is None:
+                    break
+        except Exception as e:
+            logger.warning(f"Could not size {source_document} before deleting: {e}")
+            return 0
+
+        return total
 
     def list_documents(self, tenant: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -453,6 +644,286 @@ class QdrantVectorStore:
 
         return sorted(documents.values(), key=lambda d: d["source_document"])
 
+    def prune_removed_chunks(
+        self,
+        source_document: str,
+        chunk_ids: List[str],
+        tenant: Optional[str] = None,
+    ) -> int:
+        """
+        Drop this document's points that the version just indexed no longer
+        accounts for.
+
+        Two of them. A document edited down to fewer chunks leaves a tail
+        that nothing overwrites, and its text would go on grounding numbers
+        and URLs that the document no longer contains. And a document
+        indexed before point ids were derived is stored under random ones,
+        so the new write lands beside it instead of on top.
+
+        Only safe when the whole document was just written: a resumed
+        upload indexes part of it, and the rest is work already paid for.
+        """
+        if not chunk_ids:
+            return 0
+        try:
+            current = [point_id_for(tenant, chunk_id) for chunk_id in chunk_ids]
+            before = self.client.count(
+                collection_name=self.collection_name,
+                count_filter=qmodels.Filter(must=[
+                    qmodels.FieldCondition(
+                        key="source_document",
+                        match=qmodels.MatchValue(value=source_document),
+                    ),
+                    self._tenant_condition(tenant),
+                ]),
+                exact=True,
+            ).count
+
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=qmodels.FilterSelector(
+                    filter=qmodels.Filter(
+                        must=[
+                            qmodels.FieldCondition(
+                                key="source_document",
+                                match=qmodels.MatchValue(value=source_document),
+                            ),
+                            self._tenant_condition(tenant),
+                        ],
+                        must_not=[qmodels.HasIdCondition(has_id=current)],
+                    )
+                ),
+            )
+            removed = before - len(current)
+            if removed > 0:
+                logger.info(
+                    "Pruned %d stale points from %s", removed, source_document
+                )
+                clear_cache()
+            return max(0, removed)
+
+        except Exception as e:
+            logger.warning(f"Could not prune stale points of {source_document}: {e}")
+            return 0
+
+    def contextualized_chunk_ids(
+        self,
+        source_document: str,
+        tenant: Optional[str] = None,
+    ) -> set:
+        """
+        The chunk ids of this document already indexed WITH their context.
+
+        A large document is thousands of model calls, and an upload that
+        dies halfway has already paid for the ones it made. Re-uploading
+        skips those instead of buying them again, which is what makes the
+        work resumable rather than restartable. Chunks indexed without
+        context are not listed: they still have their call to make.
+        """
+        found = set()
+        offset = None
+        try:
+            while True:
+                points, offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=qmodels.Filter(must=[
+                        qmodels.FieldCondition(
+                            key="source_document",
+                            match=qmodels.MatchValue(value=source_document),
+                        ),
+                        qmodels.FieldCondition(
+                            key="contextualized",
+                            match=qmodels.MatchValue(value=True),
+                        ),
+                        self._tenant_condition(tenant),
+                    ]),
+                    limit=_LIST_SCROLL_PAGE,
+                    offset=offset,
+                    with_payload=["chunk_id"],
+                    with_vectors=False,
+                )
+                found.update(
+                    (point.payload or {}).get("chunk_id")
+                    for point in points
+                    if (point.payload or {}).get("chunk_id")
+                )
+                if offset is None:
+                    break
+        except Exception as e:
+            logger.warning(f"Could not read indexing progress for {source_document}: {e}")
+
+        return found
+
+    def chunk_counts(self, tenant: Optional[str] = None) -> Dict[str, int]:
+        """
+        How many of this tenant's chunks carry their context and how many
+        do not.
+
+        A corpus with both is a corpus where the older documents lose
+        comparisons for a reason that has nothing to do with how relevant
+        they are, so the split is worth one cheap pair of counts.
+        """
+        counts = {"chunks_total": 0, "chunks_contextualized": 0, "chunks_plain": 0}
+        try:
+            tenant_filter = qmodels.Filter(must=[self._tenant_condition(tenant)])
+            counts["chunks_total"] = self.client.count(
+                collection_name=self.collection_name,
+                count_filter=tenant_filter,
+                exact=True,
+            ).count
+            counts["chunks_contextualized"] = self.client.count(
+                collection_name=self.collection_name,
+                count_filter=qmodels.Filter(must=[
+                    self._tenant_condition(tenant),
+                    qmodels.FieldCondition(
+                        key="contextualized",
+                        match=qmodels.MatchValue(value=True),
+                    ),
+                ]),
+                exact=True,
+            ).count
+            counts["chunks_plain"] = counts["chunks_total"] - counts["chunks_contextualized"]
+        except Exception as e:
+            logger.warning(f"Chunk counts failed: {e}")
+        return counts
+
+    def _plain_condition(self, tenant: Optional[str]) -> qmodels.Filter:
+        """
+        This tenant's points that carry no context. `must_not` on the flag
+        also catches the points indexed before the flag existed, which have
+        no such field at all and are exactly the ones left behind.
+        """
+        return qmodels.Filter(
+            must=[self._tenant_condition(tenant)],
+            must_not=[qmodels.FieldCondition(
+                key="contextualized",
+                match=qmodels.MatchValue(value=True),
+            )],
+        )
+
+    def plain_points(
+        self,
+        tenant: Optional[str] = None,
+        max_points: int = _LIST_MAX_POINTS,
+    ) -> List[Dict[str, Any]]:
+        """
+        The points still indexed without context: id, chunk id, source and
+        content. What a backfill has left to do, and the reason it is
+        idempotent: a point that has been done no longer appears here.
+        """
+        found: List[Dict[str, Any]] = []
+        offset = None
+        try:
+            while len(found) < max_points:
+                points, offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=self._plain_condition(tenant),
+                    limit=_LIST_SCROLL_PAGE,
+                    offset=offset,
+                    with_payload=["content", "chunk_id", "source_document"],
+                    with_vectors=False,
+                )
+                for point in points:
+                    payload = point.payload or {}
+                    found.append({
+                        "id": point.id,
+                        "chunk_id": payload.get("chunk_id", ""),
+                        "source_document": payload.get("source_document", ""),
+                        "content": payload.get("content", ""),
+                    })
+                if offset is None:
+                    break
+        except Exception as e:
+            logger.error(f"Could not list the points without context: {e}")
+
+        return found[:max_points]
+
+    def recontextualize(self, chunks: List[SemanticChunk], point_ids: List[Any]) -> int:
+        """
+        Re-index existing points behind their new context, in place.
+
+        The vectors are replaced and the flag is set on the point that is
+        already there: no new point is written, so an interrupted backfill
+        resumed later neither duplicates nor skips. A chunk that came back
+        without context is left alone and will be picked up next time.
+        """
+        pending = [
+            (point_id, chunk)
+            for point_id, chunk in zip(point_ids, chunks)
+            if chunk.context
+        ]
+        if not pending:
+            return 0
+
+        texts = [indexable_text(chunk) for _, chunk in pending]
+        embeddings = self._generate_embeddings_batch(texts)
+        if embeddings:
+            self._check_dimension(embeddings[0])
+
+        try:
+            self.client.update_vectors(
+                collection_name=self.collection_name,
+                points=[
+                    qmodels.PointVectors(
+                        id=point_id,
+                        vector=(
+                            {
+                                DENSE_VECTOR: embedding,
+                                LEXICAL_VECTOR: lexical_vector(text),
+                            }
+                            if self.has_lexical else embedding
+                        ),
+                    )
+                    for (point_id, _), embedding, text in zip(pending, embeddings, texts)
+                ],
+            )
+            self.client.set_payload(
+                collection_name=self.collection_name,
+                payload={"contextualized": True},
+                points=[point_id for point_id, _ in pending],
+            )
+        except Exception as e:
+            logger.error(f"Backfill update failed: {e}")
+            return 0
+
+        clear_cache()
+        return len(pending)
+
+    def recount_tokens(self, tenant: Optional[str] = None) -> int:
+        """
+        Rebuild the corpus size by reading it, for when the running total
+        is not there: a deployment that indexed before the total existed,
+        or one whose Redis was cleared.
+
+        The normal path never comes here. Without it the size would read as
+        zero on every existing deployment and the threshold would never be
+        reached, which is a feature that silently never turns on.
+        """
+        total = 0
+        scanned = 0
+        offset = None
+        try:
+            while scanned < _LIST_MAX_POINTS:
+                points, offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=qmodels.Filter(must=[self._tenant_condition(tenant)]),
+                    limit=_LIST_SCROLL_PAGE,
+                    offset=offset,
+                    with_payload=["content"],
+                    with_vectors=False,
+                )
+                total += sum(
+                    estimate_tokens((point.payload or {}).get("content", ""))
+                    for point in points
+                )
+                scanned += len(points)
+                if offset is None:
+                    break
+        except Exception as e:
+            logger.warning(f"Could not rebuild the corpus size: {e}")
+
+        return total
+
     def get_collection_stats(self, tenant: Optional[str] = None) -> Dict[str, Any]:
         """Collection statistics; includes the tenant's point count when given."""
         try:
@@ -462,6 +933,7 @@ class QdrantVectorStore:
                 "vectors_count": getattr(info, "vectors_count", None),
                 "indexed_vectors_count": getattr(info, "indexed_vectors_count", None),
                 "status": info.status,
+                "retrieval_mode": "hybrid" if self.hybrid else "dense",
             }
             if tenant is not None:
                 try:

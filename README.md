@@ -141,7 +141,7 @@ The compliance guardrail with a face, for the person who owns it. An operator ed
 
 ### 📚 Content Studio
 
-Manage the RAG knowledge base that feeds the AI: connect to your backend (URL + admin key, stored only in the browser session), **drag-and-drop documents** (PDF, DOCX, HTML, TXT, MD, images), browse the indexed knowledge base with chunk counts, and **test retrieval queries** to see exactly which passages the AI would surface, with similarity scores.
+Manage the RAG knowledge base that feeds the AI: connect to your backend (URL + admin key, stored only in the browser session), **drag-and-drop documents** (PDF, DOCX, HTML, TXT, MD, images), browse the indexed knowledge base with chunk counts, and **test retrieval queries** to see exactly which passages the AI would surface, with similarity scores. A long upload shows what it is doing while it does it, with the count of chunks written and a way to stop it, and an upload about to spend on indexing says what it will cost before it starts.
 
 <div align="center">
   <br />
@@ -316,11 +316,16 @@ That zone is already in the anonymous mode: nothing is written to or read from t
 
 ```bash
 cd backend
-python3 -m unittest discover -s tests   # or: pytest tests/
+./venv/bin/python -m unittest discover -s tests   # the complete run
+# or, same suite: ./venv/bin/python -m pytest tests/
 
 cd frontend
 npm test   # vitest: packaging (require/import), SSR skeleton, reactive props, privacy filter
 ```
+
+**Run the backend suite from the venv.** A test that needs FastAPI, Qdrant's client or llama_index skips itself when the import fails, so the same command on a system python that lacks them prints `OK` over about 200 tests it never ran. Both runs say `OK`; only one of them means the suite passed. The skip count at the end of the output is what tells them apart.
+
+Three harnesses stay out of every run until asked, because each needs something the suite must not require: a configured engine, or a vector database. `GENUI_GOLDEN_LIVE=1` vets a BYOK engine against the golden fixtures, `GENUI_LIVE_LLM=1` calls the real provider, and `GENUI_RAG_EVAL=1` measures retrieval on a committed corpus. All three are described below.
 
 #### Golden harness — regression signal for prompt/model/engine changes
 
@@ -339,6 +344,40 @@ GENUI_GOLDEN_LIVE=1 ./venv/bin/python -m unittest tests.test_golden_zone -v
 ```
 
 Live mode is optional and opt-in: the default suite never needs it.
+
+#### Retrieval eval: is the right passage coming back?
+
+The golden harness says whether an output honors its contract. Uplift says whether a variant earns more. Neither says whether _retrieval_ works, so every change to chunking, to the search, or to `TOP_K_RETRIEVAL` is otherwise a guess.
+
+It matters more here than in a chatbot. The URL whitelist and the numeric grounding build the corpus they judge from out of the retrieved results, so a passage that fails to come back turns a real price or a real link into an invented one, and the chain removes it from the page. The miss rate of the retrieval is also the false positive rate of the guarantees.
+
+`backend/tests/test_retrieval_eval.py` asks a set of known questions against a small committed corpus and reports how often the expected passage came back among the top k. That is a binary fact per question, so the metric is a fraction, reported for three values of k, plus the mean position of the first useful result: a retrieval that arrives late is a different problem from one that misses.
+
+```bash
+cd backend
+GENUI_RAG_EVAL=1 ./venv/bin/python -m unittest tests.test_retrieval_eval -v
+```
+
+```
+retrieval eval: 52 questions over 43 chunks from 20 documents
+  recall@5   0.83  (43/52)
+  recall@10  1.00  (52/52)
+  recall@20  1.00  (52/52)
+  note: k=20 and above return a third of the corpus or more (43 chunks); those figures say more about the size of the dataset than about the retrieval
+  mean position of the first useful result: 2.9  (over 52 found)
+  useful results under the configured similarity threshold 0.7: 50 (dropped before a render sees them)
+  not retrieved at k=5:
+    [rank 7, score 0.498] What was Northwind Logistics operating margin in fiscal 2025?
+    [rank 8, score 0.390] How much dividend per share did Northwind pay for fiscal 2025?
+```
+
+Opt-in like live mode above: the default suite needs no vector engine, no key and no network. When it does run it indexes `backend/tests/retrieval/docs/` into its own collection, asks the questions, prints the report and drops the collection. Two runs in a row give the same numbers and leave nothing behind, and the collection serving the deployment is never touched (the harness refuses to start if the two names are the same).
+
+The failed questions are listed with their score because that is where the diagnosis is: a passage sitting at rank 7 is a ranking problem, a passage that never comes back at all is a segmentation problem, and the two are fixed differently.
+
+**Adding a case**: one line in `backend/tests/retrieval/questions.jsonl` with the question and a fragment of the passage that must come back. The fragment is text, never a chunk index, so cases survive a change of segmentation. It has to appear exactly once in the corpus, otherwise a hit on the wrong document would score as a success; the default suite checks that, and that a fragment exists at all, without needing any infrastructure. Adding a document is dropping a markdown file in `backend/tests/retrieval/docs/`.
+
+The corpus is deliberately full of passages that do not stand alone: a figure whose subject was named paragraphs earlier, numbers that hold only for a period declared at the top of the page, an acronym expanded once, plan limits overridden on a different page. A corpus of self-contained passages would pin the metric at its ceiling on day one and make the tool useless for deciding anything.
 
 ---
 
@@ -1947,8 +1986,11 @@ The knowledge base feeds the AI real content to curate (and its URLs feed the wh
 | `POST /api/v1/documents`                 | Upload raw text (JSON: `content` + `metadata`)                                                                                                                                                  |
 | `GET /api/v1/documents`                  | List the tenant's documents with chunk counts                                                                                                                                                   |
 | `POST /api/v1/documents/search`          | Preview what the AI would retrieve for a query (passages + similarity scores) — content debugging                                                                                               |
-| `DELETE /api/v1/documents/{source_name}` | Delete a document (tenant-scoped, audit-logged)                                                                                                                                                 |
+| `DELETE /api/v1/documents/{source_name}` | Delete a document (tenant-scoped, audit-logged). Its tokens leave the corpus total with it                                                                                                      |
 | `GET /api/v1/documents/stats`            | Collection stats incl. the tenant's chunk count                                                                                                                                                 |
+| `POST /api/v1/documents/backfill`        | Index the chunks stored without their context behind it now. `dry_run` prices the run first; it goes through the per-tenant cap and picks up where a previous run stopped                        |
+| `GET /api/v1/documents/ingest/{id}`      | How far a running upload has got: phase, chunks written, total. The id is the one sent with the upload                                                                                           |
+| `POST /api/v1/documents/ingest/{id}/cancel` | Ask a running upload to stop. It stops between batches, keeping everything written so far                                                                                                    |
 
 ```bash
 # Upload a PDF (url becomes linkable by the AI via the whitelist)
@@ -1974,6 +2016,8 @@ EXTRACTOR_BACKEND=local      # default: pypdf/docx/bs4 — zero dependencies, da
 # GLMOCR_API_KEY=...         # Z.ai cloud API: documents LEAVE your infra — opt-in consciously
 ```
 
+**Re-uploading a document replaces it.** A point's id derives from the tenant and the chunk it holds, so the second upload of a document lands on the first instead of beside it, and chunks the new version no longer has are dropped rather than left behind grounding text the document no longer contains. Deleting a document takes its tokens off the corpus total, which is what decides whether new chunks are indexed with their context.
+
 Routing is per-format: plain text always decodes locally; a backend only handles the formats it excels at (Docling: PDF/DOCX/HTML/images; GLM-OCR: PDF/images) and everything else falls through to the local parsers. Runtime failures of a backend **fall back to local** with a warning; a configured backend with a missing package fails loudly (501) — that's a deployment mistake, not something to hide. The audit log records which extractor produced each document.
 
 > Note: scanned PDFs need `docling` or `glmocr` — the local backend cannot OCR.
@@ -1995,6 +2039,104 @@ Where your data lives, in three rules:
 1. **Everything local stays local.** `EMBEDDING_BASE_URL` (or the inherited `OPENAI_BASE_URL`) pointed at your own OpenAI-compatible endpoint means no chunk and no search query ever leaves your infrastructure — the same promise as the self-hosted extraction backends, kept end-to-end.
 2. **Misconfiguration fails loudly.** No embedding config → an operator-readable error (HTTP 503) telling you exactly what to set. There is **no silent fallback** to `api.openai.com`, and no mute "render without RAG" hiding a dead knowledge base.
 3. **The vector size follows the model.** The Qdrant collection dimension derives from the embedding model (known models resolve instantly; unknown ones are probed once, or declare `EMBEDDING_DIMENSIONS`). Switching models over an existing collection raises a clear mismatch error instead of corrupting the index — re-index into a new `QDRANT_COLLECTION` to migrate.
+
+#### Two rankings, fused in the engine
+
+A dense embedding is good at paraphrase and blind to the exact token. A product code, an acronym, the name of a clause, a word that means one precise thing in your domain: those are the cases where similarity does not help and a literal match does. So every chunk carries two representations in the same point, and a search runs both and fuses the rankings.
+
+```env
+TOP_K_RETRIEVAL=10       # results handed to the model (measured, see below)
+HYBRID_RETRIEVAL=true    # fuse the dense and the lexical ranking
+SIMILARITY_THRESHOLD=0.35
+```
+
+**No new dependency, and no statistic to keep in step.** The lexical vector is term frequencies keyed by a stable hash of the term, which is a few lines of standard library. The corpus statistic that turns counts into a ranking (IDF) is computed by Qdrant over the collection itself, so nothing here maintains a term table that documents entering and leaving could silently push out of date. Fusion is reciprocal rank fusion, done in the engine: carrying both full rankings back to reorder them in Python would be the same result and a lot more moving parts.
+
+**The tenant filter rides on both branches.** A lexical branch selects candidates on its own, so a filter applied only to the dense side would be a leak across tenants, not a relevance defect. A test pins it.
+
+**The similarity threshold stays on the dense branch**, where it means what it was configured to mean. A fused score is a rank score on a different scale, and cutting that with a cosine number would empty every result set.
+
+**An existing collection keeps working, densely.** Qdrant refuses to add a vector name to a live collection, so one created before the lexical vector existed cannot gain it. That deployment keeps serving dense-only searches, unchanged and with no forced reindex hidden behind an upgrade; it moves to hybrid by indexing into a new `QDRANT_COLLECTION`. `GET /api/v1/documents/stats` reports `retrieval_mode` as `hybrid` or `dense`, so nobody has to guess which one is running.
+
+**What it measured.** On the retrieval eval, same corpus and same questions, dense only against fused:
+
+| | recall@5 | recall@10 | recall@20 | mean position of the first useful result |
+| --- | --- | --- | --- | --- |
+| dense only | 0.83 | 1.00 | 1.00 | 2.9 |
+| fused | **0.98** | 1.00 | 1.00 | **1.8** |
+
+Nine questions out of 52 missed the top 5 with dense retrieval alone; one does with fusion. Reproduce either side with `HYBRID_RETRIEVAL=false`.
+
+**Why `TOP_K_RETRIEVAL` is 10.** Three values were measured, and this is the trade the number describes: 5 leaves 0.02 of recall on the table, 10 reaches the ceiling of this corpus, and 20 buys nothing at all. The cost runs the other way: a chunk averages about 170 tokens, so going from 5 to 10 adds up to ~850 tokens to every generation, which is real money on a zone that regenerates per segment. 20 was rejected on both sides of the trade, since the context builder caps at 1500 tokens for a zone and 2000 for a chat answer and would discard most of what it retrieved. The choice is retrieval quality against cost per generation, and 10 is where the measure stops paying for the tokens. On a corpus much larger than the eval's, recall at a given k will sit lower: rerun the eval on your own documents before assuming this number transfers.
+
+#### Situating a chunk before indexing it
+
+A chunk cut out of its document loses what made it findable. "Operating margin rose to 11.4 percent" does not say whose margin or for which year, because the document said that four paragraphs earlier. As text to index it is nearly inert, and no retrieval trick recovers it: the information needed is not in the text. So a model writes a line or two placing the chunk in its document, and those lines go in front of what gets indexed.
+
+```env
+CONTEXTUAL_INDEXING_TENANTS=acme,globex   # empty = off everywhere
+CONTEXT_MODEL=gpt-4o-mini
+```
+
+**The generated lines are indexed and never returned.** The point stores the original chunk as its content; the context only reaches the vectors. This is the part to keep if you change nothing else: the URL whitelist and the numeric grounding build the corpus they judge from out of retrieved content, so a figure invented while situating a chunk would become a figure **authorized** at render time. Keeping it out of the payload makes that impossible rather than unlikely, and a test pins it.
+
+**It is billed, so it is capped and off by default.** One call per chunk on the tenant's key, charged to the same `LLM_BUDGET_PER_HOUR` as renders and chat. It does not take the admin exemption that other admin routes get: document routes are admin-only, and reusing that exemption would put thousands of generations outside the cap. Ask what a document costs before paying for it:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/documents \
+  -H "X-API-Key: sk_live_xyz789" -H "Content-Type: application/json" \
+  -d '{"content": "...", "metadata": {"title": "Annual review"}, "dry_run": true}'
+# {"status":"estimated","chunks_created":43,"context_calls":43,"prompt_cache":"explicit",...}
+```
+
+**A document that does not fit the budget is indexed without context**, not half indexed. Every outcome is a state that can be stated: the response carries `contextual_indexing`, `context_calls` and `budget_exceeded`, and each point records `contextualized` next to the chunk.
+
+**Prompt caching is the prerequisite, not an optimization.** The declared cost of this technique assumes the document is paid for once per batch instead of once per chunk; without that the bill is an order of magnitude higher. Every call sends the document as an identical prefix. On Anthropic the client marks it with an explicit cache breakpoint (`prompt_cache: "explicit"`); on OpenAI-compatible endpoints the prefix is stable so automatic prefix caching applies (`prompt_cache: "prefix"`). An engine that caches nothing still works and simply costs more, and the estimate says which of the two you are buying.
+
+**A large upload resumes instead of restarting.** Chunks are enriched and indexed in batches, so an ingest that dies keeps every completed batch, and on re-upload the chunks that already carry their context are skipped rather than bought again.
+
+**It can be watched and it can be stopped.** An upload is one request that answers only at the end, which on a large document means many minutes of silence: the console polls `GET /api/v1/documents/ingest/{id}` and draws the real count of chunks written, so a long job is distinguishable from a stuck one. Stopping goes through `POST /api/v1/documents/ingest/{id}/cancel`, because closing the browser does not stop anything: the server is never told and keeps spending to the end of the document. The flag is read between batches, so a stopped run keeps everything it had written and buys nothing more.
+
+**A document larger than the model's context does not travel whole.** `CONTEXT_DOCUMENT_MAX_CHARS` (default 48000, about 12k tokens) bounds what goes beside each chunk; past it the document travels as its opening, which carries the subject and the period, plus the neighborhood of the chunk. Sending it whole means every call is refused for exceeding the context while still spending the rate limit. A batch where several calls fail in a row is abandoned and the rest of the document is indexed plain, since a refusal is the model saying no rather than a blip.
+
+**What it measured**, on the same corpus and questions as the retrieval eval:
+
+| | recall@5 | mean position of the first useful result |
+| --- | --- | --- |
+| dense only | 0.83 | 2.9 |
+| fused | 0.98 | 1.9 |
+| fused + context | **1.00** | **1.4** |
+
+The question that fused retrieval still missed was "how many depots are still without charging installed", whose passage reads "The remaining five are scheduled for the following year" and cannot be understood alone at all. That is the shape of passage this exists for.
+
+> Note: with enrichment on, two runs of the eval no longer produce identical numbers. A model writes the context, and it writes it slightly differently each time.
+
+#### When it applies, and the corpus indexed before it did
+
+```env
+CONTEXTUAL_INDEXING_THRESHOLD_TOKENS=200000   # 0 disables the automatic threshold
+```
+
+Below a certain corpus size the technique is not worth buying: at that scale the cheaper answer is to put the documents in the prompt instead of working on retrieval, and the default is the size its authors put that line at. Above it, new chunks are indexed with their context without anyone switching anything on. `CONTEXTUAL_INDEXING_TENANTS` still forces it on for a tenant whose corpus is smaller.
+
+The size is counted in tokens, because that is what the threshold was studied in, and it is kept as a running total while indexing rather than recomputed. A deployment that indexed before the total existed rebuilds it once from the collection and carries on from there, because reading it as zero would be a feature that silently never starts.
+
+**The corpus indexed before the line was crossed is the part that breaks quietly.** Those chunks have no context, they compete against chunks that do, and they lose for a reason that has nothing to do with how relevant they are: retrieval that is not uniformly worse but systematically wrong, always against the older documents. So the split is counted and shown above the document list in the console, for as long as it is true.
+
+**The decision is asked at the moment of crossing**, on the surface the documents were just dropped onto, not in a panel somebody may open one day. That moment happens once and can be missed (a restart, someone else uploading, the threshold changed later), so the count above the document list carries the same operation: it prices the run first and then walks it, which keeps a state that costs continuously from being a dead end. An upload that takes the corpus over in one go gets a price to confirm before it starts, since enrichment then applies to everything just uploaded. An upload that crosses along the way opens the real question, about the material already indexed, with the shared numbers once at the top and the options in one vertical list: bring the older chunks up to date (recommended, and the cost is stated), leave them (no extra spend today, and the N chunks already indexed go on losing comparisons, which does not settle by itself), or decide later. Closing the dialog is deciding later, never "only the new ones".
+
+The share of the hourly cap is shown only when a cap is configured. The published reduction in failed retrievals is quoted as a figure measured on other corpora, with that stated, never as a prediction for the deployment reading it: the number for these documents comes from running the retrieval eval on them.
+
+**Bringing the older chunks up to date never starts by itself.** Going over a whole knowledge base with the model is a different order of spend from an upload, and a bill nobody chose is exactly what this project does not do:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/documents/backfill \
+  -H "X-API-Key: sk_live_xyz789" -H "Content-Type: application/json" \
+  -d '{"dry_run": true}'
+# {"status":"estimated","chunks_plain":812,"context_calls":500,"prompt_cache":"explicit"}
+```
+
+It prices the run first, goes through the same per-tenant cap as everything else, and refuses the whole run rather than stopping halfway through the budget. It updates points in place instead of writing new ones, and it skips what is already done, so an interrupted run resumed later neither duplicates nor skips: `status` comes back `partial` with `chunks_plain_remaining` until there is nothing left. A chunk is situated inside its own document, rebuilt from its chunks in reading order, since the original file is not kept after an ingest.
 
 ### POST /api/v1/query — Chat Interface
 
@@ -2124,7 +2266,7 @@ Serving endpoints take a client key; control-plane endpoints take an admin key a
 | `GET /api/v1/events/stats`                                                     | admin               | CTR per arm, uplift, z-test                         | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
 | `GET /api/v1/profile/{user_id}` · `DELETE` · `POST /profile/sync`              | client + user token | Server-side profile, GDPR erasure                   | [Auth & Profiles](#-auth-server-side-profiles--audit)                    |
 | `GET /api/v1/profile/{user_id}/export`                                         | client + user token | Everything held about one person (GDPR access)      | [Access and erasure](#access-and-erasure)                                |
-| `POST /api/v1/documents` · `/upload` · `/search` · `GET` · `DELETE` · `/stats` | admin               | RAG knowledge base                                  | [Knowledge Base](#knowledge-base-rag--tenant-isolated)                   |
+| `POST /api/v1/documents` · `/upload` · `/search` · `/backfill` · `/ingest/{id}` · `/ingest/{id}/cancel` · `GET` · `DELETE` · `/stats` | admin               | RAG knowledge base                                  | [Knowledge Base](#knowledge-base-rag--tenant-isolated)                   |
 | `GET/PUT/POST/DELETE /api/v1/zone/config[...]`                                 | admin               | Zone config as data: draft, approve, discard        | [Zone Registry](#%EF%B8%8F-zone-config-registry--config-as-data)         |
 | `GET /api/v1/audit`                                                            | admin               | What was shown to whom                              | [Querying the audit](#querying-the-audit)                                |
 | `GET/PUT /api/v1/content-policy`                                               | admin               | Per-tenant banned terms                             | [Output Guarantees](#%EF%B8%8F-output-guarantees) point 5                |

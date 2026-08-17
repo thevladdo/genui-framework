@@ -20,6 +20,61 @@ export interface SearchResult {
   score: number;
   source_document?: string | null;
   url?: string | null;
+  contextualized?: boolean;
+}
+
+export interface CorpusState {
+  tokens: number;
+  threshold_tokens: number;
+  contextual_indexing: boolean;
+  chunks_total: number;
+  chunks_contextualized: number;
+  chunks_plain: number;
+  budget_per_hour: number | null;
+}
+
+export interface KnowledgeBase {
+  documents: KnowledgeDocument[];
+  corpus: CorpusState | null;
+}
+
+export interface IndexReport {
+  status: "completed" | "estimated" | string;
+  chunks_created: number;
+  chunks_indexed: number;
+  contextual_indexing: boolean;
+  context_calls: number;
+  prompt_cache: string | null;
+  threshold_tokens: number;
+  crosses_threshold: boolean;
+  chunks_left_behind?: number;
+  budget_exceeded?: boolean;
+  cancelled?: boolean;
+  source?: string;
+}
+
+export interface IngestStatus {
+  phase:
+    | "contextualizing"
+    | "indexing"
+    | "done"
+    | "cancelled"
+    | "unknown"
+    | string;
+  source?: string;
+  total: number;
+  done: number;
+  cancelled?: boolean;
+  started_at?: number;
+}
+
+export interface BackfillReport {
+  status: "completed" | "partial" | "estimated" | string;
+  chunks_plain: number;
+  context_calls: number;
+  chunks_contextualized: number;
+  chunks_plain_remaining?: number;
+  prompt_cache?: string | null;
 }
 
 export type AdminCredentials = Omit<AdminSession, "tenant">;
@@ -89,22 +144,67 @@ export const verifySession = async (
 
 export const listDocuments = async (
   session: AdminSession,
-): Promise<KnowledgeDocument[]> => {
+): Promise<KnowledgeBase> => {
   const response = await request(session, "/api/v1/documents");
   const body = await response.json();
-  return Array.isArray(body?.documents) ? body.documents : [];
+  return {
+    documents: Array.isArray(body?.documents) ? body.documents : [],
+    corpus: body?.corpus ?? null,
+  };
 };
 
 export const uploadDocument = async (
   session: AdminSession,
   file: File,
-): Promise<void> => {
+  options: { dryRun?: boolean; ingestId?: string } = {},
+): Promise<IndexReport> => {
   const form = new FormData();
   form.append("file", file);
-  await request(session, "/api/v1/documents/upload", {
+  if (options.dryRun) form.append("dry_run", "true");
+  if (options.ingestId) form.append("ingest_id", options.ingestId);
+  const response = await request(session, "/api/v1/documents/upload", {
     method: "POST",
     body: form,
   });
+  return (await response.json()) as IndexReport;
+};
+
+export const readIngest = async (
+  session: AdminSession,
+  ingestId: string,
+): Promise<IngestStatus> => {
+  const response = await request(
+    session,
+    `/api/v1/documents/ingest/${encodeURIComponent(ingestId)}`,
+  );
+  return (await response.json()) as IngestStatus;
+};
+
+export const cancelIngest = async (
+  session: AdminSession,
+  ingestId: string,
+): Promise<void> => {
+  await request(
+    session,
+    `/api/v1/documents/ingest/${encodeURIComponent(ingestId)}/cancel`,
+    { method: "POST" },
+  );
+};
+
+export const backfillContext = async (
+  session: AdminSession,
+  options: { dryRun?: boolean; maxChunks?: number; ingestId?: string } = {},
+): Promise<BackfillReport> => {
+  const response = await request(session, "/api/v1/documents/backfill", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      dry_run: options.dryRun ?? false,
+      ...(options.maxChunks ? { max_chunks: options.maxChunks } : {}),
+      ...(options.ingestId ? { ingest_id: options.ingestId } : {}),
+    }),
+  });
+  return (await response.json()) as BackfillReport;
 };
 
 export const deleteDocument = async (

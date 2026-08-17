@@ -22,6 +22,8 @@ from llm.embeddings import EmbeddingClient, create_embedding_client
 
 logger = logging.getLogger(__name__)
 
+CHARS_PER_TOKEN = 4
+
 
 class _ClientEmbedding(BaseEmbedding):
     """
@@ -61,6 +63,7 @@ class SemanticChunk:
     source_document: str
     start_char: Optional[int] = None
     end_char: Optional[int] = None
+    context: Optional[str] = None
 
 
 class SemanticChunker:
@@ -144,11 +147,13 @@ class SemanticChunker:
             # Attempt semantic splitting
             nodes = self.semantic_splitter.get_nodes_from_documents([doc])
             logger.info(f"Semantic chunking produced {len(nodes)} chunks from {source_name}")
-            
+
         except Exception as e:
             logger.warning(f"Semantic chunking failed, using fallback: {e}")
             nodes = self.fallback_splitter.get_nodes_from_documents([doc])
-        
+
+        nodes = self._within_chunk_size(nodes)
+
         # Convert to our SemanticChunk format
         chunks = []
         for i, node in enumerate(nodes):
@@ -168,6 +173,55 @@ class SemanticChunker:
         
         return chunks
     
+    def _within_chunk_size(self, nodes: List[Any]) -> List[Any]:
+        """
+        Cut the nodes that came back too large, with the sentence splitter
+        already built for the fallback.
+
+        The semantic splitter decides where meaning changes and has no size
+        limit at all, so a document whose meaning barely shifts comes back
+        as a few enormous nodes. Measured on real documents: a median chunk
+        of 439 tokens next to a largest of 3654, which is more than twice
+        the whole context budget a zone render gives its retrieved passages.
+        A chunk like that scores a perfect recall and leaves no room for any
+        other result, which is why the size cannot be left to meaning alone.
+
+        `chunk_size` is the ceiling, not the target: a node under it keeps
+        the boundary the semantic splitter chose. That setting used to reach
+        the fallback path only, so it read as a lie on every deployment.
+        """
+        limit = settings.chunk_size * CHARS_PER_TOKEN
+        sized = []
+
+        for node in nodes:
+            text = node.get_content()
+            if len(text) <= limit:
+                sized.append(node)
+                continue
+
+            parent_start = node.start_char_idx or 0
+            pieces = self.fallback_splitter.get_nodes_from_documents(
+                [Document(text=text, metadata=dict(node.metadata or {}))]
+            )
+            if not pieces:
+                logger.warning("Re-cutting returned nothing; keeping the node whole")
+                sized.append(node)
+                continue
+
+            for piece in pieces:
+                if piece.start_char_idx is not None:
+                    piece.start_char_idx += parent_start
+                if piece.end_char_idx is not None:
+                    piece.end_char_idx += parent_start
+            sized.extend(pieces)
+
+        if len(sized) != len(nodes):
+            logger.info(
+                "Chunks over %d chars re-cut: %d nodes became %d",
+                limit, len(nodes), len(sized),
+            )
+        return sized
+
     def chunk_document(
         self,
         file_path: Path,

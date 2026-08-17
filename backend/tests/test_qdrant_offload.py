@@ -178,11 +178,7 @@ class DocumentRoutesOffEventLoopTest(unittest.TestCase):
         import inspect
 
         for route in (
-            main.upload_document,
-            main.list_documents,
-            main.delete_document,
             main.get_document_stats,
-            main._process_document_background,
         ):
             with self.subTest(route=route.__name__):
                 self.assertFalse(
@@ -190,6 +186,39 @@ class DocumentRoutesOffEventLoopTest(unittest.TestCase):
                     f"{route.__name__} calls Qdrant synchronously: declaring it "
                     f"async puts those round-trips on the event loop",
                 )
+
+    def test_the_async_document_paths_hand_every_blocking_call_to_a_thread(self):
+        """
+        These have to await something (the model writing each chunk's
+        context, the corpus total in Redis), so they cannot be plain `def`
+        like the routes above. The rule they keep instead is the same one:
+        chunking, embedding, counting and the Qdrant round-trips go to a
+        thread explicitly, or one large upload stalls every render the
+        worker is serving next to it.
+        """
+        import inspect
+
+        blocking_calls = ("_chunk_document", "get_vector_store", "index_chunks",
+                          "contextualized_chunk_ids", "chunk_counts",
+                          "list_documents", "plain_points", "recount_tokens",
+                          "recontextualize", "prune_removed_chunks",
+                          "delete_by_source")
+
+        for function in (main._chunk_and_index, main.list_documents,
+                         main.backfill_context, main._backfill_documents,
+                         main._corpus_tokens, main.delete_document):
+            source = inspect.getsource(function)
+            for blocking in blocking_calls:
+                uses = [
+                    line for line in source.splitlines()
+                    if f"{blocking}(" in line and not line.lstrip().startswith(("#", "async def", "def "))
+                ]
+                for line in uses:
+                    with self.subTest(function=function.__name__, call=blocking):
+                        self.assertIn(
+                            "to_thread", line,
+                            f"{blocking} blocks and must be handed to a thread",
+                        )
 
 
 if __name__ == "__main__":

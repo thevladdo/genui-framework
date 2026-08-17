@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # Model Selection
     response_model: str = Field(default="gpt-4o-mini", description="Model for response generation")
     profile_model: str = Field(default="gpt-4o-mini", description="Model for profile analysis")
+    context_model: str = Field(default="gpt-4o-mini", description="Model that situates a chunk in its document at indexing time. One call per chunk, so a cheap model is the point")
 
     # Embeddings (BYOK, like the LLM: documents embed where YOU choose)
     embedding_model: str = Field(default="text-embedding-3-small", description="Model for embeddings")
@@ -74,8 +75,44 @@ class Settings(BaseSettings):
     # RAG Configuration
     chunk_size: int = 512
     chunk_overlap: int = 50
-    top_k_retrieval: int = 5
+    top_k_retrieval: int = 10
     similarity_threshold: float = 0.35
+    context_document_max_chars: int = Field(
+        default=48_000,
+        description="How much of a document may travel beside a chunk when "
+                    "its context is written, about 12k tokens. A larger "
+                    "document travels as its opening plus the neighbourhood "
+                    "of the chunk: sending it whole means every call is "
+                    "refused for exceeding the model's context while still "
+                    "spending the rate limit"
+    )
+    contextual_indexing_threshold_tokens: int = Field(
+        default=200_000,
+        description="Corpus size per tenant, in tokens, above which new chunks "
+                    "are indexed with their context without anyone switching "
+                    "it on. Below it the cheaper answer is to put the documents "
+                    "in the prompt instead of working on retrieval, which is "
+                    "where the default comes from. 0 disables the automatic "
+                    "threshold and leaves only the explicit tenant list"
+    )
+    contextual_indexing_tenants: str = Field(
+        default="",
+        description="Comma-separated tenants that index each chunk with a "
+                    "generated line or two situating it in its document. "
+                    "One model call per chunk on the tenant's key, charged "
+                    "to the same per-tenant cap as renders: empty by default, "
+                    "because a cost centre that turns itself on is one nobody "
+                    "agreed to pay for"
+    )
+    hybrid_retrieval: bool = Field(
+        default=True,
+        description="Fuse the dense and the lexical ranking inside the engine "
+                    "(reciprocal rank fusion), so an exact term matches where "
+                    "an embedding only sees paraphrase. Applies to collections "
+                    "that carry the lexical vector: one created before it "
+                    "existed keeps serving dense-only searches, since Qdrant "
+                    "refuses to add a vector name to a live collection"
+    )
 
     # Document Extraction (file uploads)
     extractor_backend: str = Field(

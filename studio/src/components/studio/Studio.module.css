@@ -483,3 +483,163 @@
     display: none;
   }
 }
+.corpusBanner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+  padding: 14px;
+  border-radius: var(--st-radius-sm);
+  border: 1px solid var(--st-border);
+  background: color-mix(in srgb, var(--st-accent) 5%, transparent);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--st-text-muted);
+}
+
+.corpusBanner strong {
+  color: var(--st-text);
+}
+
+.uploadNotice {
+  margin: 12px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--st-text-muted);
+}
+
+.uploadErrorNotice {
+  margin: 12px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--st-danger);
+}
+
+.progressPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px;
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-sm);
+}
+
+.progressHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.progressName {
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.progressCount {
+  font-size: 12px;
+  color: var(--st-text-muted);
+}
+
+.progressTrack {
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--st-text) 10%, transparent);
+}
+
+.progressBar {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--st-success);
+  transition: width 400ms var(--st-ease);
+}
+
+.progressBarBusy {
+  height: 100%;
+  width: 35%;
+  border-radius: 999px;
+  background: var(--st-success);
+  animation: progressSlide 1.4s ease-in-out infinite;
+}
+
+@keyframes progressSlide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(340%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progressBarBusy {
+    width: 100%;
+    animation: none;
+    opacity: 0.5;
+  }
+}
+
+.progressPhase {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--st-text-muted);
+}
+
+.progressPhase strong {
+  color: var(--st-text);
+}
+
+.stopButton {
+  align-self: flex-start;
+  padding: 9px 16px;
+  border: 1px solid var(--st-danger);
+  border-radius: var(--st-radius-sm);
+  background: transparent;
+  color: var(--st-danger);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 180ms var(--st-ease);
+}
+
+.stopButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--st-danger) 10%, transparent);
+}
+
+.stopButton:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.corpusBannerText {
+  margin: 0;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.corpusBannerAction {
+  flex: 0 0 auto;
+  padding: 9px 16px;
+  border: 1px solid var(--st-accent);
+  border-radius: var(--st-radius-sm);
+  background: transparent;
+  color: var(--st-text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 180ms var(--st-ease);
+}
+
+.corpusBannerAction:hover {
+  background: color-mix(in srgb, var(--st-accent) 16%, transparent);
+}
+
+.contextPill {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--st-success);
+  color: var(--st-success);
+  font-size: 11px;
+  font-weight: 600;
+}

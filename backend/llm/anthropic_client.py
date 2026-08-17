@@ -24,6 +24,8 @@ _DEFAULT_MAX_TOKENS = 4096
 class AnthropicChatClient(LLMChatClient):
     """LLMChatClient over the Anthropic Messages API."""
 
+    prompt_cache = "explicit"
+
     def __init__(
         self,
         api_key: str,
@@ -55,6 +57,14 @@ class AnthropicChatClient(LLMChatClient):
             {"role": "assistant", "content": "{"},
         ]
 
+    @staticmethod
+    def _json_text(response) -> str:
+        """The reply, with the pre-filled brace put back in front."""
+        return "{" + "".join(
+            block.text for block in response.content
+            if getattr(block, "type", None) == "text"
+        )
+
     async def complete_json(
         self,
         system: str,
@@ -68,12 +78,35 @@ class AnthropicChatClient(LLMChatClient):
                 system=system,
                 messages=self._json_messages(user),
             )
+            return self._json_text(response)
 
-            text = "".join(
-                block.text for block in response.content
-                if getattr(block, "type", None) == "text"
+    async def complete_json_cached(
+        self,
+        system: str,
+        cached_prefix: str,
+        user: str,
+    ) -> str:
+        """
+        The repeated prefix as its own system block, with a cache
+        breakpoint on it: written once for the batch, read back for every
+        call after the first. Below the provider's minimum block size the
+        marker is ignored and the call behaves like an uncached one.
+        """
+        with span("genui.llm.complete_cached", provider="anthropic", model=self.model):
+            response = await self._client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=[
+                    {"type": "text", "text": system},
+                    {
+                        "type": "text",
+                        "text": cached_prefix,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                ],
+                messages=self._json_messages(user),
             )
-            return "{" + text
+            return self._json_text(response)
 
     async def stream_json(
         self,

@@ -13,7 +13,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Form, Query, Request, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from api.deps import budget_tenant, charge_llm_budget, get_profile_store
+from api.deps import (
+    allow_indexing_budget,
+    budget_tenant,
+    charge_llm_budget,
+    get_corpus_size,
+    get_profile_store,
+)
 from api.audit_router import router as audit_router
 from api.content_policy_router import router as content_policy_router
 from api.events_router import router as events_router
@@ -39,6 +45,14 @@ from agents import get_orchestrator, OrchestratorResult
 from metrics.ops import get_ops_metrics
 from profiles import is_identified
 from rag import create_chunker, get_vector_store
+from rag import ingest_status
+from rag.chunker import SemanticChunk
+from rag.contextualizer import (
+    contextual_indexing_enabled,
+    contextualize,
+    estimate_tokens,
+    prompt_cache_mode,
+)
 from schemas.components import GENUI_CONTRACT_VERSION
 from utils.redis_conn import shared_redis
 from utils.tracing import span
@@ -153,6 +167,10 @@ class DocumentUploadRequest(BaseModel):
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="Document metadata (title, url, etc.)"
+    )
+    dry_run: bool = Field(
+        default=False,
+        description="Report what indexing this document would cost (chunks, model calls, how the engine reuses the document) without indexing it or spending anything"
     )
 
 
@@ -507,24 +525,172 @@ async def process_query(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _chunk_and_index(
+# Chunks enriched and written down together
+_INGEST_BATCH = 50
+
+
+def _chunk_document(text: str, metadata: Dict[str, Any], source_name: str):
+    """Blocking: the semantic splitter embeds while it decides where to cut."""
+    return create_chunker().chunk_text(
+        text=text, metadata=metadata, source_name=source_name,
+    )
+
+
+async def _chunk_and_index(
     text: str,
     metadata: Dict[str, Any],
     source_name: str,
     tenant: str,
-) -> tuple[int, int]:
+    dry_run: bool = False,
+    ingest_id: str = "",
+) -> Dict[str, Any]:
     """
-    The blocking half of an ingest (chunking, embedding, Qdrant upsert),
-    in one place so every caller keeps it off the event loop the same
-    way. Returns (chunks created, chunks indexed).
+    One ingest, in one place so every caller keeps the blocking parts off
+    the event loop the same way.
+
+    Chunking, embedding and the Qdrant upsert are blocking and go to a
+    thread. Writing the context of each chunk is a batch of model calls
+    and stays on the loop. `dry_run` runs everything up to the point
+    where money is spent and reports what it would cost.
     """
     metadata.setdefault("indexed_at", datetime.now(timezone.utc).isoformat())
-    chunks = create_chunker().chunk_text(
-        text=text,
-        metadata=metadata,
-        source_name=source_name,
+
+    # Registered before the cutting starts
+    if not dry_run:
+        await ingest_status.begin(ingest_id, 0, source_name, tenant)
+
+    chunks = await asyncio.to_thread(_chunk_document, text, metadata, source_name)
+    store = await asyncio.to_thread(get_vector_store)
+
+    if not dry_run and not await ingest_status.advance(ingest_id, 0, "indexing"):
+        await ingest_status.finish(ingest_id, "cancelled")
+        logger.info("Ingest of %s stopped before anything was indexed", source_name)
+        return {
+            "chunks_created": len(chunks), "chunks_indexed": 0,
+            "cancelled": True, "status": "cancelled",
+            "contextual_indexing": False, "context_calls": 0,
+        }
+
+    corpus_tokens = await _corpus_tokens(store, tenant)
+    with_context = contextual_indexing_enabled(tenant, corpus_tokens)
+
+    # An upload that died halfway already paid for the chunks it wrote: skipped, not bought again
+    done = (
+        await asyncio.to_thread(store.contextualized_chunk_ids, source_name, tenant)
+        if with_context else set()
     )
-    return len(chunks), get_vector_store().index_chunks(chunks, tenant=tenant)
+    pending = [chunk for chunk in chunks if chunk.chunk_id not in done]
+
+    # What this upload adds, and whether it is the one that takes the corpus over the line: 
+    # the operator is asked about the corpus left behind at that moment 
+    added_tokens = sum(estimate_tokens(chunk.content) for chunk in pending)
+    threshold = settings.contextual_indexing_threshold_tokens
+    crosses = bool(
+        threshold > 0 and corpus_tokens < threshold <= corpus_tokens + added_tokens
+    )
+
+    report: Dict[str, Any] = {
+        "chunks_created": len(chunks),
+        "chunks_already_indexed": len(chunks) - len(pending),
+        "contextual_indexing": with_context or crosses,
+        "context_calls": len(pending) if (with_context or crosses) else 0,
+        "prompt_cache": prompt_cache_mode() if (with_context or crosses) else None,
+        "corpus_tokens": corpus_tokens,
+        "corpus_tokens_after": corpus_tokens + added_tokens,
+        "threshold_tokens": threshold,
+        "crosses_threshold": crosses,
+    }
+
+    if dry_run:
+        if crosses:
+            counts = await asyncio.to_thread(store.chunk_counts, tenant)
+            report["chunks_left_behind"] = counts["chunks_plain"]
+        return {**report, "status": "estimated", "chunks_indexed": 0}
+    
+    with_context = with_context or crosses
+
+    await ingest_status.begin(
+        ingest_id, len(pending) if with_context else 0, source_name, tenant
+    )
+
+    async def still_wanted() -> bool:
+        """
+        Whether the run is still wanted, asked between chunks and from
+        several coroutines at once, so it reads and never writes.
+        """
+        return not await ingest_status.cancelled(ingest_id)
+
+    indexed = 0
+    situated = 0
+    for start in range(0, len(pending), _INGEST_BATCH):
+        batch = pending[start:start + _INGEST_BATCH]
+        
+        if with_context and not await allow_indexing_budget(tenant, len(batch)):
+            with_context = False
+            report["budget_exceeded"] = True
+            logger.warning(
+                "LLM budget exhausted for tenant %s: the rest of %s is indexed "
+                "without context", tenant, source_name,
+            )
+
+        if with_context:
+            situated += await contextualize(text, batch, should_continue=still_wanted)
+
+        written = await asyncio.to_thread(store.index_chunks, batch, tenant)
+        indexed += written
+        if written:
+            await get_corpus_size().add(
+                tenant, sum(estimate_tokens(chunk.content) for chunk in batch)
+            )
+
+        if not await ingest_status.advance(ingest_id, indexed):
+            report["cancelled"] = True
+            logger.info(
+                "Ingest of %s stopped on request after %d chunks", source_name, indexed
+            )
+            break
+
+    report["contextual_indexing"] = situated > 0
+    report["context_calls"] = situated
+
+    # A re-upload overwrites chunk by chunk, so what is left over is what this version of the document no longer has. 
+    resumed = len(pending) != len(chunks)
+    if chunks and not resumed and not report.get("cancelled"):
+        report["chunks_pruned"] = await asyncio.to_thread(
+            store.prune_removed_chunks,
+            source_name, [chunk.chunk_id for chunk in chunks], tenant,
+        )
+
+    report["chunks_contextualized"] = situated
+    await ingest_status.finish(ingest_id, "cancelled" if report.get("cancelled") else "done")
+
+    if crosses:
+        counts = await asyncio.to_thread(store.chunk_counts, tenant)
+        report["chunks_left_behind"] = counts["chunks_plain"]
+
+    return {
+        **report,
+        "status": "cancelled" if report.get("cancelled") else "completed",
+        "chunks_indexed": indexed,
+    }
+
+
+async def _corpus_tokens(store, tenant: str) -> int:
+    """
+    This tenant's corpus size, from the running total kept while indexing.
+
+    Absent means nothing has been counted yet, which is every deployment
+    that indexed before the total existed and any whose Redis was cleared.
+    Those rebuild it once, from the collection, and the total carries on
+    from there. Zero would have been the silent answer: a corpus that never
+    reaches the threshold and a feature that never turns on.
+    """
+    counter = get_corpus_size()
+    total = await counter.get(tenant)
+    if total is None:
+        total = await asyncio.to_thread(store.recount_tokens, tenant)
+        await counter.set(tenant, total)
+    return total
 
 
 # Document routes talk to Qdrant with the synchronous client, so the
@@ -532,7 +698,7 @@ def _chunk_and_index(
 # them in its threadpool and the loop stays free. Lower frequency than a
 # probe, identical effect on the worker serving renders next to them.
 @app.post("/api/v1/documents")
-def upload_document(
+async def upload_document(
     request: DocumentUploadRequest,
     background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(require_admin),
@@ -544,12 +710,20 @@ def upload_document(
     Processing happens in the background.
     """
     try:
+        source_name = request.metadata.get("title", "uploaded_document")
+
+        # What it would cost, before anything is spent
+        if request.dry_run:
+            return await _chunk_and_index(
+                request.content, request.metadata, source_name, auth.tenant,
+                dry_run=True,
+            )
+
         # Process synchronously for small documents, async for large
         content_length = len(request.content)
 
         if content_length < 10000:
-            source_name = request.metadata.get("title", "uploaded_document")
-            chunk_count, indexed = _chunk_and_index(
+            report = await _chunk_and_index(
                 request.content, request.metadata, source_name, auth.tenant
             )
 
@@ -558,14 +732,11 @@ def upload_document(
                 tenant=auth.tenant,
                 key=auth.key_fingerprint,
                 source=source_name,
-                chunks_indexed=indexed,
+                chunks_indexed=report["chunks_indexed"],
+                contextualized=report.get("chunks_contextualized", 0),
             )
 
-            return {
-                "status": "completed",
-                "chunks_created": chunk_count,
-                "chunks_indexed": indexed,
-            }
+            return report
         else:
             # Schedule for background processing
             background_tasks.add_task(
@@ -590,6 +761,8 @@ async def upload_document_file(
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
     url: Optional[str] = Form(None),
+    dry_run: bool = Form(False),
+    ingest_id: str = Form(""),
     auth: AuthContext = Depends(require_admin),
 ):
     """
@@ -619,11 +792,14 @@ async def upload_document_file(
         if file.filename:
             metadata["file_type"] = file.filename.rsplit(".", 1)[-1].lower()
 
-        # This route has to await the upload, so it stays a coroutine and
-        # hands the blocking part to a thread explicitly
-        chunk_count, indexed = await asyncio.to_thread(
-            _chunk_and_index, text, metadata, source_name, auth.tenant
+        report = await _chunk_and_index(
+            text, metadata, source_name, auth.tenant,
+            dry_run=dry_run, ingest_id=ingest_id,
         )
+
+        if dry_run:
+            return {**report, "source": source_name, "extractor": extractor,
+                    "extracted_chars": len(text)}
 
         get_audit_logger().log(
             "document_upload",
@@ -633,16 +809,15 @@ async def upload_document_file(
             file_name=file.filename,
             extractor=extractor,
             extracted_chars=len(text),
-            chunks_indexed=indexed,
+            chunks_indexed=report["chunks_indexed"],
+            contextualized=report.get("chunks_contextualized", 0),
         )
 
         return {
-            "status": "completed",
+            **report,
             "source": source_name,
             "extractor": extractor,
             "extracted_chars": len(text),
-            "chunks_created": chunk_count,
-            "chunks_indexed": indexed,
         }
 
     except Exception as e:
@@ -650,40 +825,248 @@ async def upload_document_file(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _process_document_background(
+async def _process_document_background(
     content: str,
     metadata: Dict[str, Any],
     tenant: str,
 ):
-    """Background task for processing large documents (threadpool)."""
+    """Background task for processing large documents."""
     try:
-        chunk_count, _ = _chunk_and_index(
+        report = await _chunk_and_index(
             content,
             metadata,
             metadata.get("title", "uploaded_document"),
             tenant,
         )
-        logger.info(f"Background document processing completed: {chunk_count} chunks")
+        logger.info(
+            "Background document processing completed: %d chunks, %d with context",
+            report["chunks_indexed"], report.get("chunks_contextualized", 0),
+        )
 
     except Exception as e:
         logger.error(f"Background document processing failed: {e}")
 
 
-@app.get("/api/v1/documents")
-def list_documents(auth: AuthContext = Depends(require_admin)):
+@app.get("/api/v1/documents/ingest/{ingest_id}")
+async def read_ingest(ingest_id: str, auth: AuthContext = Depends(require_admin)):
     """
-    List the documents in the tenant's knowledge base, with chunk counts.
+    How far a running ingest has got.
+
+    A large document is thousands of model calls behind one request that
+    answers only at the end. Without this the operator cannot tell a long
+    job from a stuck one, which is the whole difference between waiting and
+    pulling the plug.
+    """
+    status = await ingest_status.read(ingest_id, auth.tenant)
+    if not status:
+        return {"phase": "unknown", "done": 0, "total": 0}
+    return status
+
+
+@app.post("/api/v1/documents/ingest/{ingest_id}/cancel")
+async def cancel_ingest(ingest_id: str, auth: AuthContext = Depends(require_admin)):
+    """
+    Ask a running ingest to stop.
+
+    Closing the browser does not do this: the server is never told, and
+    goes on spending to the end of the document. The run reads this flag
+    between batches, so it stops with every completed batch written down
+    and nothing half-indexed.
+    """
+    found = await ingest_status.cancel(ingest_id, auth.tenant)
+    return {"cancelled": found, "ingest_id": ingest_id}
+
+
+@app.get("/api/v1/documents")
+async def list_documents(auth: AuthContext = Depends(require_admin)):
+    """
+    List the documents in the tenant's knowledge base, with chunk counts
+    and the state of the corpus they form.
     """
     try:
-        documents = get_vector_store().list_documents(tenant=auth.tenant)
+        store = await asyncio.to_thread(get_vector_store)
+        documents = await asyncio.to_thread(store.list_documents, auth.tenant)
+        counts = await asyncio.to_thread(store.chunk_counts, auth.tenant)
+        corpus_tokens = await _corpus_tokens(store, auth.tenant)
+
         return {
             "tenant": auth.tenant,
             "documents": documents,
             "count": len(documents),
+            "corpus": {
+                **counts,
+                "tokens": corpus_tokens,
+                "threshold_tokens": settings.contextual_indexing_threshold_tokens,
+                "contextual_indexing": contextual_indexing_enabled(
+                    auth.tenant, corpus_tokens
+                ),
+                "budget_per_hour": settings.llm_budget_per_hour or None,
+            },
         }
     except Exception as e:
         logger.error(f"Document listing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class BackfillRequest(BaseModel):
+    """Bring the chunks indexed before the threshold up to the rest."""
+    dry_run: bool = Field(
+        default=False,
+        description="Report what the backfill would cost without spending it"
+    )
+    ingest_id: str = Field(
+        default="",
+        description="Names this run so it can be stopped through the same "
+                    "endpoint an upload uses. Without one it cannot be stopped"
+    )
+    max_chunks: int = Field(
+        default=500, ge=1, le=5000,
+        description="Chunks to work through in this run. A large corpus is "
+                    "several runs: each one picks up where the last stopped"
+    )
+
+
+@app.post("/api/v1/documents/backfill")
+async def backfill_context(
+    request: BackfillRequest,
+    auth: AuthContext = Depends(require_admin),
+):
+    """
+    Index the chunks that were stored without their context behind it now.
+
+    Never automatic: going over a whole knowledge base with the model is a
+    different order of spend from an upload, and a bill nobody chose is
+    the thing this project does not do. It says what it will cost, it goes
+    through the same per-tenant cap as everything else, it skips what is
+    already done, and it updates points in place so an interrupted run
+    resumed later neither duplicates nor skips.
+    """
+    try:
+        store = await asyncio.to_thread(get_vector_store)
+        plain = await asyncio.to_thread(
+            store.plain_points, auth.tenant, request.max_chunks
+        )
+        counts = await asyncio.to_thread(store.chunk_counts, auth.tenant)
+
+        report: Dict[str, Any] = {
+            "tenant": auth.tenant,
+            "chunks_plain": counts["chunks_plain"],
+            "chunks_in_this_run": len(plain),
+            "context_calls": len(plain),
+            "prompt_cache": prompt_cache_mode(),
+        }
+
+        if request.dry_run:
+            return {**report, "status": "estimated", "chunks_contextualized": 0}
+
+        if not plain:
+            return {**report, "status": "completed", "chunks_contextualized": 0}
+
+        await ingest_status.begin(
+            request.ingest_id, len(plain), "backfill", auth.tenant
+        )
+        done, stopped_on_budget = await _backfill_documents(
+            store, plain, auth.tenant, request.ingest_id
+        )
+        await ingest_status.finish(request.ingest_id)
+        after = await asyncio.to_thread(store.chunk_counts, auth.tenant)
+
+        if not done and stopped_on_budget:
+            raise HTTPException(
+                status_code=429,
+                detail=f"The hourly cap (LLM_BUDGET_PER_HOUR="
+                       f"{settings.llm_budget_per_hour}) has nothing left for "
+                       f"this run. Nothing was indexed. Run it again when the "
+                       f"window resets: it picks up where it stopped.",
+            )
+
+        get_audit_logger().log(
+            "context_backfill",
+            tenant=auth.tenant,
+            key=auth.key_fingerprint,
+            chunks_contextualized=done,
+            chunks_plain=after["chunks_plain"],
+        )
+
+        return {
+            **report,
+            "status": "completed" if after["chunks_plain"] == 0 else "partial",
+            "chunks_contextualized": done,
+            "chunks_plain_remaining": after["chunks_plain"],
+            **({"budget_exceeded": True} if stopped_on_budget else {}),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Backfill failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _backfill_documents(
+    store,
+    plain: List[Dict[str, Any]],
+    tenant: str,
+    ingest_id: str = "",
+) -> tuple[int, bool]:
+    """
+    Situate and re-index the given points, one source document at a time.
+
+    A chunk is placed inside its document, and the document is what its own
+    chunks say: nothing keeps the original file after an ingest, and the
+    chunks are a partition of it. Ordering them by the index in their id
+    puts the document back in reading order.
+
+    The cap is asked per batch, immediately before that batch is spent, so
+    a run that cannot be afforded stops instead of charging for generations
+    it will never make. Returns (chunks done, whether the cap stopped it).
+    """
+    async def still_wanted() -> bool:
+        """Asked between chunks, from several coroutines: reads, never writes."""
+        return not await ingest_status.cancelled(ingest_id)
+
+    by_source: Dict[str, List[Dict[str, Any]]] = {}
+    for point in plain:
+        by_source.setdefault(point["source_document"], []).append(point)
+
+    done = 0
+    for source, points in by_source.items():
+        points.sort(key=lambda p: _chunk_index(p["chunk_id"]))
+        document = "\n\n".join(point["content"] for point in points)
+
+        for start in range(0, len(points), _INGEST_BATCH):
+            window = points[start:start + _INGEST_BATCH]
+            if not await ingest_status.advance(ingest_id, done):
+                logger.info("Backfill stopped on request after %d chunks", done)
+                return done, False
+            if not await allow_indexing_budget(tenant, len(window)):
+                logger.warning(
+                    "LLM budget exhausted for tenant %s: backfill stops with "
+                    "%d chunks done", tenant, done,
+                )
+                return done, True
+
+            chunks = [
+                SemanticChunk(
+                    content=point["content"],
+                    metadata={},
+                    chunk_id=point["chunk_id"],
+                    source_document=source,
+                )
+                for point in window
+            ]
+            await contextualize(document, chunks, should_continue=still_wanted)
+            done += await asyncio.to_thread(
+                store.recontextualize, chunks, [point["id"] for point in window]
+            )
+
+    return done, False
+
+
+def _chunk_index(chunk_id: str) -> int:
+    """The position a chunk id carries, or last when it carries none."""
+    _, _, tail = str(chunk_id).rpartition("_")
+    return int(tail) if tail.isdigit() else 1 << 30
 
 
 class DocumentSearchRequest(BaseModel):
@@ -719,6 +1102,7 @@ async def search_documents(
                     "score": round(r.score, 4),
                     "source_document": r.metadata.get("source_document"),
                     "url": r.metadata.get("url"),
+                    "contextualized": bool(r.metadata.get("contextualized")),
                 }
                 for r in results
             ],
@@ -729,7 +1113,7 @@ async def search_documents(
 
 
 @app.delete("/api/v1/documents/{source_name}")
-def delete_document(
+async def delete_document(
     source_name: str,
     auth: AuthContext = Depends(require_admin),
 ):
@@ -737,9 +1121,15 @@ def delete_document(
     Delete a document from the tenant's knowledge base by source name.
     """
     try:
-        success = get_vector_store().delete_by_source(source_name, tenant=auth.tenant)
+        store = await asyncio.to_thread(get_vector_store)
+        removed_tokens = await asyncio.to_thread(
+            store.delete_by_source, source_name, auth.tenant
+        )
 
-        if success:
+        if removed_tokens >= 0:
+            if removed_tokens:
+                await get_corpus_size().add(auth.tenant, -removed_tokens)
+
             get_audit_logger().log(
                 "document_delete",
                 tenant=auth.tenant,

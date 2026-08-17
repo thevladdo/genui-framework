@@ -1,0 +1,75 @@
+# One case per line: "question" is asked, "expect" is a fragment of the passage that must
+# come back. Matching is whitespace and case insensitive, so keep the fragment short and
+# copy it from the document. It must appear exactly once in the whole corpus, otherwise a
+# hit on the wrong document would be scored as a success. Lines starting with # are ignored.
+{"question": "What was Northwind Logistics operating margin in fiscal 2025?", "expect": "Operating margin rose to 11.4 percent"}
+{"question": "How much dividend per share did Northwind pay for fiscal 2025?", "expect": "dividend of 0.42 euro per share"}
+{"question": "What share of the Northwind fleet was electric at the end of fiscal 2025?", "expect": "38 percent of the vehicles were electric"}
+{"question": "Which Northwind depot moved the most parcels in fiscal 2025?", "expect": "Malmo handled the highest volume"}
+{"question": "How many Northwind depots are still without charging installed?", "expect": "The remaining five are scheduled"}
+{"question": "When did the Northwind fiscal year 2025 end?", "expect": "the year that closed on"}
+{"question": "What was the Northwind operating margin in fiscal 2024?", "expect": "Operating margin stood at 8.9 percent"}
+{"question": "Which Northwind depot was busiest in fiscal 2024?", "expect": "Gothenburg was the busiest depot"}
+{"question": "Why did Northwind pay no dividend for fiscal 2024?", "expect": "the new sorting hall in"}
+{"question": "What is Southwind Freight operating margin?", "expect": "Operating margin came in at 7.2 percent"}
+{"question": "How much of the Southwind fleet is electric?", "expect": "12 percent of them are electric"}
+{"question": "Which routes do Northwind electric vans get assigned to?", "expect": "assigned to routes under 90 kilometres"}
+{"question": "How long does a Northwind depot hold a refused parcel before returning it?", "expect": "held for 10 working days"}
+{"question": "What does GFR stand for in the Orbit support policy?", "expect": "Guaranteed First Response"}
+{"question": "How fast is the first human reply on the Orbit Priority tier?", "expect": "the GFR drops to 2 business hours"}
+{"question": "What does an Orbit account get when its response commitment is missed twice in a month?", "expect": "credit of 5 percent of that month's"}
+{"question": "Do automated replies count towards the Orbit response commitment?", "expect": "Automated acknowledgements do not count"}
+{"question": "What is the response commitment on an Orbit Enterprise agreement?", "expect": "The GFR is 30 minutes"}
+{"question": "What credit does an Orbit Enterprise account get for a single missed commitment?", "expect": "15 percent of that month's fee"}
+{"question": "In what order does Orbit evaluate routing rules?", "expect": "evaluated top to bottom and the first match wins"}
+{"question": "Does merging a duplicate Orbit ticket restart the response clock?", "expect": "Ticket merge no longer resets the response clock"}
+{"question": "What is the largest batch Atlas accepts on the Growth plan?", "expect": "may not exceed 500 megabytes"}
+{"question": "How many failed reconnections before the Atlas connector needs a manual restart?", "expect": "gives up after 5 consecutive failures"}
+{"question": "How long does Atlas keep raw events on the Growth plan?", "expect": "Raw events are kept for 30 days"}
+{"question": "What is the largest batch Atlas accepts on the Enterprise plan?", "expect": "A single batch may reach 4 gigabytes"}
+{"question": "How many times does an Atlas Enterprise connector retry before it stops?", "expect": "retries 50 times with exponential backoff"}
+{"question": "How quickly are Atlas deletion requests executed across replicas?", "expect": "executed within 72 hours across every replica"}
+{"question": "How long does the Atlas connector wait before its first retry?", "expect": "The first retry waits one second"}
+{"question": "What happens to buffered Atlas events when an application crashes?", "expect": "An unclean shutdown loses the buffer"}
+{"question": "How many rows can a single Atlas query return?", "expect": "returns at most 50 thousand rows"}
+{"question": "What is the cap on the Northwind fuel adjustment within a quarter?", "expect": "capped at 4 percent in either direction"}
+{"question": "How much does Northwind charge for an out-of-area delivery?", "expect": "surcharge of 1.80 euro"}
+{"question": "What service credit does Northwind pay when it misses the transit commitment?", "expect": "service credit of 2 percent of"}
+{"question": "How long does a Northwind customer have to claim a service credit?", "expect": "claimed by the customer within 60 days"}
+{"question": "How are Northwind volume bands measured?", "expect": "rolling thirteen-week average"}
+{"question": "How far did Northwind emissions per parcel fall?", "expect": "by 14 percent, because volume grew"}
+{"question": "What share of Northwind depot electricity comes from rooftop generation?", "expect": "about 11 percent of depot consumption"}
+{"question": "By when must a Northwind damage claim be raised?", "expect": "raised within 7 days of delivery"}
+{"question": "How long before a missing Northwind parcel is treated as lost?", "expect": "no earlier than 21 days after the tender date"}
+{"question": "How many roles does Orbit have?", "expect": "There are four roles"}
+{"question": "Can an Orbit administrator read tickets in a queue they do not belong to?", "expect": "cannot read a ticket in a queue they are not a member of"}
+{"question": "How often can an Orbit workspace export run?", "expect": "at most once a day per workspace"}
+{"question": "How long is the grace period before an Orbit workspace deletion becomes final?", "expect": "irreversible after a seven day grace period"}
+{"question": "How many times does Orbit retry a failed webhook delivery?", "expect": "retried six times over roughly an hour"}
+{"question": "Is the Orbit API rate limit applied per key or per workspace?", "expect": "rate limited per workspace, not per key"}
+{"question": "How many Atlas queries can run at the same time on Growth?", "expect": "eight at a time per account"}
+{"question": "What is the daily event cap on the Atlas Free plan?", "expect": "capped at 50 thousand events a day"}
+{"question": "How long does the Atlas Free plan keep events?", "expect": "keeps events for three days"}
+{"question": "Which Atlas plan includes a dead letter queue?", "expect": "the only plan with a dead letter queue"}
+{"question": "Does Atlas support certificate pinning?", "expect": "pinning is not supported"}
+{"question": "When are Atlas encryption keys rotated?", "expect": "rotated on a fixed schedule and on demand after a personnel change"}
+{"question": "How quickly are events queryable in Helios compared with Atlas?", "expect": "queryable in minutes, not seconds"}
+# Cases whose answer sits inside a structure the sentence splitter does not see:
+# a table row, a fenced block, or the sentence after an abbreviation. Tagged so
+# the report can say what structure costs, separately from prose.
+{"group": "structure", "question": "What is the first response target for an Orbit S1 incident?", "expect": "S1 service down | 15 minutes | 4 hours"}
+{"group": "structure", "question": "What credit does an Orbit S2 incident carry when the target is missed?", "expect": "S2 major degradation | 1 hour | 12 hours | 10 percent"}
+{"group": "structure", "question": "Which days and hours does the Orbit Priority plan cover?", "expect": "Priority | Mon to Sat | 07:00 to 22:00"}
+{"group": "structure", "question": "Who is engaged at four times the Orbit response target?", "expect": "4x the response target | head of support"}
+{"group": "structure", "question": "When does the clock for an Orbit root cause report start?", "expect": "the clock for it starts at restoration"}
+{"group": "structure", "question": "What is the cap on cumulative Orbit service credits in a month?", "expect": "capped at 30 percent of the monthly"}
+{"group": "structure", "question": "How many events can one Atlas request carry?", "expect": "Max. 500 per request"}
+{"group": "structure", "question": "What does the Atlas error code batch_too_large mean?", "expect": "More than 500 events in one request"}
+{"group": "structure", "question": "What should a client do when Atlas answers key_revoked?", "expect": "Fetch the current key and retry once"}
+{"group": "structure", "question": "Which header carries the Atlas write key?", "expect": "X-Atlas-Key: $ATLAS_WRITE_KEY"}
+{"group": "structure", "question": "Until when does the Atlas v1 API accept writes?", "expect": "v1 accepts writes until 30 June 2027"}
+{"group": "structure", "question": "What does Northwind charge for a 20 kg parcel in band 2?", "expect": "20 kg | 11.40 | 10.20 | 8.95"}
+{"group": "structure", "question": "What is the Northwind zone C price for a 10 kg parcel?", "expect": "C | Southern and Central Europe | 13.75 | 27.10"}
+{"group": "structure", "question": "What does Northwind charge when a barcode cannot be read?", "expect": "Manual handling | 2.25 | No barcode readable"}
+{"group": "structure", "question": "Is the Northwind zone D price fixed?", "expect": "quoted, approx., and is confirmed at tender"}
+{"group": "structure", "question": "Above what weight does a Northwind parcel become freight?", "expect": "Above 31.5 kg a parcel is freight"}

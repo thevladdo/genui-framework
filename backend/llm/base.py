@@ -23,6 +23,11 @@ ToolHandler = Callable[[str, Dict[str, Any]], Awaitable[str]]
 class LLMChatClient(ABC):
     """Async chat-completion client constrained to JSON output."""
 
+    # How this client reuses a repeated prompt prefix:
+    #   "explicit"  the client marks the prefix and the provider bills it once
+    #   "prefix"    the prefix is sent first and identical every time, so an endpoint that caches prefixes on its own reuses it 
+    prompt_cache = "prefix"
+
     @abstractmethod
     async def complete_json(
         self,
@@ -44,6 +49,29 @@ class LLMChatClient(ABC):
         Returns:
             The raw response text (expected to be JSON).
         """
+
+    async def complete_json_cached(
+        self,
+        system: str,
+        cached_prefix: str,
+        user: str,
+    ) -> str:
+        """
+        Like complete_json, with `cached_prefix` declared as the part that
+        repeats identically across a batch of calls.
+
+        Used where one long text is the context of many small questions
+        about it. Paying for that text once instead of once per question
+        is the difference between a technique being affordable and being
+        an order of magnitude more expensive.
+
+        Default: fold the prefix into the system prompt, first and
+        unchanged. Correct on every provider, and an endpoint that caches
+        prompt prefixes by itself (OpenAI, vLLM) still bills the repeat
+        once. A provider that caches nothing pays it every time: more
+        expensive, never broken.
+        """
+        return await self.complete_json(f"{system}\n\n{cached_prefix}", user)
 
     async def complete_json_with_tools(
         self,

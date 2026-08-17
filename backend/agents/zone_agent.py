@@ -710,7 +710,7 @@ Pinned images are the exception, for the reason given on
         try:
             return await self.vector_store.search_async(
                 query=search_query,
-                top_k=10,
+                top_k=settings.top_k_retrieval,
                 tenant=request.tenant,
             )
         except EmbeddingConfigError:
