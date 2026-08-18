@@ -64,6 +64,7 @@ class SemanticChunk:
     start_char: Optional[int] = None
     end_char: Optional[int] = None
     context: Optional[str] = None
+    point_id: Optional[str] = None
 
 
 class SemanticChunker:

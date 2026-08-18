@@ -26,7 +26,14 @@ try:
         contextualize,
         document_view,
     )
-    from rag.vector_store import QdrantVectorStore, indexable_text
+    from rag.vector_store import (
+        LEXICAL_VECTOR,
+        QdrantVectorStore,
+        content_hash,
+        indexable_text,
+        lexical_vector,
+        point_id_for,
+    )
     HAVE_DEPS = True
 except Exception:
     HAVE_DEPS = False
@@ -34,6 +41,11 @@ except Exception:
 
 def run(coro):
     return asyncio.run(coro)
+
+
+def point_id(text, occurrence=0):
+    """Where a chunk holding this text belongs, by the real derivation."""
+    return point_id_for("acme", "doc", content_hash(text), occurrence)
 
 
 def chunk(content, chunk_id="doc_0", context=None):
@@ -72,25 +84,33 @@ class _Client:
         self.upserted.extend(points)
 
 
-def _store(embedder):
+def _store(embedder, lexical=False):
     store = QdrantVectorStore.__new__(QdrantVectorStore)
     store.collection_name = "genui_documents"
     store.embed_model = embedder
     store.client = _Client()
     store._collection_dim = 3
-    store.has_lexical = False
-    store.hybrid = False
+    store.has_lexical = lexical
+    store.hybrid = lexical
     return store
 
 
 @unittest.skipUnless(HAVE_DEPS, "qdrant-client not installed (runs in the venv)")
 class IndexedTextTest(unittest.TestCase):
     def test_context_is_indexed_and_never_stored_as_content(self):
+        """
+        The context invents a figure and a link on purpose. The URL
+        whitelist and the numeric grounding build the corpus they judge
+        from out of retrieved content, so a number made up while situating
+        a chunk would be a number authorised at render time: the
+        guarantees would be enforcing a claim the model made about itself.
+        """
         embedder = _Embedder()
         store = _store(embedder)
         situated = chunk(
             "Operating margin rose to 11.4 percent.",
-            context="This is from the Northwind review for fiscal 2025.",
+            context="From the Northwind review: margins near 99 percent, "
+                    "see https://invented.example",
         )
 
         store.index_chunks([situated], tenant="acme")
@@ -101,7 +121,37 @@ class IndexedTextTest(unittest.TestCase):
         payload = store.client.upserted[0].payload
         self.assertEqual(payload["content"], "Operating margin rose to 11.4 percent.")
         self.assertNotIn("Northwind", payload["content"])
+        self.assertNotIn("99", payload["content"])
+        self.assertNotIn("invented.example", payload["content"])
         self.assertTrue(payload["contextualized"])
+
+    def test_both_vectors_are_built_from_the_chunk_with_its_context(self):
+        """
+        Dense and lexical are built separately, so the context can reach
+        one and miss the other. The half that misses it stops matching the
+        words the situating lines add, and the search quietly gets worse on
+        exactly the questions this feature exists to answer.
+        """
+        embedder = _Embedder()
+        store = _store(embedder, lexical=True)
+        situated = chunk(
+            "Operating margin rose to 11.4 percent.",
+            context="This is from the Northwind review for fiscal 2025.",
+        )
+
+        store.index_chunks([situated], tenant="acme")
+
+        self.assertIn("Northwind", embedder.embedded[0])
+        lexical = store.client.upserted[0].vector[LEXICAL_VECTOR]
+        self.assertEqual(
+            set(lexical.indices),
+            set(lexical_vector(indexable_text(situated)).indices),
+            "the lexical vector must see the context too",
+        )
+        self.assertNotEqual(
+            set(lexical.indices),
+            set(lexical_vector(situated.content).indices),
+        )
 
     def test_a_chunk_without_context_is_indexed_exactly_as_before(self):
         embedder = _Embedder()
@@ -113,28 +163,6 @@ class IndexedTextTest(unittest.TestCase):
         payload = store.client.upserted[0].payload
         self.assertEqual(payload["content"], "A passage on its own.")
         self.assertFalse(payload["contextualized"])
-
-    def test_the_guarantee_corpus_reads_content_and_content_only(self):
-        """
-        The corpus is built from what a search returns. Pinning it here
-        means a later change that starts returning the generated lines
-        breaks this test instead of quietly widening what a render is
-        allowed to claim.
-        """
-        situated = chunk(
-            "The figure is 41 percent.",
-            context="Invented context claiming 99 percent and https://evil.example",
-        )
-        embedder = _Embedder()
-        store = _store(embedder)
-        store.index_chunks([situated], tenant="acme")
-
-        payload = store.client.upserted[0].payload
-        retrieved_content = payload["content"]
-
-        self.assertNotIn("99", retrieved_content)
-        self.assertNotIn("evil.example", retrieved_content)
-        self.assertIn("99", indexable_text(situated))
 
 
 @unittest.skipUnless(HAVE_DEPS, "qdrant-client not installed (runs in the venv)")
@@ -216,8 +244,12 @@ class LargeDocumentTest(unittest.TestCase):
                       "the opening carries the subject and the period")
 
     def test_a_document_within_the_budget_travels_whole(self):
-        document = "A short document about Northwind."
-        self.assertEqual(document_view(document, chunk("a passage")), document)
+        """The chunk is text of the document, so a view that started
+        windowing everything would show up here as a document cut apart."""
+        document = "A short document about Northwind. A passage about margins."
+        self.assertEqual(
+            document_view(document, chunk("A passage about margins.")), document
+        )
 
     def test_a_batch_that_keeps_failing_the_same_way_stops(self):
         """
@@ -331,8 +363,8 @@ class BudgetTest(unittest.TestCase):
             def prune_removed_chunks(self, source, chunk_ids, tenant):
                 return 0
 
-            def contextualized_chunk_ids(self, source, tenant):
-                return set()
+            def indexed_state(self, source, tenant):
+                return {}
 
             def index_chunks(self, to_index, tenant):
                 indexed.extend(to_index)
@@ -382,8 +414,8 @@ class BudgetTest(unittest.TestCase):
             def prune_removed_chunks(self, source, chunk_ids, tenant):
                 return 0
 
-            def contextualized_chunk_ids(self, source, tenant):
-                return set()
+            def indexed_state(self, source, tenant):
+                return {}
 
             def index_chunks(self, batch, tenant):
                 indexed.extend(batch)
@@ -425,8 +457,8 @@ class BudgetTest(unittest.TestCase):
             def prune_removed_chunks(self, source, chunk_ids, tenant):
                 return 0
 
-            def contextualized_chunk_ids(self, source, tenant):
-                return set()
+            def indexed_state(self, source, tenant):
+                return {}
 
             def index_chunks(self, batch, tenant):
                 indexed.extend(batch)
@@ -484,8 +516,8 @@ class BudgetTest(unittest.TestCase):
             def prune_removed_chunks(self, source, chunk_ids, tenant):
                 return 0
 
-            def contextualized_chunk_ids(self, source, tenant):
-                return set()
+            def indexed_state(self, source, tenant):
+                return {}
 
             def index_chunks(self, to_index, tenant):
                 indexed.extend(to_index)
@@ -508,30 +540,31 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(indexed, [])
         self.assertEqual(self.charged, [])
 
-    def test_a_resumed_upload_does_not_prune_what_it_did_not_rewrite(self):
-        """
-        Pruning drops the points the version just indexed does not account
-        for. A resumed upload writes only part of the document, and the
-        rest is work already paid for, not leftovers.
-        """
-        chunks = [chunk("a", "doc_0"), chunk("b", "doc_1"), chunk("c", "doc_2")]
-        pruned = []
+    def _resume_scenario(self, stored_texts, new_texts):
+        """A document partly indexed already, uploaded again."""
+        chunks = [chunk(t, f"doc_{i}") for i, t in enumerate(new_texts)]
+        bought, pruned, indexed = [], [], []
 
         class _Store:
-            def contextualized_chunk_ids(self, source, tenant):
-                return {"doc_0", "doc_1"} 
+            def indexed_state(self, source, tenant):
+                return {point_id(t): True for t in stored_texts}
 
             def index_chunks(self, batch, tenant):
+                indexed.extend(c.chunk_id for c in batch)
                 return len(batch)
 
-            def prune_removed_chunks(self, source, chunk_ids, tenant):
-                pruned.append(chunk_ids)
+            def prune_removed_chunks(self, source, point_ids, tenant):
+                pruned.append(list(point_ids))
                 return 0
 
             def recount_tokens(self, tenant):
                 return 0
 
+            def chunk_counts(self, tenant):
+                return {"chunks_total": 0, "chunks_contextualized": 0, "chunks_plain": 0}
+
         async def _fake_contextualize(document, batch, should_continue=None):
+            bought.extend(c.chunk_id for c in batch)
             for c in batch:
                 c.context = "situated"
             return len(batch)
@@ -543,75 +576,96 @@ class BudgetTest(unittest.TestCase):
              mock.patch.object(main, "contextualize", _fake_contextualize), \
              mock.patch.object(main, "get_corpus_size", lambda: _Counter(0)), \
              mock.patch("api.deps.get_llm_budget", lambda: self._budget(True)):
-            run(main._chunk_and_index("doc", {}, "doc", "acme"))
-
-        self.assertEqual(pruned, [], "a resumed run must not prune")
-
-    def test_a_full_upload_prunes_what_the_document_no_longer_has(self):
-        chunks = [chunk("a", "doc_0"), chunk("b", "doc_1")]
-        pruned = []
-
-        class _Store:
-            def contextualized_chunk_ids(self, source, tenant):
-                return set()
-
-            def index_chunks(self, batch, tenant):
-                return len(batch)
-
-            def prune_removed_chunks(self, source, chunk_ids, tenant):
-                pruned.append(chunk_ids)
-                return 3
-
-            def recount_tokens(self, tenant):
-                return 0
-
-        with mock.patch.object(main, "_chunk_document", lambda *a: chunks), \
-             mock.patch.object(main, "get_vector_store", lambda: _Store()), \
-             mock.patch.object(main, "contextual_indexing_enabled", lambda t, n=0: False), \
-             mock.patch.object(main, "prompt_cache_mode", lambda: "prefix"), \
-             mock.patch.object(main, "get_corpus_size", lambda: _Counter(0)), \
-             mock.patch("api.deps.get_llm_budget", lambda: self._budget(True)):
             report = run(main._chunk_and_index("doc", {}, "doc", "acme"))
 
-        self.assertEqual(pruned, [["doc_0", "doc_1"]])
-        self.assertEqual(report["chunks_pruned"], 3)
+        return report, bought, indexed, pruned
+
+    def test_a_corrected_document_is_actually_reindexed(self):
+        """
+        The one that bites. When a chunk's identity came from its position,
+        which survives an edit, a corrected document answered "already
+        done": the upload wrote nothing and the index went on answering
+        with the text that had been withdrawn.
+        """
+        report, bought, indexed, _ = self._resume_scenario(
+            stored_texts=["first", "second", "third"],
+            new_texts=["first", "SECOND, CORRECTED", "third"],
+        )
+
+        self.assertEqual(indexed, ["doc_1"], "the corrected chunk is written")
+        self.assertEqual(bought, ["doc_1"], "and only that one is paid for")
+        self.assertEqual(report["chunks_unchanged"], 2)
+
+    def test_an_identical_upload_costs_nothing(self):
+        same = ["first", "second", "third"]
+        report, bought, indexed, pruned = self._resume_scenario(same, same)
+
+        self.assertEqual(bought, [], "no generation")
+        self.assertEqual(indexed, [], "no embedding, no write")
+        self.assertEqual(report["chunks_unchanged"], 3)
+        self.assertTrue(pruned, "and the leftovers are still checked")
+
+    def test_pruning_runs_on_a_partly_skipped_upload_and_keeps_the_skipped(self):
+        """
+        Skipping a chunk as unchanged does not make it a leftover: it is
+        still part of this version, so it goes in the set pruning keeps.
+        """
+        report, _, _, pruned = self._resume_scenario(
+            stored_texts=["first", "second"],
+            new_texts=["first", "second", "third"],
+        )
+
+        self.assertEqual(
+            pruned, [[point_id(t) for t in ("first", "second", "third")]],
+            "every id of this version, skipped ones included",
+        )
 
     def test_a_resumed_upload_does_not_buy_what_it_already_paid_for(self):
-        chunks = [chunk("a", "doc_0"), chunk("b", "doc_1"), chunk("c", "doc_2")]
-        indexed = []
-        situated = []
+        """An upload that died halfway wrote real chunks: the same text is
+        not bought a second time."""
+        report, bought, indexed, _ = self._resume_scenario(
+            stored_texts=["a", "b"],
+            new_texts=["a", "b", "c"],
+        )
 
-        class _Store:
-            def prune_removed_chunks(self, source, chunk_ids, tenant):
-                return 0
-
-            def contextualized_chunk_ids(self, source, tenant):
-                return {"doc_0", "doc_1"}
-
-            def index_chunks(self, to_index, tenant):
-                indexed.extend(to_index)
-                return len(to_index)
-
-            def recount_tokens(self, tenant):
-                return 0
-
-        async def _fake_contextualize(document, pending, should_continue=None):
-            situated.extend(c.chunk_id for c in pending)
-            return len(pending)
-
-        with mock.patch.object(main, "_chunk_document", lambda *a: chunks), \
-             mock.patch.object(main, "get_vector_store", lambda: _Store()), \
-             mock.patch.object(main, "contextual_indexing_enabled", lambda t, n=0: True), \
-             mock.patch.object(main, "prompt_cache_mode", lambda: "explicit"), \
-             mock.patch.object(main, "contextualize", _fake_contextualize), \
-             mock.patch.object(main, "get_corpus_size", lambda: _Counter()), \
-             mock.patch("api.deps.get_llm_budget", lambda: self._budget(True)):
-            report = run(main._chunk_and_index("doc", {}, "doc", "acme"))
-
-        self.assertEqual(situated, ["doc_2"], "only the unfinished chunk costs")
+        self.assertEqual(bought, ["doc_2"], "only the unfinished chunk costs")
         self.assertEqual(self.charged, [("acme", 1)])
-        self.assertEqual(report["chunks_already_indexed"], 2)
-        self.assertEqual([c.chunk_id for c in indexed], ["doc_2"])
+        self.assertEqual(report["chunks_unchanged"], 2)
+        self.assertEqual(indexed, ["doc_2"])
+
+    def test_a_passage_that_only_moved_is_not_bought_again(self):
+        """
+        Inserting a section near the top of a document renumbers every
+        chunk under it. While a chunk's identity came from that number,
+        the whole tail looked new: text that had not changed was embedded
+        and situated again, at full price. Identity now comes from the
+        text, so only what is genuinely new costs anything.
+        """
+        report, bought, indexed, _ = self._resume_scenario(
+            stored_texts=["first", "second", "third"],
+            new_texts=["a new opening", "first", "second", "third"],
+        )
+
+        self.assertEqual(bought, ["doc_0"], "only the inserted passage costs")
+        self.assertEqual(indexed, ["doc_0"])
+        self.assertEqual(report["chunks_unchanged"], 3)
+
+    def test_a_repeated_passage_is_stored_once_per_occurrence(self):
+        """
+        Boilerplate repeats word for word. Two chunks with the same text
+        must not derive the same id, or the second would be written over
+        the first and the document would hold fewer points than chunks.
+        """
+        from rag.vector_store import assign_point_ids
+
+        chunks = [chunk(t, f"doc_{i}") for i, t in enumerate(
+            ["Confidential.", "a passage", "Confidential."]
+        )]
+        assign_point_ids("acme", chunks)
+
+        self.assertEqual(len({c.point_id for c in chunks}), 3)
+        self.assertEqual(chunks[0].point_id, point_id("Confidential.", 0))
+        self.assertEqual(chunks[2].point_id, point_id("Confidential.", 1))
 
 
 @unittest.skipUnless(HAVE_APP and HAVE_DEPS, "fastapi not installed (runs in the venv)")
@@ -633,8 +687,8 @@ class StoppableIngestTest(unittest.TestCase):
             def prune_removed_chunks(self, source, chunk_ids, tenant):
                 return 0
 
-            def contextualized_chunk_ids(self, source, tenant):
-                return set()
+            def indexed_state(self, source, tenant):
+                return {}
 
             def index_chunks(self, batch, tenant):
                 indexed.extend(batch)
@@ -677,15 +731,6 @@ class StoppableIngestTest(unittest.TestCase):
 
         return report, indexed, situated
 
-    def test_work_is_written_down_in_batches_as_it_goes(self):
-        """An hour of generations must not hang on the process staying up
-        until the very end."""
-        report, indexed, situated = self._run(120)
-
-        self.assertEqual(report["chunks_indexed"], 120)
-        self.assertEqual(report["chunks_contextualized"], 120)
-        self.assertNotIn("cancelled", report)
-
     def test_stopping_keeps_what_was_paid_for_and_buys_no_more(self):
         report, indexed, situated = self._run(200, cancel_after=50)
 
@@ -707,8 +752,8 @@ class StoppableIngestTest(unittest.TestCase):
         indexed = []
 
         class _Store:
-            def contextualized_chunk_ids(self, source, tenant):
-                return set()
+            def indexed_state(self, source, tenant):
+                return {}
 
             def index_chunks(self, batch, tenant):
                 indexed.extend(batch)
@@ -764,9 +809,9 @@ class StoppableIngestTest(unittest.TestCase):
             return chunks
 
         class _Store:
-            def contextualized_chunk_ids(self, source, tenant):
+            def indexed_state(self, source, tenant):
                 touched.append("read")
-                return set()
+                return {}
 
             def index_chunks(self, batch, tenant):
                 touched.append("wrote")

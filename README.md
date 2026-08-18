@@ -2095,6 +2095,8 @@ curl -X POST http://localhost:8000/api/v1/documents \
 
 **A large upload resumes instead of restarting.** Chunks are enriched and indexed in batches, so an ingest that dies keeps every completed batch, and on re-upload the chunks that already carry their context are skipped rather than bought again.
 
+**A chunk is identified by the text it holds.** Its point is addressed by a hash of the content, so uploading a document again buys only what actually changed: a corrected passage is written, a passage that merely moved because a section was inserted above it is left where it is, and an identical upload costs nothing at all. Chunks that repeat word for word inside one document are told apart by their occurrence, so boilerplate keeps one point per copy. Since the addressing changed, a collection indexed before this rewrites each document once, the first time it is uploaded again.
+
 **It can be watched and it can be stopped.** An upload is one request that answers only at the end, which on a large document means many minutes of silence: the console polls `GET /api/v1/documents/ingest/{id}` and draws the real count of chunks written, so a long job is distinguishable from a stuck one. Stopping goes through `POST /api/v1/documents/ingest/{id}/cancel`, because closing the browser does not stop anything: the server is never told and keeps spending to the end of the document. The flag is read between batches, so a stopped run keeps everything it had written and buys nothing more.
 
 **A document larger than the model's context does not travel whole.** `CONTEXT_DOCUMENT_MAX_CHARS` (default 48000, about 12k tokens) bounds what goes beside each chunk; past it the document travels as its opening, which carries the subject and the period, plus the neighborhood of the chunk. Sending it whole means every call is refused for exceeding the context while still spending the rate limit. A batch where several calls fail in a row is abandoned and the rest of the document is indexed plain, since a refusal is the model saying no rather than a blip.
@@ -2318,7 +2320,7 @@ genui-framework/
 │   │                                     # content_policy_store, theme_store, tenant_json_store,
 │   │                                     # audit (write + read), rate_limit, json_stream, tracing
 │   ├── config/settings.py                # All env-driven configuration
-│   ├── tests/                            # 526 unit tests (unittest-compatible; opt-in live LLM)
+│   ├── tests/                            # 653 unit tests (unittest-compatible; opt-in live LLM)
 │   ├── Dockerfile                        # Container image
 │   └── docker-compose.yml                # Qdrant + Redis
 │

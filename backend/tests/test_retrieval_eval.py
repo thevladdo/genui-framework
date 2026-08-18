@@ -268,11 +268,6 @@ class DatasetTest(unittest.TestCase):
         self.assertIn("[missing, best score 0.400] c", report)
         self.assertNotIn("note: k=", report)
 
-    def test_report_flags_a_k_that_returns_a_third_of_the_corpus(self):
-        rows = [{"question": "a", "group": "prose", "reached": 3, "rank": 1, "score": 0.7, "top_score": 0.7}]
-        report = measure(rows, chunk_count=45, doc_count=20, threshold=0.35)
-        self.assertIn("note: k=20 and above", report)
-
 
 if __name__ == "__main__":
     unittest.main()

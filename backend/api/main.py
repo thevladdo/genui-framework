@@ -47,6 +47,7 @@ from profiles import is_identified
 from rag import create_chunker, get_vector_store
 from rag import ingest_status
 from rag.chunker import SemanticChunk
+from rag.vector_store import assign_point_ids
 from rag.contextualizer import (
     contextual_indexing_enabled,
     contextualize,
@@ -561,6 +562,7 @@ async def _chunk_and_index(
 
     chunks = await asyncio.to_thread(_chunk_document, text, metadata, source_name)
     store = await asyncio.to_thread(get_vector_store)
+    assign_point_ids(tenant, chunks)
 
     if not dry_run and not await ingest_status.advance(ingest_id, 0, "indexing"):
         await ingest_status.finish(ingest_id, "cancelled")
@@ -574,12 +576,24 @@ async def _chunk_and_index(
     corpus_tokens = await _corpus_tokens(store, tenant)
     with_context = contextual_indexing_enabled(tenant, corpus_tokens)
 
-    # An upload that died halfway already paid for the chunks it wrote: skipped, not bought again
-    done = (
-        await asyncio.to_thread(store.contextualized_chunk_ids, source_name, tenant)
-        if with_context else set()
-    )
-    pending = [chunk for chunk in chunks if chunk.chunk_id not in done]
+    stored = await asyncio.to_thread(store.indexed_state, source_name, tenant)
+
+    def already_indexed(chunk) -> bool:
+        """
+        Whether this chunk is already in the index as it is now.
+
+        A point id is derived from the text it holds, so finding one is the
+        same as finding that text: a passage that was only moved is found
+        and left alone, and a passage that was corrected is not found and
+        is written again. A chunk that is unchanged but has no context is
+        not done either, once context is being written.
+        """
+        contextualized = stored.get(chunk.point_id)
+        if contextualized is None:
+            return False
+        return contextualized or not with_context
+
+    pending = [chunk for chunk in chunks if not already_indexed(chunk)]
 
     # What this upload adds, and whether it is the one that takes the corpus over the line: 
     # the operator is asked about the corpus left behind at that moment 
@@ -591,7 +605,7 @@ async def _chunk_and_index(
 
     report: Dict[str, Any] = {
         "chunks_created": len(chunks),
-        "chunks_already_indexed": len(chunks) - len(pending),
+        "chunks_unchanged": len(chunks) - len(pending),
         "contextual_indexing": with_context or crosses,
         "context_calls": len(pending) if (with_context or crosses) else 0,
         "prompt_cache": prompt_cache_mode() if (with_context or crosses) else None,
@@ -653,12 +667,10 @@ async def _chunk_and_index(
     report["contextual_indexing"] = situated > 0
     report["context_calls"] = situated
 
-    # A re-upload overwrites chunk by chunk, so what is left over is what this version of the document no longer has. 
-    resumed = len(pending) != len(chunks)
-    if chunks and not resumed and not report.get("cancelled"):
+    if chunks and not report.get("cancelled"):
         report["chunks_pruned"] = await asyncio.to_thread(
             store.prune_removed_chunks,
-            source_name, [chunk.chunk_id for chunk in chunks], tenant,
+            source_name, [chunk.point_id for chunk in chunks], tenant,
         )
 
     report["chunks_contextualized"] = situated

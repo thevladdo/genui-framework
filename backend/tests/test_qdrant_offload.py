@@ -199,7 +199,7 @@ class DocumentRoutesOffEventLoopTest(unittest.TestCase):
         import inspect
 
         blocking_calls = ("_chunk_document", "get_vector_store", "index_chunks",
-                          "contextualized_chunk_ids", "chunk_counts",
+                          "indexed_state", "chunk_counts",
                           "list_documents", "plain_points", "recount_tokens",
                           "recontextualize", "prune_removed_chunks",
                           "delete_by_source")

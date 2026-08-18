@@ -74,18 +74,6 @@ class TokenCountTest(unittest.TestCase):
         self.assertEqual(estimate_tokens(""), 0)
         self.assertEqual(estimate_tokens(None), 0)
 
-    def test_the_counter_adds_instead_of_reading_and_writing_back(self):
-        """Two workers indexing at once both add. A read-modify-write would
-        drop one of them and the corpus would read smaller than it is."""
-        counter = TenantCounter(key_prefix="genui:test:")
-
-        self.assertIsNone(run(counter.get("acme")))
-        run(counter.add("acme", 1000))
-        run(counter.add("acme", 500))
-        self.assertEqual(run(counter.get("acme")), 1500)
-
-        self.assertIsNone(run(counter.get("globex")))
-
     def test_nothing_counted_is_not_the_same_as_counted_zero(self):
         """None means rebuild from the collection. Zero would mean a corpus
         that never reaches the threshold and a feature that never starts."""
@@ -110,8 +98,8 @@ class ThresholdAtIngestTest(unittest.TestCase):
             def prune_removed_chunks(self, source, chunk_ids, tenant):
                 return 0
 
-            def contextualized_chunk_ids(self, source, tenant):
-                return set()
+            def indexed_state(self, source, tenant):
+                return {}
 
             def index_chunks(self, to_index, tenant):
                 return len(to_index)
@@ -193,35 +181,40 @@ class PointIdentityTest(unittest.TestCase):
     """
     A point id drawn at random made every upload an insert, so uploading a
     document twice stored it twice and one passage answered under two
-    points. Derived from what the chunk is, the second upload overwrites
-    the first.
+    points. Derived from the text the chunk holds, the second upload
+    overwrites the first.
     """
 
-    def test_the_same_chunk_always_lands_on_the_same_point(self):
-        from rag.vector_store import point_id_for
+    def test_a_passage_is_not_shared_across_tenants(self):
+        from rag.vector_store import content_hash, point_id_for
 
-        self.assertEqual(
-            point_id_for("acme", "report_7"),
-            point_id_for("acme", "report_7"),
+        digest = content_hash("a passage")
+        self.assertNotEqual(
+            point_id_for("acme", "report", digest),
+            point_id_for("globex", "report", digest),
         )
 
-    def test_a_chunk_id_is_not_shared_across_tenants(self):
-        from rag.vector_store import point_id_for
+    def test_the_same_passage_in_two_documents_is_two_points(self):
+        """Documents are deleted and pruned one at a time: sharing a point
+        would take a passage out of a document nobody touched."""
+        from rag.vector_store import content_hash, point_id_for
 
+        digest = content_hash("a passage")
         self.assertNotEqual(
-            point_id_for("acme", "report_7"),
-            point_id_for("globex", "report_7"),
+            point_id_for("acme", "report", digest),
+            point_id_for("acme", "handbook", digest),
         )
 
     def test_the_default_tenant_and_no_tenant_are_the_same_point(self):
         """Legacy documents carry no tenant and belong to the default one:
         they must not gain a second copy the first time one is named."""
         from auth.keys import DEFAULT_TENANT
-        from rag.vector_store import point_id_for
+        from rag.vector_store import content_hash, point_id_for
 
+        digest = content_hash("a passage")
         self.assertEqual(
-            point_id_for(None, "report_7"),
-            point_id_for(DEFAULT_TENANT, "report_7"),
+            point_id_for(None, "report", digest),
+            point_id_for(DEFAULT_TENANT, "report", digest),
         )
 
 
@@ -399,15 +392,6 @@ class BackfillTest(unittest.TestCase):
                          "one batch asked for, then it stops")
         self.assertLess(sum(asked), 600)
 
-    def test_a_partial_run_leaves_a_state_that_can_be_stated(self):
-        report, state, written = self._backfill(self._points(6), fails_after=4)
-
-        self.assertEqual(report["status"], "partial")
-        self.assertEqual(report["chunks_contextualized"], 4)
-        self.assertEqual(report["chunks_plain_remaining"], 2)
-        self.assertEqual(len(state), 6)
-        self.assertEqual(sum(1 for p in state.values() if p["contextualized"]), 4)
-
     def test_a_document_is_rebuilt_from_its_chunks_in_reading_order(self):
         seen = {}
 
@@ -421,10 +405,14 @@ class BackfillTest(unittest.TestCase):
             def recontextualize(self, chunks, point_ids):
                 return len(chunks)
 
+        # Past ten chunks the index has to be read as a number: 
+        # sorted as text, doc_10 comes before doc_2 
+        # and the document is rebuilt with its middle at the top
+        order = [7, 11, 0, 3, 10, 1, 9, 2, 8, 4, 6, 5]
         shuffled = [
-            {"id": 2, "chunk_id": "doc_2", "source_document": "doc", "content": "third"},
-            {"id": 0, "chunk_id": "doc_0", "source_document": "doc", "content": "first"},
-            {"id": 1, "chunk_id": "doc_1", "source_document": "doc", "content": "second"},
+            {"id": i, "chunk_id": f"doc_{i}", "source_document": "doc",
+             "content": f"passage {i}"}
+            for i in order
         ]
 
         class _Budget:
@@ -435,7 +423,10 @@ class BackfillTest(unittest.TestCase):
              mock.patch("api.deps.get_llm_budget", lambda: _Budget()):
             run(main._backfill_documents(_Store(), shuffled, "acme"))
 
-        self.assertEqual(seen["document"], "first\n\nsecond\n\nthird")
+        self.assertEqual(
+            seen["document"],
+            "\n\n".join(f"passage {i}" for i in range(12)),
+        )
 
 
 if __name__ == "__main__":

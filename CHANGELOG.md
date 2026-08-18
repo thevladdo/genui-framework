@@ -8,6 +8,16 @@ The entire history lives below, newest first.
 
 ## [Unreleased]
 
+### A corrected document that the index refused to notice
+
+A chunk was identified by its position in the document, and a position survives an edit. So a document uploaded again after a correction looked, chunk for chunk, like one already indexed. The upload skipped everything, wrote nothing, and left the pruning step convinced it was resuming an interrupted run. The index went on answering with the text that had been withdrawn, and nothing said so.
+
+- **A chunk is now identified by the text it holds.** The point id is derived from the content, so a passage that was corrected is not found and gets written again, and a passage that only moved is already stored and costs nothing. Inserting a section near the top of a document used to renumber every chunk below it and buy the whole tail a second time.
+- **Repeats inside one document are counted**, because boilerplate appears word for word more than once and two chunks deriving the same id would mean the second written over the first.
+- **An unchanged upload costs nothing.** No embedding, no generation, and the response says how many chunks were already in place, so an operator does not read "indexed: none" as a failure.
+- **Pruning runs on every completed upload.** A chunk skipped as unchanged is still part of this version, so it survives; points held under ids worked out some older way are never skipped, so they have been rewritten by then. That is what the resume guard was covering, and the guard is gone.
+- **An existing collection rewrites itself once.** The ids change, so the first upload of a document after this replaces its points and prunes what they replaced. After that only real edits cost anything.
+
 ### A stop that could be erased by the thing checking it
 
 The upload check went in first: the flag was read only between batches, and most documents are one batch, so pressing stop on a ten chunk document did nothing and the answer came back "indexed". Asking per chunk fixed that and introduced something worse. The call that asked also wrote the progress back, from four coroutines at a time, so a stop arriving between one read and its write was overwritten by a stale copy and lost exactly when someone pressed it.

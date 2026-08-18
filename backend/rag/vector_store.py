@@ -3,6 +3,7 @@ Qdrant Vector Store Module
 Handles embedding storage, retrieval, and similarity search.
 """
 
+import hashlib
 import logging
 import re
 from typing import List, Optional, Dict, Any
@@ -34,20 +35,63 @@ _FUSION_CANDIDATES = 20
 _TOKEN = re.compile(r"[a-z0-9]{2,}")
 
 
-def point_id_for(tenant: Optional[str], chunk_id: str) -> str:
+def content_hash(text: str) -> str:
     """
-    The id of a chunk's point, derived from what the chunk is rather than
-    drawn at random.
+    Fingerprint of a chunk's source text.
+
+    Taken over the chunk's own content and never over the situating lines,
+    which are derived from it.
+    """
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def point_id_for(
+    tenant: Optional[str],
+    source_document: str,
+    digest: str,
+    occurrence: int = 0,
+) -> str:
+    """
+    The id of a chunk's point, derived from the text it holds rather than
+    from where that text happens to sit.
 
     A random id made every upload an insert, so uploading a document twice
     stored it twice and a search then found the same passage under two
-    points. Deriving it means the second upload overwrites the first, which
-    is what an upsert is for.
+    points. Deriving it from the position fixed that but tied a chunk's
+    identity to its index, so inserting a section near the top of a
+    document renumbered everything below it: text that had not changed
+    landed on a different id, and was embedded and situated again for
+    nothing. Deriving it from the content instead means a passage that only
+    moved is already stored, under the same id, and the upload has nothing
+    to do with it.
+
+    The occurrence separates chunks that repeat word for word inside one
+    document, which boilerplate does. Without it the second copy would be
+    written over the first and the document would quietly hold fewer
+    points than it has chunks.
     """
     return str(uuid.uuid5(
         uuid.NAMESPACE_URL,
-        f"genui:{tenant or DEFAULT_TENANT}:{chunk_id}",
+        f"genui:{tenant or DEFAULT_TENANT}:{source_document}:{digest}:{occurrence}",
     ))
+
+
+def assign_point_ids(tenant: Optional[str], chunks: List[SemanticChunk]) -> None:
+    """
+    Work out where each of these chunks belongs, in place.
+
+    Repeats have to be counted across the whole document: given one slice
+    of it at a time, two identical chunks in different slices would both
+    count as the first and collide.
+    """
+    seen: Dict[str, int] = {}
+    for chunk in chunks:
+        digest = content_hash(chunk.content)
+        occurrence = seen.get(digest, 0)
+        seen[digest] = occurrence + 1
+        chunk.point_id = point_id_for(
+            tenant, chunk.source_document, digest, occurrence
+        )
 
 
 def indexable_text(chunk: SemanticChunk) -> str:
@@ -329,9 +373,12 @@ class QdrantVectorStore:
         if not chunks:
             logger.warning("No chunks provided for indexing")
             return 0
-        
+
+        if any(chunk.point_id is None for chunk in chunks):
+            assign_point_ids(tenant, chunks)
+
         indexed_count = 0
-        
+
         # Process in batches
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
@@ -351,8 +398,6 @@ class QdrantVectorStore:
             # Prepare points for Qdrant
             points = []
             for chunk, embedding in zip(batch, embeddings):
-                point_id = point_id_for(tenant, chunk.chunk_id)
-                
                 payload = {
                     "content": chunk.content,
                     "chunk_id": chunk.chunk_id,
@@ -364,7 +409,7 @@ class QdrantVectorStore:
 
                 indexed_text = indexable_text(chunk)
                 points.append(qmodels.PointStruct(
-                    id=point_id,
+                    id=chunk.point_id,
                     vector=(
                         {
                             DENSE_VECTOR: embedding,
@@ -647,7 +692,7 @@ class QdrantVectorStore:
     def prune_removed_chunks(
         self,
         source_document: str,
-        chunk_ids: List[str],
+        point_ids: List[str],
         tenant: Optional[str] = None,
     ) -> int:
         """
@@ -656,17 +701,18 @@ class QdrantVectorStore:
 
         Two of them. A document edited down to fewer chunks leaves a tail
         that nothing overwrites, and its text would go on grounding numbers
-        and URLs that the document no longer contains. And a document
-        indexed before point ids were derived is stored under random ones,
-        so the new write lands beside it instead of on top.
+        and URLs that the document no longer contains. And a document whose
+        points were stored under ids worked out some other way is not
+        overwritten by the new write, which lands beside it instead of on
+        top.
 
-        Only safe when the whole document was just written: a resumed
+        Only safe when the whole document was just written: a stopped
         upload indexes part of it, and the rest is work already paid for.
         """
-        if not chunk_ids:
+        if not point_ids:
             return 0
         try:
-            current = [point_id_for(tenant, chunk_id) for chunk_id in chunk_ids]
+            current = list(point_ids)
             before = self.client.count(
                 collection_name=self.collection_name,
                 count_filter=qmodels.Filter(must=[
@@ -706,21 +752,23 @@ class QdrantVectorStore:
             logger.warning(f"Could not prune stale points of {source_document}: {e}")
             return 0
 
-    def contextualized_chunk_ids(
+    def indexed_state(
         self,
         source_document: str,
         tenant: Optional[str] = None,
-    ) -> set:
+    ) -> Dict[str, bool]:
         """
-        The chunk ids of this document already indexed WITH their context.
+        What is already indexed for this document, keyed by point id, each
+        saying whether the chunk stored there carries its context.
 
-        A large document is thousands of model calls, and an upload that
-        dies halfway has already paid for the ones it made. Re-uploading
-        skips those instead of buying them again, which is what makes the
-        work resumable rather than restartable. Chunks indexed without
-        context are not listed: they still have their call to make.
+        The id is the answer to "is this the same text", since it is
+        derived from that text, so a chunk whose id is missing here is one
+        the index has never held: either new, or a version of a passage
+        that has since been corrected. Points stored under ids worked out
+        some other way are missing too, which is what makes an older
+        document get rewritten rather than skipped and then pruned.
         """
-        found = set()
+        found: Dict[str, bool] = {}
         offset = None
         try:
             while True:
@@ -731,26 +779,21 @@ class QdrantVectorStore:
                             key="source_document",
                             match=qmodels.MatchValue(value=source_document),
                         ),
-                        qmodels.FieldCondition(
-                            key="contextualized",
-                            match=qmodels.MatchValue(value=True),
-                        ),
                         self._tenant_condition(tenant),
                     ]),
                     limit=_LIST_SCROLL_PAGE,
                     offset=offset,
-                    with_payload=["chunk_id"],
+                    with_payload=["contextualized"],
                     with_vectors=False,
                 )
-                found.update(
-                    (point.payload or {}).get("chunk_id")
-                    for point in points
-                    if (point.payload or {}).get("chunk_id")
-                )
+                for point in points:
+                    found[str(point.id)] = bool(
+                        (point.payload or {}).get("contextualized")
+                    )
                 if offset is None:
                     break
         except Exception as e:
-            logger.warning(f"Could not read indexing progress for {source_document}: {e}")
+            logger.warning(f"Could not read what is indexed for {source_document}: {e}")
 
         return found
 
