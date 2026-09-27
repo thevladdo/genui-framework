@@ -214,41 +214,49 @@ class TestAuditRotation(unittest.TestCase):
     def _event(self, audit, i=0):
         audit.log("zone_render", tenant="acme", user_id=f"user-{i}", zone_id="z1", padding="x" * 80)
 
-    def test_file_sink_rotates_at_max_bytes(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "audit.jsonl")
-            audit = AuditLogger(path=path, max_bytes=300, backup_count=2)
-            for i in range(10):
-                self._event(audit, i)
+    def _path(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return os.path.join(tmp.name, "audit.jsonl")
 
-            self.assertTrue(os.path.exists(path))
-            self.assertTrue(os.path.exists(path + ".1"), "no rotated file: audit grows unbounded")
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    record = json.loads(line)  # rotation must not corrupt lines
-                    self.assertEqual(record["tenant"], "acme")
-                    self.assertIn("ts", record)
+    def _logger(self, path, **kwargs):
+        # Closed before the directory is removed: cleanups run in reverse order
+        audit = AuditLogger(path=path, **kwargs)
+        self.addCleanup(audit.close)
+        return audit
+
+    def test_file_sink_rotates_at_max_bytes(self):
+        path = self._path()
+        audit = self._logger(path, max_bytes=300, backup_count=2)
+        for i in range(10):
+            self._event(audit, i)
+
+        self.assertTrue(os.path.exists(path))
+        self.assertTrue(os.path.exists(path + ".1"), "no rotated file: audit grows unbounded")
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                record = json.loads(line)  # rotation must not corrupt lines
+                self.assertEqual(record["tenant"], "acme")
+                self.assertIn("ts", record)
 
     def test_max_bytes_zero_never_rotates(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "audit.jsonl")
-            audit = AuditLogger(path=path, max_bytes=0, backup_count=2)
-            for i in range(10):
-                self._event(audit, i)
-            self.assertFalse(os.path.exists(path + ".1"))
-            with open(path, encoding="utf-8") as f:
-                self.assertEqual(len(f.readlines()), 10)
+        path = self._path()
+        audit = self._logger(path, max_bytes=0, backup_count=2)
+        for i in range(10):
+            self._event(audit, i)
+        self.assertFalse(os.path.exists(path + ".1"))
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(len(f.readlines()), 10)
 
     def test_two_instances_do_not_stack_handlers(self):
         """getLogger-style handler stacking would double-write every line."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "audit.jsonl")
-            first = AuditLogger(path=path)
-            second = AuditLogger(path=path)
-            self._event(first)
-            self._event(second)
-            with open(path, encoding="utf-8") as f:
-                self.assertEqual(len(f.readlines()), 2)
+        path = self._path()
+        first = self._logger(path)
+        second = self._logger(path)
+        self._event(first)
+        self._event(second)
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(len(f.readlines()), 2)
 
     def test_no_path_emits_on_audit_logger(self):
         audit = AuditLogger(path=None)

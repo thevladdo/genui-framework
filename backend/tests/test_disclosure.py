@@ -16,6 +16,7 @@ pure-stdlib shell interpreter.
 import asyncio
 import json
 import unittest
+from unittest import mock
 
 from utils.disclosure import (
     PROVENANCE_GENERATED,
@@ -411,21 +412,20 @@ class TestServingPathsDisclosure(unittest.TestCase):
         A cached render is served for the whole stale window: it must
         keep saying when it was generated, not when it was handed out.
         """
-        async def scenario():
-            first = await zone_router._handle_render(self._request(), self.CLIENT)
-            await asyncio.sleep(0.05)
-            second = await zone_router._handle_render(self._request(), self.CLIENT)
-            return first, second
+        generation = "2026-01-01T00:00:00+00:00"
+        an_hour_later = "2026-01-01T01:00:00+00:00"
+        now = [generation]
+        clock = lambda: now[0]
 
-        first, second = asyncio.run(scenario())
-        self.assertEqual(
-            first.meta["disclosure"]["generated_at"],
-            second.meta["disclosure"]["generated_at"],
-        )
-        # And it is the moment of the generation, not of this response
-        self.assertLess(
-            second.meta["disclosure"]["generated_at"], second.rendered_at
-        )
+        with mock.patch("utils.disclosure.utc_now_iso", clock), \
+                mock.patch.object(zone_router, "_utc_now", clock):
+            first = asyncio.run(zone_router._handle_render(self._request(), self.CLIENT))
+            now[0] = an_hour_later
+            second = asyncio.run(zone_router._handle_render(self._request(), self.CLIENT))
+
+        self.assertEqual(second.meta["cache"]["status"], "fresh")
+        self.assertEqual(first.meta["disclosure"]["generated_at"], generation)
+        self.assertEqual(second.meta["disclosure"]["generated_at"], generation)
 
     def test_live_bypass(self):
         response = asyncio.run(zone_router._handle_render(

@@ -169,9 +169,9 @@ class TestDataSubjectRoutes(unittest.TestCase):
     """Access and erasure over HTTP, with the real identity guard."""
 
     def setUp(self):
-        self.audit_path = os.path.join(
-            tempfile.mkdtemp(prefix="genui-audit-"), "audit.jsonl"
-        )
+        audit_dir = tempfile.TemporaryDirectory(prefix="genui-audit-")
+        self.addCleanup(audit_dir.cleanup)
+        self.audit_path = os.path.join(audit_dir.name, "audit.jsonl")
         self._saved = (
             settings.client_api_keys,
             settings.admin_api_keys,
@@ -195,6 +195,7 @@ class TestDataSubjectRoutes(unittest.TestCase):
         auth_deps._registry = None
         auth_deps._rate_limiter = RateLimiter(limit=1000, window_seconds=60)
         auth_deps._audit_logger = AuditLogger(path=self.audit_path, enabled=True)
+        self.addCleanup(auth_deps._audit_logger.close)
         auth_deps._user_token_verifier = None
 
         self.store = ProfileStore()

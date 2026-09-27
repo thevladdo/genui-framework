@@ -8,7 +8,7 @@
  */
 
 import { test, expect } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -53,4 +53,19 @@ test('recharts is not in the entry bundles: it lives in a lazy chunk', () => {
   const chunks = readdirSync(path.join(pkgRoot, 'dist/chunks'));
   expect(chunks.some((f) => f.endsWith('.esm.js'))).toBe(true);
   expect(chunks.some((f) => f.endsWith('.cjs'))).toBe(true);
+});
+
+// Unpacked size of what `npm pack` ships. The build without source maps
+// measures about 3.7 MB; the maps alone add about 7 MB.
+const PACKAGE_BYTES_CAP = 5_000_000;
+
+test('the published package ships the docs and license, no source maps, under the size cap', () => {
+  const [pack] = JSON.parse(
+    execSync('npm pack --dry-run --json', { cwd: pkgRoot, encoding: 'utf8' }),
+  );
+  const paths: string[] = pack.files.map((f: { path: string }) => f.path);
+  expect(paths).toContain('README.md');
+  expect(paths).toContain('LICENSE');
+  expect(paths.filter((p) => p.endsWith('.map'))).toEqual([]);
+  expect(pack.unpackedSize).toBeLessThan(PACKAGE_BYTES_CAP);
 });

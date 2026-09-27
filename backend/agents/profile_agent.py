@@ -12,7 +12,6 @@ import json
 
 from config import settings
 from llm import create_llm_client
-from utils.cache import cacheable
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +140,6 @@ User: "Can you explain this more simply? The technical jargon is confusing."
         import asyncio
         return asyncio.run(self.analyze_message_async(message, conversation_context))
     
-    @cacheable()
     async def analyze_message_async(
         self,
         message: str,

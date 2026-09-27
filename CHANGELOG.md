@@ -8,6 +8,58 @@ The entire history lives below, newest first.
 
 ## [Unreleased]
 
+### Green from a clean clone
+
+A fresh clone on another machine could not reproduce what the suites reported. Four things they depended on existed only on the disk that ran them.
+
+- **The library builds on Node 24.** The rollup config imported `package.json` with `assert { type: 'json' }`, a syntax Node 22 removed, and never used the import. The build script deleted `dist/` first and then failed, taking away the build the Studio links to. The build now writes into `build/` and replaces `dist/` only when every output is written, with no `rm` or `cp`, so it also runs from PowerShell.
+- **One Node version, written down.** `.nvmrc` says 24, both packages declare it in `engines`, and the Pages workflow reads it from `.nvmrc` and installs with `npm ci`.
+- **The Studio suite runs.** `node --test tests/` on Node 24 took the directory as a single file and ran nothing; the script now names `tests/*.test.cjs`.
+- **The retrieval eval corpus is committed.** The global `*.md` ignore kept out the 23 documents in `backend/tests/retrieval/docs/`, so the dataset test failed on any other machine. They have their own exception now.
+- **Dependencies are locked.** The `package-lock.json` files of `frontend/` and `studio/` are tracked, and the stray empty one at the root is gone. `backend/requirements.lock` pins the 118 packages `requirements.txt` resolves to, at the versions the suite runs against, and the Docker image installs from it. `requirements.txt` keeps its ranges for a manual install.
+- **The npm package ships what a consumer needs.** Source maps are built only in watch mode: six maps were 7 of the 11 MB of the package. `README.md` and `LICENSE` are included now. A packaging test runs `npm pack --dry-run` and fails over 5 MB unpacked or on any `.map`.
+- **Security fixes at patch level.** `npm audit` in `frontend/` flagged 13 packages and 4 in `studio/`, all in the development graph. The patch releases of brace-expansion, nanoid, postcss, postcss-selector-parser and svgo are in the locks. Still open: vitest, whose fix is the major release 5, and baseline-browser-mapping, browserslist and colord, whose fixes are minor releases.
+- **Two tests no longer depend on the system.** The cache-hit timestamp test compared two readings of the wall clock taken microseconds apart, which are equal on a coarse clock; it now drives a fake clock and checks that a hit an hour later still carries the generation time. The audit tests left their log files open, and Windows cannot delete an open file: `AuditLogger.close()` releases the sink and the tests close it before the temporary directory goes.
+- **`.env.example` matches the code.** `RESPONSE_MODEL` said `gpt-5.4-mini` while the default in settings is `gpt-4o-mini`.
+
+### The upload limit is a setting
+
+The largest file an upload accepted was fixed in the code at 10 MB. That turns away image-heavy PDFs and scans, which are exactly what the OCR extractors are for, and it measured weight, which is not what makes an upload expensive.
+
+- **`MAX_UPLOAD_MB` sets it, 50 by default.** The 413 names the limit and the setting.
+- **The Studio knows the limit before it sends anything.** It is shown under the drop zone, and a larger file gets its own row saying it was not sent, instead of travelling to the backend to be refused.
+- **The proxy is part of the limit.** The deploy guide says so: nginx refuses anything over 1 MB and cuts requests at 60 seconds by default, and the operator then sees the proxy's error instead of the backend's.
+
+### Ingestion controls that did something else
+
+Three controls on the ingest path promised more than the code kept.
+
+- **`USE_SEMANTIC_CHUNKING=false` works.** The factory read the setting and threw it away, so every document went through the semantic splitter, which embeds every sentence. False now cuts at sentences with the splitter already used for oversized chunks, and embeds nothing.
+- **A dry run spends nothing.** The estimate made the semantic cut before returning, so asking what a document costs cost one embedding per sentence, and the upload paid it again. The estimate now cuts at sentences and says so: `chunks_approximate` when the real cut is semantic, `cutting_embeddings` for the sentences the upload will embed.
+- **A stopped backfill stays stopped.** The console runs a backfill as a series of calls under one id, and each call cleared the stop flag. Press stop and the work went on. A stopped id is now final: a call carrying it answers `cancelled` without touching a chunk, the report says `cancelled` where it said `partial`, and the console stops calling. The same reset could lose a stop pressed between the two phases of an upload.
+- **A stop reaches the run on any worker.** The progress of an ingest and its stop flag were kept in the memory of the process, although Redis was configured. With several workers the stop, or the progress poll, could land on a worker that knew nothing of the run: the answer was `"cancelled": false` and the work went on to the end. Both now live on the deployment's Redis, like every other piece of shared state.
+- **Extraction is off the event loop.** Parsing ran inside the async route: a 100-page PDF froze the worker for about a quarter of a second with the local parser, longer with Docling. It runs in the threadpool now. The upload is read in 1 MB blocks and refused with 413 as soon as it passes the limit, before the rest of the file is read.
+
+### A replacement that could lose the version it replaced
+
+A failed embedding during a re-upload was logged and skipped. The count came back short and pruning ran anyway, with the ids of the new version. So the old passage was deleted, the new one had never been written, and the response said `completed`.
+
+- **Pruning waits for the whole new version.** A failed embedding or write now reaches the ingest, which stops, prunes nothing and answers `status: "partial"` with what was written, what was not, the error and `previous_version_served: true`. Upload again and it finishes the job without losing anything. The console shows the upload as failed.
+- **Each upload in the console keeps its own result.** Rows were matched by file name, so uploading the same file again rewrote every earlier row with the latest outcome: two successful uploads followed by a failed one read as three failures, and a retry that worked turned the failure back into a success. Rows now follow the ingest they started.
+- **A failed removal of the old version is not a completed upload.** Pruning used to log the error and report zero points removed, so the answer said `completed` while the withdrawn text went on answering. The error now reaches the ingest, which reports `partial` with `previous_version_served: true`, and the next upload removes what was left.
+- **Corrected metadata on unchanged text is written.** The point id comes from the text, so a fixed URL or title was skipped as already indexed and the whitelist kept the old URL. The payload is now compared as canonical JSON, with the upload time and the splitter's node ids left out, and rewritten in place with no embedding. `chunks_payload_updated` counts it.
+- **The corpus total follows what is in the index.** It adds only the chunks actually written, never text already stored that is getting its context, and pruning takes off what it removed. That total decides when contextual indexing starts to spend.
+- **Search results are no longer memoized in process.** The key held the memory address of the store object, the TTL was ignored, and only the worker that wrote cleared it: the other workers kept serving results from before an upload, and in the suite one test could receive another test's result. The profile and behavior agents used the same decorator with a key per message, which never hit. The utility is gone with them.
+
+### Input that could name what only the server decides
+
+Three places where input reached a spot the code kept for its own values. The knowledge base was the serious one. A chunk's payload was built with the document's metadata written over the tenant resolved from the API key, so an upload carrying `"tenant": "other"` in its metadata wrote points labelled for a tenant whose key the uploader does not hold. The search filter did its job: it matched that label and served one tenant's document to another as their own. Every isolation test looked at reads.
+
+- **The fields the server decides are written last.** Content, chunk id, source document, tenant and the context flag are assigned after the metadata, at the one place every ingest path goes through. Metadata can still add fields to a point. It can no longer say which tenant the point belongs to, and a collision is logged with the field it named.
+- **A custom component's schema is resolved locally, and only locally.** The validator downloads a `$ref` that points at a URL, so a request body could make the backend open an outbound connection. Schemas are now checked as schemas when they are registered, and a reference is followed only inside the schema itself. A remote one is refused right there, by name, before the model is asked to generate anything for a type that would never have validated.
+- **A schema that cannot be applied no longer waves the data through.** A malformed schema used to log a warning and let the component in unvalidated. Now it drops the component and says why, like everything else the chain removes.
+- **A `type` that is not a name drops itself and nothing else.** A component arriving with `"type": []` raised out of the per-component loop and took the whole render with it: the zone fell back, the chat answer became a 500. One bad component was always supposed to cost one component.
+
 ### A corrected document that the index refused to notice
 
 A chunk was identified by its position in the document, and a position survives an edit. So a document uploaded again after a correction looked, chunk for chunk, like one already indexed. The upload skipped everything, wrote nothing, and left the pruning step convinced it was resuming an interrupted run. The index went on answering with the text that had been withdrawn, and nothing said so.

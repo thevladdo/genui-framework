@@ -96,6 +96,12 @@ class AuditLogger:
 
         logger.info(line)
 
+    def close(self) -> None:
+        """Release the file sink. On Windows an open file cannot be deleted."""
+        if self._file_logger is not None:
+            for handler in self._file_logger.handlers:
+                handler.close()
+
 
 class AuditReader:
     """

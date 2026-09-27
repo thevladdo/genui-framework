@@ -10,6 +10,7 @@ needed for extraction and not installed in minimal test environments).
 import importlib.util
 import os
 import unittest
+from unittest import mock
 
 _SPEC = importlib.util.spec_from_file_location(
     "extractors",
@@ -20,7 +21,6 @@ _SPEC.loader.exec_module(extractors)
 
 extract_text = extractors.extract_text
 ExtractionError = extractors.ExtractionError
-MAX_FILE_SIZE_BYTES = extractors.MAX_FILE_SIZE_BYTES
 
 
 def _docx_available() -> bool:
@@ -49,8 +49,9 @@ class TestTextLikeExtraction(unittest.TestCase):
             extract_text("blank.txt", b"   \n\t  ")
 
     def test_oversized_rejected(self):
-        with self.assertRaises(ExtractionError):
-            extract_text("big.txt", b"x" * (MAX_FILE_SIZE_BYTES + 1))
+        with mock.patch.object(extractors, "max_file_size_bytes", lambda: 1024):
+            with self.assertRaises(ExtractionError):
+                extract_text("big.txt", b"x" * 1025)
 
     def test_unsupported_extension(self):
         with self.assertRaises(ExtractionError) as ctx:

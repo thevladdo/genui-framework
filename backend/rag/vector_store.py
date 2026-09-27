@@ -4,9 +4,10 @@ Handles embedding storage, retrieval, and similarity search.
 """
 
 import hashlib
+import json
 import logging
 import re
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 from functools import lru_cache
 from collections import Counter
@@ -22,7 +23,6 @@ from config import settings
 from llm.embeddings import EmbeddingClient, EmbeddingConfigError, create_embedding_client
 from .chunker import SemanticChunk
 from .contextualizer import estimate_tokens
-from utils.cache import cacheable, clear_cache
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,21 @@ DENSE_VECTOR = ""
 LEXICAL_VECTOR = "lexical"
 _FUSION_CANDIDATES = 20
 _TOKEN = re.compile(r"[a-z0-9]{2,}")
+
+# Payload keys the server owns. Document metadata travels with a chunk and
+# reaches the payload, so these are written last: a metadata field named
+# "tenant" would otherwise label a point for a tenant the writer does not
+# hold a key for, and the search filter, reading that label, would serve it.
+RESERVED_PAYLOAD_FIELDS = frozenset({
+    "content", "chunk_id", "source_document", "tenant", "contextualized",
+})
+
+# Payload keys that say nothing about the document: the time of the upload,
+# and the node ids the splitter draws at random on every cut. Left in, every
+# upload of an unchanged document would read as a change of metadata.
+_UNCOMPARED_PAYLOAD_FIELDS = frozenset({
+    "content", "contextualized", "indexed_at", "node_id", "relationships",
+})
 
 
 def content_hash(text: str) -> str:
@@ -92,6 +107,36 @@ def assign_point_ids(tenant: Optional[str], chunks: List[SemanticChunk]) -> None
         chunk.point_id = point_id_for(
             tenant, chunk.source_document, digest, occurrence
         )
+
+
+def payload_for(chunk: SemanticChunk, tenant: Optional[str]) -> Dict[str, Any]:
+    """What a chunk's point carries: its metadata, then the fields the server owns."""
+    colliding = RESERVED_PAYLOAD_FIELDS.intersection(chunk.metadata)
+    if colliding:
+        logger.warning(
+            "Metadata of %s names reserved payload fields %s: the "
+            "server values are kept",
+            chunk.chunk_id, sorted(colliding),
+        )
+    return {
+        **chunk.metadata,
+        "content": chunk.content,
+        "chunk_id": chunk.chunk_id,
+        "source_document": chunk.source_document,
+        "tenant": tenant or DEFAULT_TENANT,
+        "contextualized": bool(chunk.context),
+    }
+
+
+def payload_signature(payload: Dict[str, Any]) -> str:
+    """
+    The part of a payload that describes the document, as canonical JSON:
+    key order and tuple-versus-list do not make two payloads differ.
+    """
+    return json.dumps(
+        {k: v for k, v in payload.items() if k not in _UNCOMPARED_PAYLOAD_FIELDS},
+        sort_keys=True, default=str,
+    )
 
 
 def indexable_text(chunk: SemanticChunk) -> str:
@@ -368,7 +413,11 @@ class QdrantVectorStore:
             batch_size: Number of chunks to process at once
 
         Returns:
-            Number of chunks successfully indexed
+            Number of chunks indexed, which is all of them: a failed
+            embedding or upsert raises, and the batches before it stay
+            written. The caller decides what a partial write means: it
+            may prune a document's old version only once the new one is
+            stored in full.
         """
         if not chunks:
             logger.warning("No chunks provided for indexing")
@@ -377,71 +426,71 @@ class QdrantVectorStore:
         if any(chunk.point_id is None for chunk in chunks):
             assign_point_ids(tenant, chunks)
 
-        indexed_count = 0
-
-        # Process in batches
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
-            
+
             # What gets indexed is the chunk with its context in front; what gets stored is the chunk.
             texts = [indexable_text(chunk) for chunk in batch]
-            try:
-                embeddings = self._generate_embeddings_batch(texts)
-            except EmbeddingConfigError:
-                raise
-            except Exception as e:
-                logger.error(f"Embedding generation failed for batch {i}: {e}")
-                continue
+            embeddings = self._generate_embeddings_batch(texts)
             if embeddings:
                 self._check_dimension(embeddings[0])
-            
-            # Prepare points for Qdrant
-            points = []
-            for chunk, embedding in zip(batch, embeddings):
-                payload = {
-                    "content": chunk.content,
-                    "chunk_id": chunk.chunk_id,
-                    "source_document": chunk.source_document,
-                    "tenant": tenant or DEFAULT_TENANT,
-                    **chunk.metadata,
-                    "contextualized": bool(chunk.context),
-                }
 
-                indexed_text = indexable_text(chunk)
-                points.append(qmodels.PointStruct(
+            points = [
+                qmodels.PointStruct(
                     id=chunk.point_id,
                     vector=(
                         {
                             DENSE_VECTOR: embedding,
-                            LEXICAL_VECTOR: lexical_vector(indexed_text),
+                            LEXICAL_VECTOR: lexical_vector(text),
                         }
                         if self.has_lexical else embedding
                     ),
-                    payload=payload,
-                ))
-            
-            # Upsert to Qdrant
-            try:
-                self.client.upsert(
-                    collection_name=self.collection_name,
-                    points=points,
+                    payload=payload_for(chunk, tenant),
                 )
-                indexed_count += len(points)
-                logger.info(f"Indexed batch {i//batch_size + 1}: {len(points)} chunks")
-                
-            except Exception as e:
-                logger.error(f"Failed to upsert batch {i}: {e}")
+                for chunk, embedding, text in zip(batch, embeddings, texts)
+            ]
+            self.client.upsert(collection_name=self.collection_name, points=points)
+            logger.info(f"Indexed batch {i//batch_size + 1}: {len(points)} chunks")
+
+        return len(chunks)
+
+    def refresh_payloads(
+        self,
+        chunks: List[SemanticChunk],
+        stored: Dict[str, Dict[str, Any]],
+        tenant: str = DEFAULT_TENANT,
+    ) -> int:
+        """
+        Rewrite the payload of stored chunks whose text is unchanged but
+        whose metadata is not, without embedding anything.
+
+        The point id is derived from the text, so a corrected URL or title
+        on identical text lands on the same id and would otherwise be
+        skipped: the old URL would stay the one the whitelist allows.
+        The stored context flag is kept, since the vectors stay as they are.
+        Returns how many payloads were rewritten; a failed write raises.
+        """
+        operations = []
+        for chunk in chunks:
+            current = stored.get(chunk.point_id)
+            if current is None:
                 continue
-        
-        logger.info(f"Total indexed: {indexed_count}/{len(chunks)} chunks")
+            payload = payload_for(chunk, tenant)
+            if payload_signature(payload) == payload_signature(current):
+                continue
+            payload["contextualized"] = bool(current.get("contextualized"))
+            operations.append(qmodels.OverwritePayloadOperation(
+                overwrite_payload=qmodels.SetPayload(
+                    payload=payload, points=[chunk.point_id],
+                ),
+            ))
+        if operations:
+            self.client.batch_update_points(
+                collection_name=self.collection_name,
+                update_operations=operations,
+            )
+        return len(operations)
 
-        if indexed_count:
-            # Cached search results may not include the new content
-            clear_cache()
-
-        return indexed_count
-    
-    @cacheable()
     async def search_async(
         self,
         query: str,
@@ -593,8 +642,6 @@ class QdrantVectorStore:
                 ),
             )
             logger.info(f"Deleted chunks from source: {source_document} (tenant: {tenant or DEFAULT_TENANT})")
-            # Cached search results may still reference the deleted content
-            clear_cache()
             return removed_tokens
 
         except Exception as e:
@@ -694,7 +741,7 @@ class QdrantVectorStore:
         source_document: str,
         point_ids: List[str],
         tenant: Optional[str] = None,
-    ) -> int:
+    ) -> Tuple[int, int]:
         """
         Drop this document's points that the version just indexed no longer
         accounts for.
@@ -706,60 +753,59 @@ class QdrantVectorStore:
         overwritten by the new write, which lands beside it instead of on
         top.
 
-        Only safe when the whole document was just written: a stopped
-        upload indexes part of it, and the rest is work already paid for.
+        Only safe when every chunk of the new version is stored: anything
+        else removes the text still answering for the chunks that failed.
+        Returns (points removed, tokens they held), so the caller can take
+        the tokens off the corpus total. The points read are the points
+        deleted, by id. A failed read or delete raises: the stale points are
+        still served, and returning zero would report them as gone.
         """
         if not point_ids:
-            return 0
-        try:
-            current = list(point_ids)
-            before = self.client.count(
+            return 0, 0
+        stale: List[Any] = []
+        tokens = 0
+        offset = None
+        while True:
+            points, offset = self.client.scroll(
                 collection_name=self.collection_name,
-                count_filter=qmodels.Filter(must=[
-                    qmodels.FieldCondition(
-                        key="source_document",
-                        match=qmodels.MatchValue(value=source_document),
-                    ),
-                    self._tenant_condition(tenant),
-                ]),
-                exact=True,
-            ).count
+                scroll_filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="source_document",
+                            match=qmodels.MatchValue(value=source_document),
+                        ),
+                        self._tenant_condition(tenant),
+                    ],
+                    must_not=[qmodels.HasIdCondition(has_id=list(point_ids))],
+                ),
+                limit=_LIST_SCROLL_PAGE,
+                offset=offset,
+                with_payload=["content"],
+                with_vectors=False,
+            )
+            for point in points:
+                stale.append(point.id)
+                tokens += estimate_tokens((point.payload or {}).get("content", ""))
+            if offset is None:
+                break
 
+        if stale:
             self.client.delete(
                 collection_name=self.collection_name,
-                points_selector=qmodels.FilterSelector(
-                    filter=qmodels.Filter(
-                        must=[
-                            qmodels.FieldCondition(
-                                key="source_document",
-                                match=qmodels.MatchValue(value=source_document),
-                            ),
-                            self._tenant_condition(tenant),
-                        ],
-                        must_not=[qmodels.HasIdCondition(has_id=current)],
-                    )
-                ),
+                points_selector=qmodels.PointIdsList(points=stale),
             )
-            removed = before - len(current)
-            if removed > 0:
-                logger.info(
-                    "Pruned %d stale points from %s", removed, source_document
-                )
-                clear_cache()
-            return max(0, removed)
-
-        except Exception as e:
-            logger.warning(f"Could not prune stale points of {source_document}: {e}")
-            return 0
+            logger.info("Pruned %d stale points from %s", len(stale), source_document)
+        return len(stale), tokens
 
     def indexed_state(
         self,
         source_document: str,
         tenant: Optional[str] = None,
-    ) -> Dict[str, bool]:
+    ) -> Dict[str, Dict[str, Any]]:
         """
-        What is already indexed for this document, keyed by point id, each
-        saying whether the chunk stored there carries its context.
+        What is already indexed for this document: each point's payload
+        without its text, keyed by point id. The payload says whether the
+        chunk stored there carries its context, and what metadata it holds.
 
         The id is the answer to "is this the same text", since it is
         derived from that text, so a chunk whose id is missing here is one
@@ -768,7 +814,7 @@ class QdrantVectorStore:
         some other way are missing too, which is what makes an older
         document get rewritten rather than skipped and then pruned.
         """
-        found: Dict[str, bool] = {}
+        found: Dict[str, Dict[str, Any]] = {}
         offset = None
         try:
             while True:
@@ -783,13 +829,11 @@ class QdrantVectorStore:
                     ]),
                     limit=_LIST_SCROLL_PAGE,
                     offset=offset,
-                    with_payload=["contextualized"],
+                    with_payload=qmodels.PayloadSelectorExclude(exclude=["content"]),
                     with_vectors=False,
                 )
                 for point in points:
-                    found[str(point.id)] = bool(
-                        (point.payload or {}).get("contextualized")
-                    )
+                    found[str(point.id)] = point.payload or {}
                 if offset is None:
                     break
         except Exception as e:
@@ -929,7 +973,6 @@ class QdrantVectorStore:
             logger.error(f"Backfill update failed: {e}")
             return 0
 
-        clear_cache()
         return len(pending)
 
     def recount_tokens(self, tenant: Optional[str] = None) -> int:
@@ -999,7 +1042,6 @@ class QdrantVectorStore:
             self.client.delete_collection(self.collection_name)
             logger.info(f"Deleted collection: {self.collection_name}")
             self._ensure_collection()
-            clear_cache()
             return True
         except Exception as e:
             logger.error(f"Failed to clear collection: {e}")

@@ -10,7 +10,6 @@ import json
 
 from config import settings
 from llm import create_llm_client
-from utils.cache import cacheable
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +155,6 @@ Guidelines:
         import asyncio
         return asyncio.run(self.analyze_behavior_async(behavior_data, user_profile))
     
-    @cacheable()
     async def analyze_behavior_async(
         self,
         behavior_data: Dict[str, Any],

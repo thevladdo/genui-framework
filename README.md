@@ -183,7 +183,7 @@ What this deliberately is **not**: an operator login. There are no accounts, no 
 
 ## 🚀 Quick Start
 
-Five steps from zero to a personalized zone on your page. **Prerequisites:** Python 3.10+, Node 18+, Docker (for Qdrant/Redis), and an OpenAI API key (or Anthropic/Gemini — see step 3).
+Five steps from zero to a personalized zone on your page. **Prerequisites:** Python 3.10+, Node 24 (the version in `.nvmrc`), Docker (for Qdrant/Redis), and an OpenAI API key (or Anthropic/Gemini, see step 3).
 
 ### Step 1 — Clone and start the infrastructure
 
@@ -206,6 +206,8 @@ pip install -r requirements.txt
 # For development (running the test suite):
 pip install -r requirements-dev.txt
 ```
+
+`requirements.txt` lists version ranges. `requirements.lock` pins the exact version of every package those ranges resolve to, on Python 3.11. The Docker image installs the lock, so `pip install -r requirements.lock` gives you the same packages the image runs. To regenerate the lock after changing `requirements.txt`, install `requirements.txt` into a fresh Python 3.11 venv and run `pip freeze --all --exclude pip > requirements.lock`.
 
 ### Step 3 — Configure
 
@@ -277,7 +279,7 @@ You should get JSON with `components` and a `meta.cache` block. Run it twice: th
 
 ```bash
 cd ../frontend
-npm install
+npm ci
 npm run build
 npm link
 
@@ -290,6 +292,10 @@ In your app's entry file (e.g. `main.tsx`):
 ```tsx
 import "genui-framework/dist/styles.css";
 ```
+
+The build needs Node 24. It writes into `frontend/build/` and swaps it in as `dist/` only once every output is written, so a failed build leaves the previous `dist/` where the Studio and linked apps expect it.
+
+`npm pack` ships `dist/` without source maps, plus `README.md`, `LICENSE` and `package.json`. A packaging test fails if the unpacked size passes 5 MB or a map gets back in.
 
 The package ships dual **ESM + CJS** builds behind an `exports` map: both `import` and `require('genui-framework')` resolve correctly (Vite, webpack, Jest, Next.js pages router). The stylesheet is declared in `sideEffects`, so bundlers never tree-shake your CSS import away.
 
@@ -320,8 +326,17 @@ cd backend
 # or, same suite: ./venv/bin/python -m pytest tests/
 
 cd frontend
-npm test   # vitest: packaging (require/import), SSR skeleton, reactive props, privacy filter
+npm ci
+npm test   # builds first, then vitest: packaging (require/import, npm pack contents), SSR skeleton, reactive props, privacy filter
+
+cd studio
+npm ci
+npm test && npm run build   # node:test on the Studio's pure modules, then the typecheck and the Vite build
 ```
+
+The three suites and the two builds pass from a fresh clone on Node 24, the version in `.nvmrc` and in the `engines` field of both packages. The lockfiles of `frontend/` and `studio/` are committed, and `npm ci` installs exactly what they list. Everything a test reads is in the repository, the retrieval eval corpus in `backend/tests/retrieval/docs/` included.
+
+The Studio resolves the library through `file:../frontend`. Rebuild `frontend/` before testing the Studio against a library change.
 
 **Run the backend suite from the venv.** A test that needs FastAPI, Qdrant's client or llama_index skips itself when the import fails, so the same command on a system python that lacks them prints `OK` over about 200 tests it never ran. Both runs say `OK`; only one of them means the suite passed. The skip count at the end of the output is what tells them apart.
 
@@ -1125,7 +1140,7 @@ Read the answer in this order.
 
 1. **A component of your type in `components[]`** means the model saw the schema and used it. Done.
 2. **`meta.sanitization.dropped_components`** is where your component goes when its data failed your schema. A type that never appears anywhere else and always lands here means the description and the schema are telling the model two different stories.
-3. **Nothing of your type anywhere** usually means the name was rejected before the prompt was built. Grep the backend log for `Skipping invalid custom component`. A reserved built-in name and a missing `data_schema` are the two causes.
+3. **Nothing of your type anywhere** usually means the name was rejected before the prompt was built. Grep the backend log for `Skipping invalid custom component`; the line says which of the four causes it was: a reserved built-in name, a missing `data_schema`, a `data_schema` that is not valid JSON Schema, or a `$ref` pointing outside the schema.
 4. **A console warning naming an unknown type** in the browser means the backend generated it and the frontend never registered it. Step 1 did not run, or it ran after the first render. In development you get a visible placeholder instead of a silent gap.
 
 ### Re-skin a built-in type with your own component
@@ -1171,6 +1186,7 @@ One practical note. An override is global to the bundle, which is the point (reg
 
 - The name, description, schema and optional example go into the prompt, so the model knows when and how to use the component.
 - Generated data is **validated against your JSON Schema** server-side (jsonschema). Components that fail are dropped and reported in `meta.sanitization`, never rendered.
+- Your schema is **resolved locally and nowhere else**. It is checked as a schema when you register it, and a `$ref` is followed only inside the schema itself. A reference to a URL is refused by name, before the type reaches a prompt, so validating a component never makes the backend fetch anything. Keep shared definitions in `$defs` and point at them with `#/$defs/...`.
 - The **URL whitelist applies recursively** to your payload: URL-named fields (`url`, `link`, `href`, `src`, `image`, `*_url`, …), absolute URLs and markdown links at any depth are checked against the whitelist, and dangerous schemes are always stripped. Your component cannot receive a link the model invented.
 - The **content policy scans the whole payload** at any depth, and a custom component containing a banned term is dropped like any other. Redundancy, the component budget and pinned enforcement apply to it too.
 - **Numeric grounding is the exception, and it is worth knowing.** It reads the shapes it knows (`stats_banner` values and changes, `pricing_cards` prices, `chart` points, `case_studies` metrics, `comparison_bars` values, `metrics_trend` metrics and series points), so a number inside a custom payload is not traced back to the input. If your component displays a figure that must be real, put it in `pinned_content` or keep it in a grounded built-in type. [`deploy/OUTPUT-GUARANTEES.md`](deploy/OUTPUT-GUARANTEES.md) states the same limit.
@@ -1453,7 +1469,7 @@ What reaches the frontend is guaranteed by the system, not by prompt obedience:
 
 > Because URLs and numbers must exist in the input, enumerate your content in `contextPrompt` (or `pinnedContent` / RAG) — content the model cannot reference, it cannot link or claim.
 
-The full chain (`validate → URL guard → numeric grounding → content policy → redundancy → pinned`) runs on **every** serving path — sync, SSE streaming, and `/query` — and always _before_ a render is cached. On the React side, `useZone` and `useGenUI` expose the report as `meta.sanitization` (`removedUrls`, `droppedComponents`, `removedNumbers`, `policyViolations`), so a host can observe enforcement without parsing wire data. [`deploy/OUTPUT-GUARANTEES.md`](deploy/OUTPUT-GUARANTEES.md) states each guarantee with its enforcing code reference, its test, and its honest limits — written to be attached to a contract.
+The full chain (`validate → URL guard → numeric grounding → content policy → redundancy → component budget → pinned`) runs on **every** serving path (sync, SSE streaming and `/query`), and always _before_ a render is cached. On the React side, `useZone` and `useGenUI` expose the report as `meta.sanitization` (`removedUrls`, `droppedComponents`, `removedNumbers`, `policyViolations`), so a host can observe enforcement without parsing wire data. [`deploy/OUTPUT-GUARANTEES.md`](deploy/OUTPUT-GUARANTEES.md) states each guarantee with its enforcing code reference, its test, and its honest limits, written to be attached to a contract.
 
 ---
 
@@ -1980,17 +1996,17 @@ function navigateTo(path: string) {
 
 The knowledge base feeds the AI real content to curate (and its URLs feed the whitelist). **Every operation is scoped to the tenant of the API key**: tenant A can never retrieve, list, or delete tenant B's documents. Documents indexed before tenant isolation belong to the `default` tenant. All endpoints require an **admin key**.
 
-| Endpoint                                 | What it does                                                                                                                                                                                    |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/v1/documents/upload`          | Upload a **file** (PDF, DOCX, HTML, TXT, MD — max 10 MB, multipart): text extracted server-side, semantically chunked, indexed. Images (PNG/JPG/WEBP/TIFF) too with a capable extractor backend |
-| `POST /api/v1/documents`                 | Upload raw text (JSON: `content` + `metadata`)                                                                                                                                                  |
-| `GET /api/v1/documents`                  | List the tenant's documents with chunk counts                                                                                                                                                   |
-| `POST /api/v1/documents/search`          | Preview what the AI would retrieve for a query (passages + similarity scores) — content debugging                                                                                               |
-| `DELETE /api/v1/documents/{source_name}` | Delete a document (tenant-scoped, audit-logged). Its tokens leave the corpus total with it                                                                                                      |
-| `GET /api/v1/documents/stats`            | Collection stats incl. the tenant's chunk count                                                                                                                                                 |
-| `POST /api/v1/documents/backfill`        | Index the chunks stored without their context behind it now. `dry_run` prices the run first; it goes through the per-tenant cap and picks up where a previous run stopped                        |
-| `GET /api/v1/documents/ingest/{id}`      | How far a running upload has got: phase, chunks written, total. The id is the one sent with the upload                                                                                           |
-| `POST /api/v1/documents/ingest/{id}/cancel` | Ask a running upload to stop. It stops between batches, keeping everything written so far                                                                                                    |
+| Endpoint                                    | What it does                                                                                                                                                                                    |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/v1/documents/upload`             | Upload a **file** (PDF, DOCX, HTML, TXT, MD, up to `MAX_UPLOAD_MB`, 50 by default, multipart; past that, 413): text extracted server-side off the event loop, chunked, indexed. Images (PNG/JPG/WEBP/TIFF) too with a capable extractor backend |
+| `POST /api/v1/documents`                    | Upload raw text (JSON: `content` + `metadata`)                                                                                                                                                  |
+| `GET /api/v1/documents`                     | List the tenant's documents with chunk counts                                                                                                                                                   |
+| `POST /api/v1/documents/search`             | Preview what the AI would retrieve for a query (passages + similarity scores), for content debugging                                                                                            |
+| `DELETE /api/v1/documents/{source_name}`    | Delete a document (tenant-scoped, audit-logged). Its tokens leave the corpus total with it                                                                                                      |
+| `GET /api/v1/documents/stats`               | Collection stats incl. the tenant's chunk count                                                                                                                                                 |
+| `POST /api/v1/documents/backfill`           | Index the chunks stored without their context behind it now. `dry_run` prices the run first; it goes through the per-tenant cap and picks up where a previous run stopped                       |
+| `GET /api/v1/documents/ingest/{id}`         | How far a running upload has got: phase, chunks written, total. The id is the one sent with the upload                                                                                          |
+| `POST /api/v1/documents/ingest/{id}/cancel` | Ask a running upload or backfill to stop. It stops between batches and keeps what it wrote. The id stays stopped: a call that carries that run on answers `cancelled` and does nothing |
 
 ```bash
 # Upload a PDF (url becomes linkable by the AI via the whitelist)
@@ -2014,13 +2030,27 @@ EXTRACTOR_BACKEND=local      # default: pypdf/docx/bs4 — zero dependencies, da
 # EXTRACTOR_BACKEND=glmocr   # state-of-the-art incl. scanned docs (pip install glmocr)
 # GLMOCR_BASE_URL=...        # self-hosted GLM-OCR (vLLM/Ollama, ~2-4GB VRAM): data stays in-house
 # GLMOCR_API_KEY=...         # Z.ai cloud API: documents LEAVE your infra — opt-in consciously
+# MAX_UPLOAD_MB=50           # largest file accepted, in MB
 ```
+
+**The upload limit is `MAX_UPLOAD_MB`, 50 by default.** A file past it is refused with 413 while it is being read, and the Studio shows the limit under the drop zone and refuses a larger file without sending it. Raise it for image-heavy PDFs and scans. Each upload in progress holds its file in memory, and the request stays open until the file is indexed, so the ceiling is also a question of memory per worker and of how long your proxy lets a request run. The proxy in front applies its own body limit first: nginx accepts 1 MB unless `client_max_body_size` says otherwise.
 
 **Re-uploading a document replaces it.** A point's id derives from the tenant and the chunk it holds, so the second upload of a document lands on the first instead of beside it, and chunks the new version no longer has are dropped rather than left behind grounding text the document no longer contains. Deleting a document takes its tokens off the corpus total, which is what decides whether new chunks are indexed with their context.
 
 Routing is per-format: plain text always decodes locally; a backend only handles the formats it excels at (Docling: PDF/DOCX/HTML/images; GLM-OCR: PDF/images) and everything else falls through to the local parsers. Runtime failures of a backend **fall back to local** with a warning; a configured backend with a missing package fails loudly (501) — that's a deployment mistake, not something to hide. The audit log records which extractor produced each document.
 
 > Note: scanned PDFs need `docling` or `glmocr` — the local backend cannot OCR.
+
+**Extraction runs in the threadpool.** Parsing is blocking work. On the event loop, a 100-page PDF stalls the worker for about a quarter of a second with the local parser, and Docling takes much longer. Renders and probes on that worker wait the whole time. The upload is read 1 MB at a time and refused with 413 the moment it passes `MAX_UPLOAD_MB`, so an oversized file never sits whole in memory.
+
+#### Chunking
+
+```env
+USE_SEMANTIC_CHUNKING=true   # false: cut at sentences, embed nothing to cut
+CHUNK_SIZE=512               # tokens, the ceiling for a chunk either way
+```
+
+Semantic chunking cuts where the meaning shifts. To find those points it embeds every sentence of the document, on your embedding endpoint, before a single chunk is indexed. With `USE_SEMANTIC_CHUNKING=false` the document is cut at sentence boundaries up to `CHUNK_SIZE` and nothing is embedded for the cut.
 
 #### Bring your own embedding — your documents embed where you choose
 
@@ -2060,10 +2090,10 @@ SIMILARITY_THRESHOLD=0.35
 
 **What it measured.** On the retrieval eval, same corpus and same questions, dense only against fused:
 
-| | recall@5 | recall@10 | recall@20 | mean position of the first useful result |
-| --- | --- | --- | --- | --- |
-| dense only | 0.83 | 1.00 | 1.00 | 2.9 |
-| fused | **0.98** | 1.00 | 1.00 | **1.8** |
+|            | recall@5 | recall@10 | recall@20 | mean position of the first useful result |
+| ---------- | -------- | --------- | --------- | ---------------------------------------- |
+| dense only | 0.83     | 1.00      | 1.00      | 2.9                                      |
+| fused      | **0.98** | 1.00      | 1.00      | **1.8**                                  |
 
 Nine questions out of 52 missed the top 5 with dense retrieval alone; one does with fusion. Reproduce either side with `HYBRID_RETRIEVAL=false`.
 
@@ -2086,8 +2116,11 @@ CONTEXT_MODEL=gpt-4o-mini
 curl -X POST http://localhost:8000/api/v1/documents \
   -H "X-API-Key: sk_live_xyz789" -H "Content-Type: application/json" \
   -d '{"content": "...", "metadata": {"title": "Annual review"}, "dry_run": true}'
-# {"status":"estimated","chunks_created":43,"context_calls":43,"prompt_cache":"explicit",...}
+# {"status":"estimated","chunks_created":43,"context_calls":43,"prompt_cache":"explicit",
+#  "chunking":"semantic","chunks_approximate":true,"cutting_embeddings":610,...}
 ```
+
+**The estimate spends nothing, embeddings included.** Finding the semantic cut means embedding every sentence, so with semantic chunking on the estimate cuts at sentences instead. Its chunk counts are approximate (`chunks_approximate: true`), and a document already in the index counts as new. `cutting_embeddings` is the number of sentences the upload will embed to cut it. With `USE_SEMANTIC_CHUNKING=false` the estimate makes the same cut the upload will.
 
 **A document that does not fit the budget is indexed without context**, not half indexed. Every outcome is a state that can be stated: the response carries `contextual_indexing`, `context_calls` and `budget_exceeded`, and each point records `contextualized` next to the chunk.
 
@@ -2097,17 +2130,23 @@ curl -X POST http://localhost:8000/api/v1/documents \
 
 **A chunk is identified by the text it holds.** Its point is addressed by a hash of the content, so uploading a document again buys only what actually changed: a corrected passage is written, a passage that merely moved because a section was inserted above it is left where it is, and an identical upload costs nothing at all. Chunks that repeat word for word inside one document are told apart by their occurrence, so boilerplate keeps one point per copy. Since the addressing changed, a collection indexed before this rewrites each document once, the first time it is uploaded again.
 
+**A replacement that fails halfway keeps the version it was replacing.** The old version of a document is pruned only once every chunk of the new one is stored. If embedding or the write fails partway, nothing is pruned, and the response says `status: "partial"`, with `chunks_indexed`, `chunks_failed`, `error` and `previous_version_served: true`: the passages that did not make it are still answered by the text they were meant to replace. To retry, upload the document again: it skips what was stored and finishes the rest. Removing the old version can fail on its own too, after the new one is stored in full. That upload is `partial` as well, with `previous_version_served: true` and the error, because the withdrawn text is still in the index and still grounds URLs and numbers. The console marks that upload as failed.
+
+**A metadata correction reaches the index without embedding again.** Identical text under a corrected `url` or `title` lands on the same point, so its payload is rewritten in place and nothing is embedded; the response counts these in `chunks_payload_updated`. The upload time and the node ids the splitter draws are left out of the comparison, so an unchanged upload stays at zero. And this one matters: `url` is what the whitelist lets the model link.
+
 **It can be watched and it can be stopped.** An upload is one request that answers only at the end, which on a large document means many minutes of silence: the console polls `GET /api/v1/documents/ingest/{id}` and draws the real count of chunks written, so a long job is distinguishable from a stuck one. Stopping goes through `POST /api/v1/documents/ingest/{id}/cancel`, because closing the browser does not stop anything: the server is never told and keeps spending to the end of the document. The flag is read between batches, so a stopped run keeps everything it had written and buys nothing more.
+
+**A stop is final for the run it names.** The id is what carries a run on: the next call of a backfill, the second phase of an upload. A call that arrives with a stopped id does no work and answers `status: "cancelled"`, and the console ends its loop there. Carrying on after a stop is a new run, started by pressing Start again.
 
 **A document larger than the model's context does not travel whole.** `CONTEXT_DOCUMENT_MAX_CHARS` (default 48000, about 12k tokens) bounds what goes beside each chunk; past it the document travels as its opening, which carries the subject and the period, plus the neighborhood of the chunk. Sending it whole means every call is refused for exceeding the context while still spending the rate limit. A batch where several calls fail in a row is abandoned and the rest of the document is indexed plain, since a refusal is the model saying no rather than a blip.
 
 **What it measured**, on the same corpus and questions as the retrieval eval:
 
-| | recall@5 | mean position of the first useful result |
-| --- | --- | --- |
-| dense only | 0.83 | 2.9 |
-| fused | 0.98 | 1.9 |
-| fused + context | **1.00** | **1.4** |
+|                 | recall@5 | mean position of the first useful result |
+| --------------- | -------- | ---------------------------------------- |
+| dense only      | 0.83     | 2.9                                      |
+| fused           | 0.98     | 1.9                                      |
+| fused + context | **1.00** | **1.4**                                  |
 
 The question that fused retrieval still missed was "how many depots are still without charging installed", whose passage reads "The remaining five are scheduled for the following year" and cannot be understood alone at all. That is the shape of passage this exists for.
 
@@ -2121,7 +2160,7 @@ CONTEXTUAL_INDEXING_THRESHOLD_TOKENS=200000   # 0 disables the automatic thresho
 
 Below a certain corpus size the technique is not worth buying: at that scale the cheaper answer is to put the documents in the prompt instead of working on retrieval, and the default is the size its authors put that line at. Above it, new chunks are indexed with their context without anyone switching anything on. `CONTEXTUAL_INDEXING_TENANTS` still forces it on for a tenant whose corpus is smaller.
 
-The size is counted in tokens, because that is what the threshold was studied in, and it is kept as a running total while indexing rather than recomputed. A deployment that indexed before the total existed rebuilds it once from the collection and carries on from there, because reading it as zero would be a feature that silently never starts.
+The size is counted in tokens, because that is what the threshold was studied in, and it is kept as a running total while indexing rather than recomputed. The total moves by what entered and left the index: written chunks add their tokens, pruning and deletion take theirs off, and writing context onto text already stored adds nothing. A deployment that indexed before the total existed rebuilds it once from the collection and carries on from there, because reading it as zero would be a feature that silently never starts.
 
 **The corpus indexed before the line was crossed is the part that breaks quietly.** Those chunks have no context, they compete against chunks that do, and they lose for a reason that has nothing to do with how relevant they are: retrieval that is not uniformly worse but systematically wrong, always against the older documents. So the split is counted and shown above the document list in the console, for as long as it is true.
 
@@ -2138,7 +2177,7 @@ curl -X POST http://localhost:8000/api/v1/documents/backfill \
 # {"status":"estimated","chunks_plain":812,"context_calls":500,"prompt_cache":"explicit"}
 ```
 
-It prices the run first, goes through the same per-tenant cap as everything else, and refuses the whole run rather than stopping halfway through the budget. It updates points in place instead of writing new ones, and it skips what is already done, so an interrupted run resumed later neither duplicates nor skips: `status` comes back `partial` with `chunks_plain_remaining` until there is nothing left. A chunk is situated inside its own document, rebuilt from its chunks in reading order, since the original file is not kept after an ingest.
+It prices the run first, goes through the same per-tenant cap as everything else, and refuses the whole run rather than stopping halfway through the budget. It updates points in place instead of writing new ones, and it skips what is already done, so an interrupted run resumed later neither duplicates nor skips: `status` comes back `partial` with `chunks_plain_remaining` until there is nothing left, or `cancelled` once someone stops it. A chunk is situated inside its own document, rebuilt from its chunks in reading order, since the original file is not kept after an ingest.
 
 ### POST /api/v1/query — Chat Interface
 
@@ -2258,24 +2297,24 @@ Content-Type: application/json
 
 Serving endpoints take a client key; control-plane endpoints take an admin key and are always scoped to the tenant that key resolves to.
 
-| Endpoint                                                                       | Key                 | What it is                                          | Section                                                                  |
-| ------------------------------------------------------------------------------ | ------------------- | --------------------------------------------------- | ------------------------------------------------------------------------ |
-| `POST /api/v1/zone/render`                                                     | client              | Render a zone                                       | above                                                                    |
-| `POST /api/v1/zone/render/stream`                                              | client              | Same render, progressive (SSE)                      | [Streaming](#️-streaming--ssr-safety)                                     |
-| `POST /api/v1/zone/batch-render`                                               | client              | Several zones in one request (capped, counted as N) | [Cost Controls](#-cost-controls)                                         |
-| `POST /api/v1/query`                                                           | client              | Chat with optional UI components                    | above                                                                    |
-| `POST /api/v1/events`                                                          | client              | Impression / click ingestion                        | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
-| `GET /api/v1/events/stats`                                                     | admin               | CTR per arm, uplift, z-test                         | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
-| `GET /api/v1/profile/{user_id}` · `DELETE` · `POST /profile/sync`              | client + user token | Server-side profile, GDPR erasure                   | [Auth & Profiles](#-auth-server-side-profiles--audit)                    |
-| `GET /api/v1/profile/{user_id}/export`                                         | client + user token | Everything held about one person (GDPR access)      | [Access and erasure](#access-and-erasure)                                |
+| Endpoint                                                                                                                              | Key                 | What it is                                          | Section                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------------------------------- | ------------------------------------------------------------------------ |
+| `POST /api/v1/zone/render`                                                                                                            | client              | Render a zone                                       | above                                                                    |
+| `POST /api/v1/zone/render/stream`                                                                                                     | client              | Same render, progressive (SSE)                      | [Streaming](#️-streaming--ssr-safety)                                     |
+| `POST /api/v1/zone/batch-render`                                                                                                      | client              | Several zones in one request (capped, counted as N) | [Cost Controls](#-cost-controls)                                         |
+| `POST /api/v1/query`                                                                                                                  | client              | Chat with optional UI components                    | above                                                                    |
+| `POST /api/v1/events`                                                                                                                 | client              | Impression / click ingestion                        | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
+| `GET /api/v1/events/stats`                                                                                                            | admin               | CTR per arm, uplift, z-test                         | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
+| `GET /api/v1/profile/{user_id}` · `DELETE` · `POST /profile/sync`                                                                     | client + user token | Server-side profile, GDPR erasure                   | [Auth & Profiles](#-auth-server-side-profiles--audit)                    |
+| `GET /api/v1/profile/{user_id}/export`                                                                                                | client + user token | Everything held about one person (GDPR access)      | [Access and erasure](#access-and-erasure)                                |
 | `POST /api/v1/documents` · `/upload` · `/search` · `/backfill` · `/ingest/{id}` · `/ingest/{id}/cancel` · `GET` · `DELETE` · `/stats` | admin               | RAG knowledge base                                  | [Knowledge Base](#knowledge-base-rag--tenant-isolated)                   |
-| `GET/PUT/POST/DELETE /api/v1/zone/config[...]`                                 | admin               | Zone config as data: draft, approve, discard        | [Zone Registry](#%EF%B8%8F-zone-config-registry--config-as-data)         |
-| `GET /api/v1/audit`                                                            | admin               | What was shown to whom                              | [Querying the audit](#querying-the-audit)                                |
-| `GET/PUT /api/v1/content-policy`                                               | admin               | Per-tenant banned terms                             | [Output Guarantees](#%EF%B8%8F-output-guarantees) point 5                |
-| `GET /api/v1/theme` (client) · `PUT` (admin)                                   | both                | Per-tenant theme                                    | [Per-tenant theme](#per-tenant-theme-the-theme-as-stored-config)         |
-| `POST /api/v1/zone/warmup` · `GET /api/v1/zone/cache/stats`                    | admin               | Pre-warm segments, inspect the cache                | [Segment Cache](#-segment-cache--llm-as-an-offline-ranker)               |
-| `GET /api/v1/whoami`                                                           | admin               | Which tenant this key resolves to                   | [Tenants in the console](#-tenants-in-the-console-and-where-auth-begins) |
-| `GET /health` · `/ready` · `/live` · `/metrics`                                | open / admin        | Health, probes, Prometheus metrics                  | [Observability](#observability)                                          |
+| `GET/PUT/POST/DELETE /api/v1/zone/config[...]`                                                                                        | admin               | Zone config as data: draft, approve, discard        | [Zone Registry](#%EF%B8%8F-zone-config-registry--config-as-data)         |
+| `GET /api/v1/audit`                                                                                                                   | admin               | What was shown to whom                              | [Querying the audit](#querying-the-audit)                                |
+| `GET/PUT /api/v1/content-policy`                                                                                                      | admin               | Per-tenant banned terms                             | [Output Guarantees](#%EF%B8%8F-output-guarantees) point 5                |
+| `GET /api/v1/theme` (client) · `PUT` (admin)                                                                                          | both                | Per-tenant theme                                    | [Per-tenant theme](#per-tenant-theme-the-theme-as-stored-config)         |
+| `POST /api/v1/zone/warmup` · `GET /api/v1/zone/cache/stats`                                                                           | admin               | Pre-warm segments, inspect the cache                | [Segment Cache](#-segment-cache--llm-as-an-offline-ranker)               |
+| `GET /api/v1/whoami`                                                                                                                  | admin               | Which tenant this key resolves to                   | [Tenants in the console](#-tenants-in-the-console-and-where-auth-begins) |
+| `GET /health` · `/ready` · `/live` · `/metrics`                                                                                       | open / admin        | Health, probes, Prometheus metrics                  | [Observability](#observability)                                          |
 
 ---
 
@@ -2387,19 +2426,21 @@ genui-framework/
 │  └──────┬───────┘                                                       │
 │         │                                                               │
 │         ▼                                                               │
-│  ┌────────────────────────┐   ┌──────────────────────────┐              │
-│  │ Zone config registry   │──►│ Segment cache (SWR)      │              │
-│  │ approved config = DATA │   │ fresh hit: no LLM at all │              │
-│  └────────────────────────┘   └────────────┬─────────────┘              │
-│                                     miss / stale                        │
-│                                            ▼                            │
+│  ┌────────────────────────┐     ┌──────────────────────────┐            │
+│  │ Zone config registry   │     │ Segment cache (SWR)      │            │
+│  │ approved config = DATA │───► │ fresh hit: no LLM at all │            │
+│  └────────────────────────┘     └────────────┬─────────────┘            │
+│                                             │                           │
+│                                         miss/stale                      │
+│                                             │                           │
+│                                             ▼                           │
 │  ┌─────────────────────────────────────────────────────────────┐        │
 │  │                        AGENT SYSTEM                         │        │
 │  │                                                             │        │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │        │
-│  │  │ ZoneAgent    │  │ResponseAgent │  │ ProfileAgent │       │        │
-│  │  │ (zone render)│  │ (chat)       │  │ (learning)   │       │        │
-│  │  └──────┬───────┘  └──────────────┘  └──────────────┘       │        │
+│  │  ┌──────────────┐  ┌───────────────┐  ┌──────────────┐      │        │
+│  │  │ ZoneAgent    │  │ ResponseAgent │  │ ProfileAgent │      │        │
+│  │  │ (zone render)│  │ (chat)        │  │ (learning)   │      │        │
+│  │  └──────┬───────┘  └───────────────┘  └──────────────┘      │        │
 │  │         │                                                   │        │
 │  │         ▼                                                   │        │
 │  │  ┌──────────────┐  ┌──────────────┐                         │        │
@@ -2410,7 +2451,7 @@ genui-framework/
 │  └─────────────────────────────────────────────────────────────┘        │
 │                                                                         │
 │  Guarantee chain (before cache and response):                           │
-│  validate → URLs → numbers → policy → redundancy → pinned               │
+│  validate → URLs → numbers → policy → redundancy → budget → pinned      │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
                                        │
@@ -2427,7 +2468,7 @@ genui-framework/
 5. **Segmentation** — profile + behavior collapse into a deterministic segment key (`role=developer|int=ai|eng=high`).
 6. **Cache lookup** — fresh hit: served, no LLM. Stale: served + refreshed in background (single-flight). Miss: continue under a cold-miss single-flight lock, subject to the per-tenant LLM budget. The resolved config is part of the cache key, so approving an edit invalidates what it changed.
 7. **Generation** — provider-agnostic LLM call (BYOK) with structured output and a timeout. Cached (segment) renders see the segment **archetype**, never the raw profile, so no single user can poison a segment; only admin-forced `live` renders see the full profile.
-8. **Guarantees** — per-component schema validation, URL whitelist, numeric grounding, per-tenant content policy, redundancy removal, pinned-content enforcement (identical on the sync and SSE paths).
+8. **Guarantees**: per-component schema validation, URL whitelist, numeric grounding, per-tenant content policy, redundancy removal, component budget, pinned-content enforcement. The SSE path applies the same guards in the same order, per component, before each one crosses the wire.
 9. **Cache write, audit & metrics** — the render is cached for the whole segment, audit-logged (what was shown, to whom, why, and what the chain removed), and counted by the `/metrics` middleware.
 
 The **chat pipeline** (`/query`) is separate and isolated: Response/Profile/Behave agents run in parallel per request with no state shared across users or tenants; the model can invoke a tenant-scoped `search_documents` RAG tool; the same guarantee chain applies to its output.

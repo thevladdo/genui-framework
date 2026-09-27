@@ -533,10 +533,7 @@ class VectorStoreTestCase(unittest.TestCase):
         self.addCleanup(patcher.stop)
         for name in [n for n in list(sys.modules) if n == "rag" or n.startswith("rag.")]:
             del sys.modules[name]
-        module = importlib.import_module("rag.vector_store")
-        module.clear_cache()  # search results are cached in-process
-        self.addCleanup(module.clear_cache)
-        return module
+        return importlib.import_module("rag.vector_store")
 
 
 class TestVectorStoreDimensions(VectorStoreTestCase):

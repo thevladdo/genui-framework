@@ -4,11 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "description": "GenUI Studio | Theme Playground (public) + Content Studio (admin)",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "tsc src/lib/measure.ts src/lib/segment.ts src/lib/session.ts src/lib/api.ts src/lib/theme.ts src/lib/agentPrompt.ts --outDir tests/.build --module commonjs --target es2020 --strict --skipLibCheck && node --test tests/"
+    "test": "tsc src/lib/measure.ts src/lib/segment.ts src/lib/session.ts src/lib/api.ts src/lib/theme.ts src/lib/agentPrompt.ts --outDir tests/.build --module commonjs --target es2020 --strict --skipLibCheck && node --test \"tests/*.test.cjs\""
   },
   "dependencies": {
     "@fontsource/geist-sans": "^5.1.0",

@@ -7,8 +7,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# requirements.lock pins every package requirements.txt resolves to, so two
+# builds of the same commit install the same versions.
+COPY requirements.lock .
+RUN pip install --no-cache-dir -r requirements.lock
 # Optional extras are opt-in to keep the image lean; add before COPY . if needed:
 #   anthropic  (LLM_PROVIDER=anthropic)
 #   docling    (EXTRACTOR_BACKEND=docling)

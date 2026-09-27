@@ -1,18 +1,17 @@
 """
-S4 output guarantees: numeric grounding + per-tenant content policy.
+Output guarantees: numeric grounding + per-tenant content policy.
 
 "Never invent numbers" in the system prompt is an instruction, not a
-guarantee: it shifts probability, it bounds nothing. The URL guard is the
-model to follow — check the OUTPUT against a whitelist built from the
-INPUT, after generation, on every path. These tests pin that extension:
+guarantee: it shifts probability, it bounds nothing. The output is checked
+against what the input contains, after generation, on every path:
 
 - NumericGuard: numbers displayed AS the content (stats_banner values,
   pricing prices, chart points) must trace to a number present in the
   input; ungrounded ones are removed and reported.
 - ContentPolicy: per-tenant banned terms are enforced post-generation
   (component dropped, chat text redacted), outcome in meta.
-- The chain applies on BOTH zone paths (sync + SSE) and on /query —
-  whose text_response also gets the URL-guard treatment it was missing.
+- The chain applies on BOTH zone paths (sync + SSE) and on /query,
+  whose text_response goes through the URL guard as well.
 """
 
 import asyncio
@@ -275,6 +274,20 @@ _HERO_IMAGE_ENVELOPE = {
     "profile_factors": [],
 }
 
+_OVER_BUDGET_ENVELOPE = {
+    "components": [
+        {"type": "text", "data": {"content": "We serve 120 countries."}},
+        {"type": "text", "data": {"content": "Uptime sits at 99.9 percent."}},
+        {"type": "text", "data": {"content": "Support answers in minutes."}},
+        {"type": "text", "data": {"content": "Setup takes an afternoon."}},
+    ],
+    "pinned_included": [],
+    "personalization_applied": False,
+    "confidence": 0.8,
+    "reasoning": "over budget envelope",
+    "profile_factors": [],
+}
+
 
 def _zone_request(tenant="acme"):
     return ZoneRenderRequest(
@@ -355,6 +368,31 @@ class TestZoneChain(unittest.TestCase):
         result = events[-1]["result"]
         self.assertEqual(result.removed_numbers, ["5M"])
         self.assertEqual(result.policy_violations, ["guaranteed returns"])
+
+    def test_the_component_budget_cuts_the_extras_on_both_paths(self):
+        """
+        A zone is one band of a host page. Nothing else in the chain drops
+        these four: they are valid, grounded, and none repeats another, so
+        a budget that stopped being applied would put a page where a
+        sidebar slot was and report nothing.
+        """
+        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+                          llm_client=_FakeLLM(_OVER_BUDGET_ENVELOPE))
+        request = _zone_request()
+        request.max_components = 2
+
+        result = asyncio.run(agent.render_zone_async(request))
+        self.assertEqual(len(result.components), 2, "first ones win")
+        self.assertEqual(len(result.dropped_components), 2,
+                         "and the cut ones are reported, not silent")
+
+        async def collect():
+            return [e async for e in agent.render_zone_stream_async(request)]
+
+        events = asyncio.run(collect())
+        streamed = [e["component"] for e in events if e["type"] == "component"]
+        self.assertEqual(len(streamed), 2, "the extras never cross the wire")
+        self.assertEqual(len(events[-1]["result"].dropped_components), 2)
 
     def test_policy_is_per_tenant(self):
         result = asyncio.run(self._agent().render_zone_async(_zone_request(tenant="globex")))
@@ -448,7 +486,7 @@ class TestZoneChain(unittest.TestCase):
         self.assertEqual(result.pinned_content_included, ["https://cdn.example/hero.jpg"])
 
     def test_fallback_render_shows_content_not_material(self):
-        agent = ZoneAgent(model="test", vector_store=_EmptyStore(), llm_client=None)
+        agent = ZoneAgent(model="test", vector_store=_EmptyStore(), llm_client=_FakeLLM({}))
         request = _redundant_request()
         request.pinned_content = [
             {"type": "image", "title": "Portrait, neutral background",

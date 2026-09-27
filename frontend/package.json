@@ -26,10 +26,14 @@
   ],
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
-    "build": "rm -rf dist && tsc --noEmit && rollup -c && cp dist/index.d.ts dist/index.d.cts",
+    "build": "tsc --noEmit && rollup -c",
     "typecheck": "tsc --noEmit",
     "dev": "rollup -c -w",
     "test": "vitest run",

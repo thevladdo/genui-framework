@@ -4,6 +4,9 @@ and recursive URL sanitization of custom components.
 Runnable with pytest or `python3 -m unittest discover -s tests` from backend/.
 """
 
+import http.server
+import json
+import threading
 import unittest
 
 from schemas import (
@@ -71,6 +74,102 @@ class TestRegistry(unittest.TestCase):
         self.assertNotIn("ok_type", merged)
 
 
+class _CountingSchemaServer:
+    """
+    Serves one schema over http and counts who asked for it. A hit here is
+    an outbound request the backend made because a request body told it to.
+    """
+
+    def __enter__(self):
+        self.hits = []
+        hits = self.hits
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits.append(self.path)
+                body = json.dumps({"type": "string"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self._server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self._server.server_address[1]}/schema.json"
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc):
+        self._server.shutdown()
+        self._server.server_close()
+
+
+class TestSchemaResolution(unittest.TestCase):
+    def tearDown(self):
+        unregister_component_type("promo_banner")
+
+    def test_remote_ref_is_refused_and_never_fetched(self):
+        with _CountingSchemaServer() as server:
+            schema = {
+                "type": "object",
+                "properties": {"headline": {"$ref": server.url}},
+            }
+
+            with self.assertRaises(ValueError) as raised:
+                register_component_type("promo_banner", schema)
+            self.assertIn(server.url, str(raised.exception))
+
+            merged = merge_custom_types([
+                {"name": "promo_banner", "data_schema": schema},
+            ])
+            self.assertNotIn("promo_banner", merged)
+
+            valid, errors = validate_components(
+                [{"type": "promo_banner", "data": {"headline": "Welcome"}}], merged
+            )
+            self.assertEqual(valid, [])
+            self.assertEqual(len(errors), 1)
+            self.assertEqual(server.hits, [])
+
+    def test_local_ref_is_accepted(self):
+        schema = {
+            "type": "object",
+            "$defs": {"line": {"type": "string"}},
+            "properties": {"headline": {"$ref": "#/$defs/line"}},
+        }
+        merged = merge_custom_types([{"name": "promo_banner", "data_schema": schema}])
+        self.assertIn("promo_banner", merged)
+
+        valid, errors = validate_components(
+            [{"type": "promo_banner", "data": {"headline": "Welcome"}}], merged
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(len(valid), 1)
+
+    def test_malformed_schema_never_lets_data_through(self):
+        broken = {"type": "object", "properties": {"headline": "a string, not a schema"}}
+
+        with self.assertRaises(ValueError):
+            register_component_type("promo_banner", broken)
+        self.assertNotIn(
+            "promo_banner",
+            merge_custom_types([{"name": "promo_banner", "data_schema": broken}]),
+        )
+
+        # A definition built around the registry gets the same answer, at the
+        # point where the data would otherwise be accepted unvalidated
+        valid, errors = validate_components(
+            [{"type": "promo_banner", "data": {"headline": "Welcome"}}],
+            {"promo_banner": ComponentTypeDef(name="promo_banner", data_schema=broken)},
+        )
+        self.assertEqual(valid, [])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("promo_banner", errors[0])
+
+
 class TestProviderSchemaExtension(unittest.TestCase):
     def test_custom_types_added_to_components_union(self):
         from schemas import zone_output_json_schema
@@ -131,6 +230,23 @@ class TestValidateCustomComponents(unittest.TestCase):
         valid, errors = validate_components(raw, self.custom)
         self.assertEqual(len(valid), 2)
         self.assertEqual(errors, [])
+
+    def test_type_that_is_not_a_name_drops_only_itself(self):
+        """
+        An unhashable type raised out of the per-component loop would take
+        the whole render with it: the zone falls back and the chat answers 500.
+        """
+        raw = [
+            {"type": "text", "data": {"content": "kept"}},
+            {"type": [], "data": {"headline": "H"}},
+            {"type": {"promo_banner": True}, "data": {"headline": "H"}},
+            {"type": "promo_banner", "data": {"headline": "also kept"}},
+        ]
+        valid, errors = validate_components(raw, self.custom)
+        self.assertEqual(len(valid), 2)
+        self.assertEqual(len(errors), 2)
+        for error in errors:
+            self.assertIn("type is not a string", error)
 
     def test_custom_data_must_be_object(self):
         raw = [{"type": "promo_banner", "data": "just a string"}]

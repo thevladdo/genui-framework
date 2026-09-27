@@ -16,6 +16,7 @@ Four properties:
 
 import asyncio
 import unittest
+import uuid
 from types import SimpleNamespace
 from unittest import mock
 
@@ -37,6 +38,24 @@ try:
     HAVE_DEPS = True
 except Exception:
     HAVE_DEPS = False
+
+
+def setUpModule():
+    """Runs and stops recorded here stay in memory, off the Redis of whoever runs the suite."""
+    try:
+        from rag import ingest_status
+        from utils.tenant_json_store import TenantJsonStore
+    except Exception:
+        return
+    ingest_status._STORE = TenantJsonStore(key_prefix="genui:ingest:")
+
+
+def tearDownModule():
+    try:
+        from rag import ingest_status
+    except Exception:
+        return
+    ingest_status._STORE = None
 
 
 def run(coro):
@@ -361,7 +380,7 @@ class BudgetTest(unittest.TestCase):
 
         class _Store:
             def prune_removed_chunks(self, source, chunk_ids, tenant):
-                return 0
+                return 0, 0
 
             def indexed_state(self, source, tenant):
                 return {}
@@ -412,7 +431,7 @@ class BudgetTest(unittest.TestCase):
 
         class _Store:
             def prune_removed_chunks(self, source, chunk_ids, tenant):
-                return 0
+                return 0, 0
 
             def indexed_state(self, source, tenant):
                 return {}
@@ -455,7 +474,7 @@ class BudgetTest(unittest.TestCase):
 
         class _Store:
             def prune_removed_chunks(self, source, chunk_ids, tenant):
-                return 0
+                return 0, 0
 
             def indexed_state(self, source, tenant):
                 return {}
@@ -514,7 +533,7 @@ class BudgetTest(unittest.TestCase):
 
         class _Store:
             def prune_removed_chunks(self, source, chunk_ids, tenant):
-                return 0
+                return 0, 0
 
             def indexed_state(self, source, tenant):
                 return {}
@@ -547,7 +566,10 @@ class BudgetTest(unittest.TestCase):
 
         class _Store:
             def indexed_state(self, source, tenant):
-                return {point_id(t): True for t in stored_texts}
+                return {point_id(t): {"contextualized": True} for t in stored_texts}
+
+            def refresh_payloads(self, chunks, stored, tenant):
+                return 0
 
             def index_chunks(self, batch, tenant):
                 indexed.extend(c.chunk_id for c in batch)
@@ -555,7 +577,7 @@ class BudgetTest(unittest.TestCase):
 
             def prune_removed_chunks(self, source, point_ids, tenant):
                 pruned.append(list(point_ids))
-                return 0
+                return 0, 0
 
             def recount_tokens(self, tenant):
                 return 0
@@ -676,6 +698,10 @@ class StoppableIngestTest(unittest.TestCase):
     neither: the server is never told it happened.
     """
 
+    def setUp(self):
+        # A stopped id stays stopped, so every test runs under its own
+        self.ingest_id = uuid.uuid4().hex
+
     def _run(self, chunk_count, cancel_after=None):
         from rag import ingest_status
 
@@ -685,7 +711,7 @@ class StoppableIngestTest(unittest.TestCase):
 
         class _Store:
             def prune_removed_chunks(self, source, chunk_ids, tenant):
-                return 0
+                return 0, 0
 
             def indexed_state(self, source, tenant):
                 return {}
@@ -726,7 +752,7 @@ class StoppableIngestTest(unittest.TestCase):
              mock.patch.object(main.ingest_status, "advance", _advance), \
              mock.patch("api.deps.get_llm_budget", lambda: _Budget()):
             report = run(main._chunk_and_index(
-                "document", {}, "doc", "acme", ingest_id="run-1",
+                "document", {}, "doc", "acme", ingest_id=self.ingest_id,
             ))
 
         return report, indexed, situated
@@ -760,7 +786,7 @@ class StoppableIngestTest(unittest.TestCase):
                 return len(batch)
 
             def prune_removed_chunks(self, source, chunk_ids, tenant):
-                return 0
+                return 0, 0
 
             def recount_tokens(self, tenant):
                 return 0
@@ -836,7 +862,7 @@ class StoppableIngestTest(unittest.TestCase):
         from rag import ingest_status
 
         self._run(200, cancel_after=50)
-        status = run(ingest_status.read("run-1", "acme"))
+        status = run(ingest_status.read(self.ingest_id, "acme"))
         self.assertEqual(status["phase"], "cancelled")
         self.assertEqual(status["done"], 50)
 
@@ -851,10 +877,10 @@ class StoppableIngestTest(unittest.TestCase):
 
         self._run(60)
 
-        self.assertIsNotNone(run(ingest_status.read("run-1", "acme")))
-        self.assertIsNone(run(ingest_status.read("run-1", "globex")))
-        self.assertFalse(run(ingest_status.cancel("run-1", "globex")))
-        self.assertTrue(run(ingest_status.cancel("run-1", "acme")))
+        self.assertIsNotNone(run(ingest_status.read(self.ingest_id, "acme")))
+        self.assertIsNone(run(ingest_status.read(self.ingest_id, "globex")))
+        self.assertFalse(run(ingest_status.cancel(self.ingest_id, "globex")))
+        self.assertTrue(run(ingest_status.cancel(self.ingest_id, "acme")))
 
     def test_an_oversized_id_is_not_a_key(self):
         from rag import ingest_status

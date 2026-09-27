@@ -630,9 +630,10 @@ def _validate_custom_data(
     Validate custom component data against its registered JSON Schema.
     Returns an error summary, or None when valid.
 
-    A broken *schema* (developer error) is logged but does not drop the
-    component. The host's content should not disappear because of a
-    typo in their schema definition.
+    A schema that cannot be applied leaves the data unvalidated, so the
+    component goes in `dropped` with the reason like any other invalid
+    one: the render keeps everything else and says what it lost, which a
+    component let through on an unusable schema could not.
     """
     try:
         import jsonschema
@@ -652,7 +653,7 @@ def _validate_custom_data(
         logger.warning(
             "Invalid JSON Schema for custom component %r: %s", type_def.name, e
         )
-        return None
+        return f"unusable schema: {e.message}"[:200]
 
 
 # A validated component: a Pydantic model or a plain dict {"type", "data", "layout"} for custom types
@@ -684,6 +685,18 @@ def validate_components(
 
     for i, raw in enumerate(raw_components):
         ctype = raw.get("type") if isinstance(raw, dict) else None
+
+        # A type that is not a name cannot be looked up: without this the
+        # lookup below raises on an unhashable value and takes the whole
+        # render with it, per-component validation included.
+        if ctype is not None and not isinstance(ctype, str):
+            summary = (
+                f"component[{i}]: type is not a string "
+                f"(got {type(ctype).__name__})"
+            )
+            errors.append(summary)
+            logger.warning("Dropped invalid component: %s", summary)
+            continue
 
         # Custom types registered by the host
         if ctype in custom_types:

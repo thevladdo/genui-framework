@@ -40,7 +40,9 @@ What comes up:
 | `redis`   | `redis:7-alpine` (AOF) | internal only | volume `redis_data`         |
 | `qdrant`  | `qdrant/qdrant` pinned | internal only | volume `qdrant_storage`     |
 
-Redis and Qdrant are **not** published on the host: the backend is the single entry point. Terminate TLS in front of `:8000` with the proxy you already run (nginx/traefik/caddy); the compose deliberately does not ship one.
+Redis and Qdrant are **not** published on the host: the backend is the single entry point. Terminate TLS in front of `:8000` with the proxy you already run (nginx/traefik/caddy); the compose deliberately does not ship one. Give the proxy a request body limit at least as large as `MAX_UPLOAD_MB` (50 MB by default) and a read timeout long enough for an upload to be indexed: nginx stops at 1 MB and 60 seconds unless `client_max_body_size` and `proxy_read_timeout` say otherwise, and the answer the operator sees is then the proxy's 413 or 504, not the backend's.
+
+The backend image installs `backend/requirements.lock`, which pins every Python package to an exact version, so rebuilding the same commit gives the same packages. An optional package such as `anthropic` or `docling`, added to the Dockerfile with its own `pip install`, is outside the lock: give it an exact version (`anthropic==x.y.z`), or each build installs whatever is current that day.
 
 Per-customer parametrization is exactly one file: `customer.env`. A new customer deployment = this folder + their `customer.env` on their VM. Nothing else varies.
 

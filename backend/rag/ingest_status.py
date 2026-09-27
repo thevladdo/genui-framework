@@ -20,14 +20,41 @@ _TTL_SECONDS = 3600
 # The id is client-supplied and becomes the key.
 _MAX_ID_LENGTH = 64
 
-_store = TenantJsonStore(key_prefix="genui:ingest:")
+_STORE: Optional[TenantJsonStore] = None
 
 
-async def begin(ingest_id: str, total: int, source: str, tenant: str) -> None:
-    """Record a run about to start."""
+def _store() -> TenantJsonStore:
+    """
+    The process-wide store, on the deployment's Redis. Resolved on first use
+    so the module imports without app config. Without the URL each worker
+    keeps its own copy, and a stop served by another worker never reaches
+    the run.
+    """
+    global _STORE
+    if _STORE is None:
+        from config import settings
+
+        _STORE = TenantJsonStore(key_prefix="genui:ingest:", redis_url=settings.redis_url)
+    return _STORE
+
+
+async def begin(ingest_id: str, total: int, source: str, tenant: str) -> bool:
+    """
+    Record a run about to start. False when this id was stopped, and the
+    caller does no work.
+
+    The same id comes back to carry a run on: the next call of a backfill,
+    the second phase of an upload. A stop recorded under it is kept, so the
+    loop it was meant to end cannot reopen it; carrying on after a stop
+    takes a new id. A stop that lands between the read and the write below
+    is lost: the store has no compare-and-set.
+    """
     if not ingest_id or len(ingest_id) > _MAX_ID_LENGTH:
-        return
-    await _store.set(ingest_id, {
+        return True
+    previous = await _store().get(ingest_id)
+    if previous and previous.get("cancelled") and previous.get("tenant") == tenant:
+        return False
+    await _store().set(ingest_id, {
         "phase": "contextualizing" if total else "indexing",
         "source": source,
         "tenant": tenant,
@@ -36,6 +63,7 @@ async def begin(ingest_id: str, total: int, source: str, tenant: str) -> None:
         "cancelled": False,
         "started_at": time.time(),
     }, ttl_seconds=_TTL_SECONDS)
+    return True
 
 
 async def advance(ingest_id: str, done: int, phase: Optional[str] = None) -> bool:
@@ -47,14 +75,14 @@ async def advance(ingest_id: str, done: int, phase: Optional[str] = None) -> boo
     """
     if not ingest_id:
         return True
-    status = await _store.get(ingest_id)
+    status = await _store().get(ingest_id)
     if not status:
         return True
     
     status["done"] = done
     if phase:
         status["phase"] = phase
-    await _store.set(ingest_id, status, ttl_seconds=_TTL_SECONDS)
+    await _store().set(ingest_id, status, ttl_seconds=_TTL_SECONDS)
     return not status.get("cancelled")
 
 
@@ -71,7 +99,7 @@ async def cancelled(ingest_id: str) -> bool:
     """
     if not ingest_id:
         return False
-    status = await _store.get(ingest_id)
+    status = await _store().get(ingest_id)
     return bool(status and status.get("cancelled"))
 
 
@@ -79,10 +107,10 @@ async def finish(ingest_id: str, phase: str = "done") -> None:
     """Mark a run over, so a poller stops asking."""
     if not ingest_id:
         return
-    status = await _store.get(ingest_id) or {}
+    status = await _store().get(ingest_id) or {}
     status["phase"] = phase
     status["finished_at"] = time.time()
-    await _store.set(ingest_id, status, ttl_seconds=_TTL_SECONDS)
+    await _store().set(ingest_id, status, ttl_seconds=_TTL_SECONDS)
 
 
 async def cancel(ingest_id: str, tenant: str) -> bool:
@@ -96,7 +124,7 @@ async def cancel(ingest_id: str, tenant: str) -> bool:
     if not status:
         return False
     status["cancelled"] = True
-    await _store.set(ingest_id, status, ttl_seconds=_TTL_SECONDS)
+    await _store().set(ingest_id, status, ttl_seconds=_TTL_SECONDS)
     return True
 
 
@@ -111,7 +139,7 @@ async def read(ingest_id: str, tenant: str) -> Optional[Dict[str, Any]]:
     """
     if not ingest_id or len(ingest_id) > _MAX_ID_LENGTH:
         return None
-    status = await _store.get(ingest_id)
+    status = await _store().get(ingest_id)
     if not status or status.get("tenant") != tenant:
         return None
     return status

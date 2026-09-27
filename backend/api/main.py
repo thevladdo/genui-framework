@@ -45,7 +45,8 @@ from agents import get_orchestrator, OrchestratorResult
 from metrics.ops import get_ops_metrics
 from profiles import is_identified
 from rag import create_chunker, get_vector_store
-from rag import ingest_status
+from rag.chunker import cutting_embeddings
+from rag import extractors, ingest_status
 from rag.chunker import SemanticChunk
 from rag.vector_store import assign_point_ids
 from rag.contextualizer import (
@@ -530,9 +531,14 @@ async def process_query(
 _INGEST_BATCH = 50
 
 
-def _chunk_document(text: str, metadata: Dict[str, Any], source_name: str):
-    """Blocking: the semantic splitter embeds while it decides where to cut."""
-    return create_chunker().chunk_text(
+def _chunk_document(
+    text: str, metadata: Dict[str, Any], source_name: str, estimate: bool = False,
+):
+    """
+    Blocking: the semantic splitter embeds while it decides where to cut.
+    An estimate cuts at sentences and embeds nothing.
+    """
+    return create_chunker(use_semantic=False if estimate else None).chunk_text(
         text=text, metadata=metadata, source_name=source_name,
     )
 
@@ -552,26 +558,30 @@ async def _chunk_and_index(
     Chunking, embedding and the Qdrant upsert are blocking and go to a
     thread. Writing the context of each chunk is a batch of model calls
     and stays on the loop. `dry_run` runs everything up to the point
-    where money is spent and reports what it would cost.
+    where money is spent and reports what it would cost, without spending
+    it: with semantic chunking on, the estimate cuts at sentences, so its
+    chunk counts are approximate and it states what the real cut embeds.
     """
     metadata.setdefault("indexed_at", datetime.now(timezone.utc).isoformat())
 
-    # Registered before the cutting starts
-    if not dry_run:
-        await ingest_status.begin(ingest_id, 0, source_name, tenant)
-
-    chunks = await asyncio.to_thread(_chunk_document, text, metadata, source_name)
-    store = await asyncio.to_thread(get_vector_store)
-    assign_point_ids(tenant, chunks)
-
-    if not dry_run and not await ingest_status.advance(ingest_id, 0, "indexing"):
+    async def stopped(chunks_created: int) -> Dict[str, Any]:
         await ingest_status.finish(ingest_id, "cancelled")
         logger.info("Ingest of %s stopped before anything was indexed", source_name)
         return {
-            "chunks_created": len(chunks), "chunks_indexed": 0,
+            "chunks_created": chunks_created, "chunks_indexed": 0,
             "cancelled": True, "status": "cancelled",
             "contextual_indexing": False, "context_calls": 0,
         }
+
+    # Registered before the cutting starts
+    if not dry_run and not await ingest_status.begin(ingest_id, 0, source_name, tenant):
+        return await stopped(0)
+
+    chunks = await asyncio.to_thread(
+        _chunk_document, text, metadata, source_name, dry_run
+    )
+    store = await asyncio.to_thread(get_vector_store)
+    assign_point_ids(tenant, chunks)
 
     corpus_tokens = await _corpus_tokens(store, tenant)
     with_context = contextual_indexing_enabled(tenant, corpus_tokens)
@@ -588,16 +598,21 @@ async def _chunk_and_index(
         is written again. A chunk that is unchanged but has no context is
         not done either, once context is being written.
         """
-        contextualized = stored.get(chunk.point_id)
-        if contextualized is None:
+        payload = stored.get(chunk.point_id)
+        if payload is None:
             return False
-        return contextualized or not with_context
+        return bool(payload.get("contextualized")) or not with_context
 
     pending = [chunk for chunk in chunks if not already_indexed(chunk)]
+    unchanged = [chunk for chunk in chunks if already_indexed(chunk)]
 
     # What this upload adds, and whether it is the one that takes the corpus over the line: 
-    # the operator is asked about the corpus left behind at that moment 
-    added_tokens = sum(estimate_tokens(chunk.content) for chunk in pending)
+    # the operator is asked about the corpus left behind at that moment.
+    # Text already stored is already counted, context written onto it or not.
+    added_tokens = sum(
+        estimate_tokens(chunk.content)
+        for chunk in pending if chunk.point_id not in stored
+    )
     threshold = settings.contextual_indexing_threshold_tokens
     crosses = bool(
         threshold > 0 and corpus_tokens < threshold <= corpus_tokens + added_tokens
@@ -619,13 +634,22 @@ async def _chunk_and_index(
         if crosses:
             counts = await asyncio.to_thread(store.chunk_counts, tenant)
             report["chunks_left_behind"] = counts["chunks_plain"]
-        return {**report, "status": "estimated", "chunks_indexed": 0}
+        semantic = settings.use_semantic_chunking
+        return {
+            **report,
+            "status": "estimated",
+            "chunks_indexed": 0,
+            "chunking": "semantic" if semantic else "sentence",
+            "chunks_approximate": semantic,
+            "cutting_embeddings": await asyncio.to_thread(cutting_embeddings, text),
+        }
     
     with_context = with_context or crosses
 
-    await ingest_status.begin(
+    if not await ingest_status.begin(
         ingest_id, len(pending) if with_context else 0, source_name, tenant
-    )
+    ):
+        return await stopped(len(chunks))
 
     async def still_wanted() -> bool:
         """
@@ -636,6 +660,7 @@ async def _chunk_and_index(
 
     indexed = 0
     situated = 0
+    failure: Optional[str] = None
     for start in range(0, len(pending), _INGEST_BATCH):
         batch = pending[start:start + _INGEST_BATCH]
         
@@ -650,12 +675,18 @@ async def _chunk_and_index(
         if with_context:
             situated += await contextualize(text, batch, should_continue=still_wanted)
 
-        written = await asyncio.to_thread(store.index_chunks, batch, tenant)
-        indexed += written
-        if written:
-            await get_corpus_size().add(
-                tenant, sum(estimate_tokens(chunk.content) for chunk in batch)
-            )
+        try:
+            indexed += await asyncio.to_thread(store.index_chunks, batch, tenant)
+        except Exception as e:
+            failure = f"indexing failed after {indexed} of {len(pending)} chunks: {e}"
+            logger.error("Ingest of %s: %s", source_name, failure)
+            break
+        entered = sum(
+            estimate_tokens(chunk.content)
+            for chunk in batch if chunk.point_id not in stored
+        )
+        if entered:
+            await get_corpus_size().add(tenant, entered)
 
         if not await ingest_status.advance(ingest_id, indexed):
             report["cancelled"] = True
@@ -667,24 +698,52 @@ async def _chunk_and_index(
     report["contextual_indexing"] = situated > 0
     report["context_calls"] = situated
 
-    if chunks and not report.get("cancelled"):
-        report["chunks_pruned"] = await asyncio.to_thread(
-            store.prune_removed_chunks,
-            source_name, [chunk.point_id for chunk in chunks], tenant,
-        )
+    report["chunks_payload_updated"] = 0
+    if unchanged and failure is None and not report.get("cancelled"):
+        try:
+            report["chunks_payload_updated"] = await asyncio.to_thread(
+                store.refresh_payloads, unchanged, stored, tenant
+            )
+        except Exception as e:
+            failure = f"metadata update failed: {e}"
+            logger.error("Ingest of %s: %s", source_name, failure)
 
+    # The old version goes only once every chunk of the new one is stored:
+    # until then it is what answers for the chunks that did not make it.
+    if failure is not None:
+        report["chunks_pruned"] = 0
+        report["chunks_failed"] = len(pending) - indexed
+        report["previous_version_served"] = True
+        report["error"] = failure
+    elif chunks and not report.get("cancelled"):
+        try:
+            report["chunks_pruned"], removed_tokens = await asyncio.to_thread(
+                store.prune_removed_chunks,
+                source_name, [chunk.point_id for chunk in chunks], tenant,
+            )
+        except Exception as e:
+            failure = f"removing the previous version failed: {e}"
+            logger.error("Ingest of %s: %s", source_name, failure)
+            report["chunks_pruned"] = 0
+            report["previous_version_served"] = True
+            report["error"] = failure
+        else:
+            if removed_tokens:
+                await get_corpus_size().add(tenant, -removed_tokens)
+
+    status = (
+        "partial" if failure is not None
+        else "cancelled" if report.get("cancelled")
+        else "completed"
+    )
     report["chunks_contextualized"] = situated
-    await ingest_status.finish(ingest_id, "cancelled" if report.get("cancelled") else "done")
+    await ingest_status.finish(ingest_id, "done" if status == "completed" else status)
 
     if crosses:
         counts = await asyncio.to_thread(store.chunk_counts, tenant)
         report["chunks_left_behind"] = counts["chunks_plain"]
 
-    return {
-        **report,
-        "status": "cancelled" if report.get("cancelled") else "completed",
-        "chunks_indexed": indexed,
-    }
+    return {**report, "status": status, "chunks_indexed": indexed}
 
 
 async def _corpus_tokens(store, tenant: str) -> int:
@@ -780,19 +839,19 @@ async def upload_document_file(
     """
     Upload a document as a file (PDF, DOCX, HTML, TXT, MD).
 
-    Text is extracted server-side, semantically chunked, and indexed in
+    Text is extracted server-side off the event loop, chunked, and indexed in
     the tenant's knowledge base. The optional `url` becomes part of the
     URL whitelist when the AI cites this document.
     """
-    from rag.extractors import ExtractionError, configured_backend, extract_text
-
-    content = await file.read()
+    content = await _read_capped(file, extractors.max_file_size_bytes())
     source_name = title or file.filename or "uploaded_file"
-    extractor = configured_backend()
+    extractor = extractors.configured_backend()
 
     try:
-        text = extract_text(file.filename or "", content)
-    except ExtractionError as e:
+        text = await asyncio.to_thread(
+            extractors.extract_text, file.filename or "", content
+        )
+    except extractors.ExtractionError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except ImportError as e:
         raise HTTPException(status_code=501, detail=str(e))
@@ -837,6 +896,28 @@ async def upload_document_file(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+_READ_BLOCK = 1024 * 1024
+
+
+async def _read_capped(file: UploadFile, limit: int) -> bytes:
+    """
+    The upload's bytes, read a block at a time and refused as soon as they
+    pass `limit`, so an oversized file is never held whole in memory. The
+    framework has already spooled the part to a temporary file, on disk
+    past its first megabyte.
+    """
+    content = bytearray()
+    while block := await file.read(_READ_BLOCK):
+        content += block
+        if len(content) > limit:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large: the limit is {limit // (1024 * 1024)} MB "
+                       f"(MAX_UPLOAD_MB)",
+            )
+    return bytes(content)
+
+
 async def _process_document_background(
     content: str,
     metadata: Dict[str, Any],
@@ -851,8 +932,10 @@ async def _process_document_background(
             tenant,
         )
         logger.info(
-            "Background document processing completed: %d chunks, %d with context",
-            report["chunks_indexed"], report.get("chunks_contextualized", 0),
+            "Background document processing %s: %d chunks, %d with context%s",
+            report["status"], report["chunks_indexed"],
+            report.get("chunks_contextualized", 0),
+            f", {report['error']}" if report.get("error") else "",
         )
 
     except Exception as e:
@@ -913,6 +996,7 @@ async def list_documents(auth: AuthContext = Depends(require_admin)):
                     auth.tenant, corpus_tokens
                 ),
                 "budget_per_hour": settings.llm_budget_per_hour or None,
+                "max_upload_bytes": extractors.max_file_size_bytes(),
             },
         }
     except Exception as e:
@@ -974,13 +1058,18 @@ async def backfill_context(
         if not plain:
             return {**report, "status": "completed", "chunks_contextualized": 0}
 
-        await ingest_status.begin(
+        if not await ingest_status.begin(
             request.ingest_id, len(plain), "backfill", auth.tenant
-        )
+        ):
+            return {**report, "status": "cancelled", "chunks_contextualized": 0,
+                    "chunks_plain_remaining": counts["chunks_plain"]}
         done, stopped_on_budget = await _backfill_documents(
             store, plain, auth.tenant, request.ingest_id
         )
-        await ingest_status.finish(request.ingest_id)
+        stopped = await ingest_status.cancelled(request.ingest_id)
+        await ingest_status.finish(
+            request.ingest_id, "cancelled" if stopped else "done"
+        )
         after = await asyncio.to_thread(store.chunk_counts, auth.tenant)
 
         if not done and stopped_on_budget:
@@ -1002,7 +1091,11 @@ async def backfill_context(
 
         return {
             **report,
-            "status": "completed" if after["chunks_plain"] == 0 else "partial",
+            "status": (
+                "completed" if after["chunks_plain"] == 0
+                else "cancelled" if stopped
+                else "partial"
+            ),
             "chunks_contextualized": done,
             "chunks_plain_remaining": after["chunks_plain"],
             **({"budget_exceeded": True} if stopped_on_budget else {}),

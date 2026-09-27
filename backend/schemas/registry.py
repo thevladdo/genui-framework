@@ -190,6 +190,59 @@ def validate_type_name(name: str) -> None:
         raise ValueError(f"Component type {name!r} is built-in and cannot be overridden")
 
 
+def _outward_ref(node: Any) -> Optional[str]:
+    """The first `$ref` in a schema that points outside the schema itself."""
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and not ref.startswith("#"):
+            return ref
+        for value in node.values():
+            found = _outward_ref(value)
+            if found is not None:
+                return found
+    elif isinstance(node, list):
+        for item in node:
+            found = _outward_ref(item)
+            if found is not None:
+                return found
+    return None
+
+
+def validate_data_schema(schema: Any) -> None:
+    """
+    Accept a component's data schema only if it is a schema and resolves
+    without leaving the process.
+
+    jsonschema fetches a `$ref` to a URL while it validates, so a schema
+    carrying one turns validation into an outbound request chosen by
+    whoever sent the definition. References are therefore restricted to the
+    schema's own document, and both checks run here: a type refused at
+    registration never reaches a prompt, and every schema that validation
+    later sees has already passed.
+
+    Raises ValueError with the offending reference or the schema error.
+    """
+    if not isinstance(schema, dict):
+        raise ValueError("data_schema must be a JSON Schema object (dict)")
+
+    outward = _outward_ref(schema)
+    if outward is not None:
+        raise ValueError(
+            f"$ref {outward!r} points outside the schema: only references "
+            "within the schema itself are resolved"
+        )
+
+    try:
+        import jsonschema
+    except ImportError:
+        return
+
+    try:
+        jsonschema.validators.validator_for(schema).check_schema(schema)
+    except jsonschema.SchemaError as e:
+        raise ValueError(f"data_schema is not a valid JSON Schema: {e.message}") from e
+
+
 # Global registry (backend embedders)
 _registry: Dict[str, ComponentTypeDef] = {}
 
@@ -203,12 +256,12 @@ def register_component_type(
     """
     Register a custom component type globally.
 
-    Raises ValueError on invalid/reserved names. Re-registering a name
-    replaces the previous definition (logged).
+    Raises ValueError on invalid or reserved names and on a schema that
+    is not one or reaches outside itself. Re-registering a name replaces
+    the previous definition (logged).
     """
     validate_type_name(name)
-    if not isinstance(data_schema, dict):
-        raise ValueError("data_schema must be a JSON Schema object (dict)")
+    validate_data_schema(data_schema)
 
     definition = ComponentTypeDef(
         name=name,
@@ -250,8 +303,7 @@ def merge_custom_types(
         try:
             validate_type_name(name)
             schema = entry.get("data_schema")
-            if not isinstance(schema, dict):
-                raise ValueError("missing data_schema")
+            validate_data_schema(schema)
             merged[name] = ComponentTypeDef(
                 name=name,
                 data_schema=schema,

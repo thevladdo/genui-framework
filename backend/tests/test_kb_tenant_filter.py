@@ -15,6 +15,11 @@ KB boundary + bring-up behavior of the vector store.
 
 3. A collection created before the lexical vector existed cannot gain it, so
    it must keep serving dense-only searches instead of failing.
+
+4. The filter reads the payload, so the boundary is only as good as what gets
+   written into it: document metadata travels with a chunk all the way to the
+   payload, and a field named "tenant" in it must never become the label the
+   filter later matches.
 """
 
 import asyncio
@@ -23,6 +28,7 @@ import unittest
 try:
     from qdrant_client.http import models as qmodels
     from auth.keys import DEFAULT_TENANT
+    from rag.chunker import SemanticChunk
     from rag.vector_store import LEXICAL_VECTOR, QdrantVectorStore, lexical_vector
     HAVE_DEPS = True
 except Exception:  # qdrant-client / llama_index not in the shell python
@@ -64,6 +70,81 @@ class TenantConditionTest(unittest.TestCase):
             self._condition(DEFAULT_TENANT).model_dump(),
             self._condition(None).model_dump(),
         )
+
+
+class _IndexingEmbedder:
+    model = "text-embedding-3-small"
+
+    @property
+    def dimension(self):
+        return 3
+
+    def dimension_if_known(self):
+        return 3
+
+    def embed(self, texts):
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+
+class _RecordingClient:
+    """Keeps the points it was asked to write, so the payload can be read back."""
+
+    def __init__(self):
+        self.upserted = []
+
+    def upsert(self, collection_name, points):
+        self.upserted.extend(points)
+
+
+@unittest.skipUnless(HAVE_DEPS, "qdrant-client not installed (runs in the venv)")
+class WrittenPayloadTest(unittest.TestCase):
+    """
+    An admin key is scoped to one tenant, and metadata comes from the body
+    of the upload it authorises. A metadata field that reached the payload
+    would label the point for another tenant, and that tenant's search,
+    filtering correctly on the payload, would serve it.
+    """
+
+    def _store(self):
+        store = QdrantVectorStore.__new__(QdrantVectorStore)
+        store.collection_name = "genui_documents"
+        store.embed_model = _IndexingEmbedder()
+        store.client = _RecordingClient()
+        store._collection_dim = 3
+        store.has_lexical = False
+        store.hybrid = False
+        return store
+
+    def _index(self, metadata):
+        store = self._store()
+        chunk = SemanticChunk(
+            content="The fuel adjustment cap is 4 percent.",
+            metadata=metadata,
+            chunk_id="policy_0",
+            source_document="policy",
+        )
+        store.index_chunks([chunk], tenant="acme")
+        self.assertEqual(len(store.client.upserted), 1)
+        return store.client.upserted[0].payload
+
+    def test_no_reserved_field_is_writable_from_metadata(self):
+        payload = self._index({
+            "tenant": "globex",
+            "content": "replaced text",
+            "chunk_id": "forged_0",
+            "source_document": "another_doc",
+            "contextualized": True,
+        })
+        self.assertEqual(payload["tenant"], "acme")
+        self.assertEqual(payload["content"], "The fuel adjustment cap is 4 percent.")
+        self.assertEqual(payload["chunk_id"], "policy_0")
+        self.assertEqual(payload["source_document"], "policy")
+        self.assertFalse(payload["contextualized"])
+
+    def test_metadata_still_enriches_the_payload(self):
+        payload = self._index({"url": "https://acme.example/policy", "file_type": "pdf"})
+        self.assertEqual(payload["url"], "https://acme.example/policy")
+        self.assertEqual(payload["file_type"], "pdf")
 
 
 class _FakeEmbedder:

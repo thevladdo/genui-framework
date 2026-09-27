@@ -122,6 +122,15 @@ class Settings(BaseSettings):
                     "glmocr (state-of-the-art incl. scans/images; self-hosted "
                     "via GLMOCR_BASE_URL keeps data in-house, Z.ai API does not)"
     )
+    max_upload_mb: int = Field(
+        default=50,
+        ge=1,
+        description="Largest file the upload route accepts, in MB. The file is "
+                    "held in memory while it is read and extracted, once per "
+                    "upload in progress. A reverse proxy in front applies its "
+                    "own limit first (nginx: client_max_body_size, 1 MB by "
+                    "default), which has to be at least this"
+    )
     glmocr_api_key: Optional[str] = Field(
         default=None,
         description="Z.ai API key for glmocr cloud mode (documents leave your infra)"

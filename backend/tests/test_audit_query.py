@@ -17,7 +17,6 @@ pure-stdlib shell interpreter.
 """
 
 import json
-import logging
 import os
 import tempfile
 import time
@@ -46,8 +45,7 @@ class TestFileAuditReader(unittest.TestCase):
         self.logger = AuditLogger(path=self.path)
 
     def tearDown(self):
-        for handler in (self.logger._file_logger or logging.Logger("x")).handlers:
-            handler.close()
+        self.logger.close()
         self.tmp.cleanup()
 
     def query(self, tenant="acme", **kw):
@@ -177,8 +175,7 @@ class TestAuditEndpoint(unittest.TestCase):
         writer = AuditLogger(path=self.path)
         writer.log("zone_render", tenant="acme", user_id="u1")
         writer.log("zone_render", tenant="globex", user_id="u1")
-        for handler in writer._file_logger.handlers:
-            handler.close()
+        writer.close()
 
         body = self._query(user_id="u1")
         self.assertTrue(body["queryable"])

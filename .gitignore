@@ -121,7 +121,6 @@ dmypy.json
 .pnp.js
 jspm_packages/
 
-package-lock.json
 /test-app
 
 # Testing
@@ -372,4 +371,6 @@ temp/
 !CHANGELOG.md
 # deploy/ docs are product artifacts (isolation statement, bring-up guide)
 !deploy/*.md
+# the retrieval eval corpus is test data
+!backend/tests/retrieval/docs/*.md
 roadmap

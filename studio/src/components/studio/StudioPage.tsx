@@ -6,12 +6,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import styles from './Studio.module.css';
 import {
   backfillContext,
+  backfillInRuns,
   cancelIngest,
   deleteDocument,
   listDocuments,
   readIngest,
   searchDocuments,
+  tooLarge,
   uploadDocument,
+  uploadLimitLabel,
   type CorpusState,
   type IngestStatus,
   type KnowledgeDocument,
@@ -26,6 +29,7 @@ import { BackfillDialog, CorpusDecision, SpendConfirm } from './CorpusModals';
 const ACCEPT = '.pdf,.docx,.html,.htm,.txt,.md,.png,.jpg,.jpeg,.webp,.tiff';
 
 interface UploadState {
+  id: string;
   name: string;
   status: 'uploading' | 'done' | 'error';
   message?: string;
@@ -167,7 +171,7 @@ const UploadZone = ({
         setActive({ id: ingestId, name: file.name, position: index + 1, total: files.length });
         setProgress(null);
         setStopping(false);
-        setUploads((u) => [...u, { name: file.name, status: 'uploading' }]);
+        setUploads((u) => [...u, { id: ingestId, name: file.name, status: 'uploading' }]);
         try {
           const report = await uploadDocument(session, file, { ingestId });
           if (report.crosses_threshold && (report.chunks_left_behind ?? 0) > 0) {
@@ -175,11 +179,15 @@ const UploadZone = ({
           }
           setUploads((u) =>
             u.map((entry) =>
-              entry.name === file.name
+              entry.id === ingestId
                 ? {
                   ...entry,
-                  status: 'done',
-                  message: report.cancelled
+                  status: report.status === 'partial' ? 'error' : 'done',
+                  message: report.status === 'partial'
+                    ? report.chunks_failed
+                      ? `${report.chunks_failed} ${report.chunks_failed === 1 ? 'chunk' : 'chunks'} not indexed, the previous version is still served: upload it again`
+                      : `indexed, but the previous version could not be removed and is still served: upload it again`
+                    : report.cancelled
                     ? `stopped, ${report.chunks_indexed} chunks kept`
                     : report.budget_exceeded
                       ? `indexed without context: the hourly cap ran out`
@@ -192,7 +200,7 @@ const UploadZone = ({
         } catch (e) {
           setUploads((u) =>
             u.map((entry) =>
-              entry.name === file.name
+              entry.id === ingestId
                 ? {
                   ...entry,
                   status: 'error',
@@ -245,7 +253,21 @@ const UploadZone = ({
   const handleFiles = useCallback(
     async (files: FileList | null) => {
       if (!files?.length) return;
-      const chosen = Array.from(files);
+      const refused = Array.from(files).filter((file) => tooLarge(file.size, corpus));
+      if (refused.length && corpus?.max_upload_bytes !== undefined) {
+        const limit = uploadLimitLabel(corpus.max_upload_bytes);
+        setUploads((u) => [
+          ...u,
+          ...refused.map((file) => ({
+            id: newIngestId(),
+            name: file.name,
+            status: 'error' as const,
+            message: `not sent: the file is over the ${limit} upload limit`,
+          })),
+        ]);
+      }
+      const chosen = Array.from(files).filter((file) => !tooLarge(file.size, corpus));
+      if (!chosen.length) return;
 
       const mayCross =
         corpus !== null &&
@@ -316,7 +338,9 @@ const UploadZone = ({
         <span className={styles.dropIcon} aria-hidden="true">↥</span>
         <p className={styles.dropTitle}>Drop documents here</p>
         <p className={styles.dropFormats}>
-          PDF · DOCX · HTML · TXT · MD · Images{' '}
+          PDF · DOCX · HTML · TXT · MD · Images
+          {corpus?.max_upload_bytes !== undefined &&
+            ` · up to ${uploadLimitLabel(corpus.max_upload_bytes)}`}{' '}
           <button
             type="button"
             className={styles.browse}
@@ -359,8 +383,8 @@ const UploadZone = ({
 
       {uploads.length > 0 && (
         <ul className={styles.uploadList}>
-          {uploads.map((upload, i) => (
-            <li key={`${upload.name}-${i}`} className={styles.uploadItem}>
+          {uploads.map((upload) => (
+            <li key={upload.id} className={styles.uploadItem}>
               <span className={styles.uploadName}>{upload.name}</span>
               {upload.status === 'uploading' && <span className={styles.uploadBusy}>Uploading…</span>}
               {upload.status === 'done' && <span className={styles.uploadDone}>Indexed ✓</span>}
@@ -606,15 +630,9 @@ export const StudioPage = () => {
     setBackfilling(true);
     setBackfillError(null);
     try {
-      let remaining = 0;
-      for (; ;) {
-        const report = await backfillContext(session, { ingestId });
-        remaining = report.chunks_plain_remaining ?? 0;
-        setBackfillRemaining(remaining);
-        if (report.status !== 'partial' || report.chunks_contextualized === 0) break;
-        if (remaining === 0) break;
-      }
-      if (remaining === 0) {
+      const report = await backfillInRuns(session, ingestId, setBackfillRemaining);
+      const remaining = report.chunks_plain_remaining ?? 0;
+      if (remaining === 0 || report.status === 'cancelled') {
         setDecision(null);
         setBackfillOpen(false);
       } else {

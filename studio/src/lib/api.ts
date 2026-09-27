@@ -31,7 +31,18 @@ export interface CorpusState {
   chunks_contextualized: number;
   chunks_plain: number;
   budget_per_hour: number | null;
+  max_upload_bytes?: number;
 }
+
+/** A file the backend would refuse with 413; without a reported limit the backend decides. */
+export const tooLarge = (
+  size: number,
+  corpus: Pick<CorpusState, "max_upload_bytes"> | null,
+): boolean =>
+  corpus?.max_upload_bytes !== undefined && size > corpus.max_upload_bytes;
+
+export const uploadLimitLabel = (bytes: number): string =>
+  `${Math.floor(bytes / (1024 * 1024))} MB`;
 
 export interface KnowledgeBase {
   documents: KnowledgeDocument[];
@@ -39,9 +50,12 @@ export interface KnowledgeBase {
 }
 
 export interface IndexReport {
-  status: "completed" | "estimated" | string;
+  status: "completed" | "partial" | "cancelled" | "estimated" | string;
   chunks_created: number;
   chunks_indexed: number;
+  chunks_failed?: number;
+  chunks_payload_updated?: number;
+  error?: string;
   contextual_indexing: boolean;
   context_calls: number;
   prompt_cache: string | null;
@@ -69,7 +83,7 @@ export interface IngestStatus {
 }
 
 export interface BackfillReport {
-  status: "completed" | "partial" | "estimated" | string;
+  status: "completed" | "partial" | "cancelled" | "estimated" | string;
   chunks_plain: number;
   context_calls: number;
   chunks_contextualized: number;
@@ -205,6 +219,26 @@ export const backfillContext = async (
     }),
   });
   return (await response.json()) as BackfillReport;
+};
+
+/**
+ * A backfill walked in runs under one id, each run picking up where the last
+ * stopped. Only `partial` carries on: `cancelled` is the operator's stop,
+ * and carrying on after it is a new run with a new id.
+ */
+export const backfillInRuns = async (
+  session: AdminSession,
+  ingestId: string,
+  onRemaining: (remaining: number) => void,
+): Promise<BackfillReport> => {
+  for (;;) {
+    const report = await backfillContext(session, { ingestId });
+    const remaining = report.chunks_plain_remaining ?? 0;
+    onRemaining(remaining);
+    if (report.status !== "partial" || report.chunks_contextualized === 0 || remaining === 0) {
+      return report;
+    }
+  }
 };
 
 export const deleteDocument = async (

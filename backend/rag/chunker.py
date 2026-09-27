@@ -81,6 +81,7 @@ class SemanticChunker:
         embed_model: Optional[EmbeddingClient] = None,
         breakpoint_percentile: int = None,
         buffer_size: int = None,
+        semantic: bool = True,
     ):
         """
         Initialize the semantic chunker.
@@ -91,20 +92,23 @@ class SemanticChunker:
                 when embedding is unconfigured — no silent OpenAI fallback)
             breakpoint_percentile: Percentile threshold for detecting breakpoints Higher = fewer, larger chunks
             buffer_size: Number of sentences to include around breakpoints
+            semantic: False cuts at sentences only, with no embedding client
+                built and nothing embedded
         """
-        self.embed_model = _ClientEmbedding(embed_model or create_embedding_client())
-
         self.breakpoint_percentile = (
             breakpoint_percentile or settings.breakpoint_percentile_threshold
         )
         self.buffer_size = buffer_size or settings.buffer_size
-        
-        # Initialize the semantic splitter
-        self.semantic_splitter = SemanticSplitterNodeParser(
-            buffer_size=self.buffer_size,
-            breakpoint_percentile_threshold=self.breakpoint_percentile,
-            embed_model=self.embed_model,
-        )
+
+        self.embed_model = None
+        self.semantic_splitter = None
+        if semantic:
+            self.embed_model = _ClientEmbedding(embed_model or create_embedding_client())
+            self.semantic_splitter = SemanticSplitterNodeParser(
+                buffer_size=self.buffer_size,
+                breakpoint_percentile_threshold=self.breakpoint_percentile,
+                embed_model=self.embed_model,
+            )
         
         # Fallback splitter for very long documents or edge cases
         self.fallback_splitter = SentenceSplitter(
@@ -144,14 +148,16 @@ class SemanticChunker:
             }
         )
         
-        try:
-            # Attempt semantic splitting
-            nodes = self.semantic_splitter.get_nodes_from_documents([doc])
-            logger.info(f"Semantic chunking produced {len(nodes)} chunks from {source_name}")
-
-        except Exception as e:
-            logger.warning(f"Semantic chunking failed, using fallback: {e}")
+        if self.semantic_splitter is None:
             nodes = self.fallback_splitter.get_nodes_from_documents([doc])
+        else:
+            try:
+                nodes = self.semantic_splitter.get_nodes_from_documents([doc])
+                logger.info(f"Semantic chunking produced {len(nodes)} chunks from {source_name}")
+
+            except Exception as e:
+                logger.warning(f"Semantic chunking failed, using fallback: {e}")
+                nodes = self.fallback_splitter.get_nodes_from_documents([doc])
 
         nodes = self._within_chunk_size(nodes)
 
@@ -343,4 +349,18 @@ def create_chunker(
     if use_semantic is None:
         use_semantic = settings.use_semantic_chunking
     
-    return SemanticChunker(**kwargs)
+    return SemanticChunker(semantic=use_semantic, **kwargs)
+
+
+def cutting_embeddings(text: str) -> int:
+    """
+    Texts the configured chunking embeds to cut `text`: the semantic splitter
+    embeds one group per sentence, the sentence splitter embeds nothing.
+    Counted with the tokenizer the semantic splitter uses by default, so
+    nothing is embedded to find out.
+    """
+    if not settings.use_semantic_chunking or not text or not text.strip():
+        return 0
+    from llama_index.core.node_parser.text.utils import split_by_sentence_tokenizer
+
+    return len(split_by_sentence_tokenizer()(text))

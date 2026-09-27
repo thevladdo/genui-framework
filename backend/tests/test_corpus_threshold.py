@@ -35,6 +35,24 @@ except Exception:
     HAVE_APP = False
 
 
+def setUpModule():
+    """Runs and stops recorded here stay in memory, off the Redis of whoever runs the suite."""
+    try:
+        from rag import ingest_status
+        from utils.tenant_json_store import TenantJsonStore
+    except Exception:
+        return
+    ingest_status._STORE = TenantJsonStore(key_prefix="genui:ingest:")
+
+
+def tearDownModule():
+    try:
+        from rag import ingest_status
+    except Exception:
+        return
+    ingest_status._STORE = None
+
+
 def run(coro):
     return asyncio.run(coro)
 
@@ -96,7 +114,7 @@ class ThresholdAtIngestTest(unittest.TestCase):
 
         class _Store:
             def prune_removed_chunks(self, source, chunk_ids, tenant):
-                return 0
+                return 0, 0
 
             def indexed_state(self, source, tenant):
                 return {}

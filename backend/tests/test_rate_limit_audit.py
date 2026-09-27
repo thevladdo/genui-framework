@@ -68,22 +68,24 @@ class TestRateLimiter(unittest.TestCase):
 
 class TestAuditLogger(unittest.TestCase):
     def test_writes_jsonl(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "audit.jsonl")
-            audit = AuditLogger(path=path)
-            audit.log("zone_render", tenant="acme", user_id="u1",
-                      zone_id="home", shown_links=["/a"])
-            audit.log("profile_delete", tenant="acme", user_id="u2", existed=True)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "audit.jsonl")
+        audit = AuditLogger(path=path)
+        self.addCleanup(audit.close)
+        audit.log("zone_render", tenant="acme", user_id="u1",
+                  zone_id="home", shown_links=["/a"])
+        audit.log("profile_delete", tenant="acme", user_id="u2", existed=True)
 
-            with open(path) as f:
-                lines = [json.loads(line) for line in f]
+        with open(path, encoding="utf-8") as f:
+            lines = [json.loads(line) for line in f]
 
-            self.assertEqual(len(lines), 2)
-            self.assertEqual(lines[0]["event"], "zone_render")
-            self.assertEqual(lines[0]["tenant"], "acme")
-            self.assertEqual(lines[0]["shown_links"], ["/a"])
-            self.assertIn("ts", lines[0])
-            self.assertEqual(lines[1]["event"], "profile_delete")
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0]["event"], "zone_render")
+        self.assertEqual(lines[0]["tenant"], "acme")
+        self.assertEqual(lines[0]["shown_links"], ["/a"])
+        self.assertIn("ts", lines[0])
+        self.assertEqual(lines[1]["event"], "profile_delete")
 
     def test_disabled_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:

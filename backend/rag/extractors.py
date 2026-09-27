@@ -34,7 +34,18 @@ from typing import Optional, Set
 
 logger = logging.getLogger(__name__)
 
-MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+DEFAULT_MAX_UPLOAD_MB = 50
+
+
+def max_file_size_bytes() -> int:
+    """Largest accepted upload, from MAX_UPLOAD_MB."""
+    try:
+        from config import settings
+
+        megabytes = settings.max_upload_mb
+    except Exception:
+        megabytes = DEFAULT_MAX_UPLOAD_MB
+    return megabytes * 1024 * 1024
 
 BACKEND_LOCAL = "local"
 BACKEND_DOCLING = "docling"
@@ -99,10 +110,9 @@ def extract_text(
     """
     if not content:
         raise ExtractionError("Empty file")
-    if len(content) > MAX_FILE_SIZE_BYTES:
-        raise ExtractionError(
-            f"File too large ({len(content)} bytes, max {MAX_FILE_SIZE_BYTES})"
-        )
+    limit = max_file_size_bytes()
+    if len(content) > limit:
+        raise ExtractionError(f"File too large ({len(content)} bytes, max {limit})")
 
     backend = (backend or configured_backend()).lower()
     extension = os.path.splitext(filename or "")[1].lower()
