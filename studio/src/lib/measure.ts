@@ -9,6 +9,7 @@ export interface ArmStats {
   impression?: number;
   click?: number;
   ctr: number | null;
+  verified?: { impression?: number; click?: number };
 }
 
 export interface Significance {
@@ -17,10 +18,13 @@ export interface Significance {
   p_value: number;
   significant_95: boolean;
   sample_warning: boolean;
+  indicative?: boolean;
 }
 
 export interface EventStats {
   zone_id: string;
+  experiment?: string;
+  unit?: "event";
   arms: Partial<Record<ArmName, ArmStats>>;
   uplift_percent: number | null;
   significance: Significance | null;
@@ -99,7 +103,7 @@ export const verdict = (stats: EventStats): Verdict => {
       tone: "muted",
       label: "No data yet",
       detail:
-        "No impressions recorded for this zone. GenUI zones emit impressions and clicks automatically; check that events are flowing to POST /events.",
+        "No impressions recorded for this zone in the current experiment. A new HOLDOUT_SALT starts from zero; otherwise check that events are flowing to POST /events.",
     };
   }
 
@@ -143,10 +147,10 @@ export const verdict = (stats: EventStats): Verdict => {
   if (significant_95) {
     return {
       tone: "success",
-      label: "Statistically significant",
+      label: "Significant on events (indicative)",
       detail: `${formatPValue(
         p_value,
-      )}, below the 0.05 threshold: the CTR difference between arms is unlikely to be chance.`,
+      )}, below the 0.05 threshold. The test counts impressions, not visitors: one visitor who sees the zone ten times is ten observations, so the p-value runs low. A strong signal, not yet proof.`,
     };
   }
 

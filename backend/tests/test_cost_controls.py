@@ -29,6 +29,8 @@ import unittest
 from llm.base import LLMChatClient
 from utils.rate_limit import RateLimiter
 
+from memory_stores import use_memory_stores
+
 try:  # app-level deps: available in the backend venv, not in the shell python
     from fastapi import HTTPException
 
@@ -47,6 +49,10 @@ try:  # app-level deps: available in the backend venv, not in the shell python
     HAVE_APP_DEPS = True
 except ImportError:
     HAVE_APP_DEPS = False
+
+
+def setUpModule():
+    use_memory_stores()
 
 
 def _fake_payload(render_id="r1"):

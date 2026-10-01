@@ -24,6 +24,8 @@ import unittest
 
 from profiles.store import ProfileStore, is_identified
 
+from memory_stores import use_memory_stores
+
 try:
     from fastapi.testclient import TestClient
 
@@ -41,6 +43,10 @@ try:
     HAVE_APP_DEPS = True
 except ImportError:
     HAVE_APP_DEPS = False
+
+
+def setUpModule():
+    use_memory_stores()
 
 
 class TestIsIdentified(unittest.TestCase):

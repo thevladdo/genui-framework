@@ -8,7 +8,7 @@ tenant by an admin over an API and enforced immediately, with the env
 kept as the deployment-wide seed.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from utils.content_policy import ContentPolicy, policy_for
 from utils.tenant_json_store import TenantJsonStore
@@ -25,16 +25,24 @@ def _normalize(terms: List[str]) -> List[str]:
 
 
 class ContentPolicyStore:
-    """Per-tenant banned-term list. Redis or in-memory, fail-open."""
+    """Per-tenant banned-term list. Redis or in-memory; last known version during an outage."""
 
     def __init__(self, redis_url: Optional[str] = None, key_prefix: str = "genui:contentpolicy:"):
         self.key_prefix = key_prefix
         self._store = TenantJsonStore(key_prefix, redis_url)
 
+    async def read(self, tenant: str) -> Tuple[List[str], bool]:
+        """
+        (stored banned terms, last_known).
+        Raises StoreUnavailable when the store is unreachable and this process never read the policy.
+        """
+        document, last_known = await self._store.read(tenant)
+        return [str(t) for t in (document or {}).get("banned_terms", [])], last_known
+
     async def get(self, tenant: str) -> List[str]:
-        """This tenant's stored banned terms, or [] when none/unreachable."""
-        document = await self._store.get(tenant) or {}
-        return [str(t) for t in document.get("banned_terms", [])]
+        """This tenant's stored banned terms, or [] when none are stored."""
+        terms, _ = await self.read(tenant)
+        return terms
 
     async def set(self, tenant: str, terms: List[str]) -> List[str]:
         """Replace this tenant's banned terms; returns the normalized list."""
@@ -63,9 +71,12 @@ def get_content_policy_store() -> ContentPolicyStore:
 
 async def effective_policy(tenant: Optional[str], env_raw: str) -> ContentPolicy:
     """
-    The policy the serving path enforces: env (policy_for, unchanged) plus
-    this tenant's stored terms. Drop-in async replacement for policy_for.
+    The policy the serving path enforces: env (policy_for, unchanged) plus this tenant's stored terms.
+    Drop-in async replacement for policy_for.
+
+    Never the env terms alone because the store did not answer: that would serve what the tenant banned.
+    The last known terms stand in and the policy says so (last_known); without them StoreUnavailable.
     """
-    stored = await get_content_policy_store().get(tenant or "default")
+    stored, last_known = await get_content_policy_store().read(tenant or "default")
     env = policy_for(tenant, env_raw)
-    return ContentPolicy(env.banned_terms + list(stored))
+    return ContentPolicy(env.banned_terms + list(stored), last_known=last_known)

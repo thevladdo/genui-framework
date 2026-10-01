@@ -24,6 +24,8 @@ import unittest
 
 from utils.audit import AuditLogger, AuditReader, FileAuditReader
 
+from memory_stores import use_memory_stores
+
 try: 
     import api.audit_router as audit_router
     import api.zone_router as zone_router
@@ -34,6 +36,10 @@ try:
     HAVE_APP_DEPS = True
 except ImportError:
     HAVE_APP_DEPS = False
+
+
+def setUpModule():
+    use_memory_stores()
 
 
 class TestFileAuditReader(unittest.TestCase):

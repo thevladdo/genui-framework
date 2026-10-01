@@ -16,7 +16,7 @@ Everything removed is reported so it can surface in debug metadata.
 """
 
 import re
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 # Absolute URLs (http/https): captures until whitespace or closing delimiter
 _ABSOLUTE_URL_RE = re.compile(r"https?://[^\s<>\"')\]}]+")
@@ -57,6 +57,38 @@ def is_url_field(key: str) -> bool:
     """Whether a field name carries a URL (link or image)."""
     lowered = key.lower()
     return lowered in _URL_FIELD_NAMES or lowered.endswith(_URL_FIELD_SUFFIXES)
+
+
+# Field names that can carry the visible wording of an element.
+# Wider than the redundancy guard's label list on purpose: that one answers "is this dict a clickable element", this one "did this text reach the page".
+_SHOWN_TITLE_FIELDS = (
+    "title", "label", "name", "headline", "heading", "quote", "alt",
+)
+
+
+def iter_shown(node: Any) -> Iterator[Tuple[str, str]]:
+    """
+    Yield ("link", url) and ("title", text) for everything a component's data puts on the page: URL-named fields, markdown links inside body text (rendered as anchors), and title-like fields.
+
+    Type-agnostic: the walk reads field names, not component types, so a new built-in or custom type is covered without being listed.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(value, str):
+                if not value.strip():
+                    continue
+                if is_url_field(key):
+                    yield "link", value
+                    continue
+                for match in _MARKDOWN_LINK_RE.finditer(value):
+                    yield "link", match.group(2)
+                if key.lower() in _SHOWN_TITLE_FIELDS:
+                    yield "title", value.strip()
+            else:
+                yield from iter_shown(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from iter_shown(item)
 
 
 def is_image_field(key: str) -> bool:

@@ -10,7 +10,7 @@ import React from 'react';
 import { renderToString } from 'react-dom/server';
 import { GenUIZone } from 'genui-framework';
 
-test('renderToString emits the loading skeleton, not empty HTML', () => {
+test('(g) renderToString emits the loading skeleton, not empty HTML', () => {
   const html = renderToString(
     React.createElement(GenUIZone, { apiUrl: 'http://backend.test', zoneId: 'ssr-zone' })
   );
@@ -18,7 +18,7 @@ test('renderToString emits the loading skeleton, not empty HTML', () => {
   expect(html).toContain('genui-zone--loading');
 });
 
-test('loadOnMount=false renders nothing on the server (nothing will load)', () => {
+test('(g) loadOnMount=false renders nothing on the server (nothing will load)', () => {
   const html = renderToString(
     React.createElement(GenUIZone, {
       apiUrl: 'http://backend.test',

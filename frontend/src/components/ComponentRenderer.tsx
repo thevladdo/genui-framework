@@ -49,19 +49,110 @@ export const normalizeData = (data: any): any => {
     return data.map(item => normalizeData(item));
   }
 
+  // Object.entries, never a method looked up on the payload: in model output "hasOwnProperty" is just another key.
   if (typeof data === 'object') {
     const normalized: any = {};
-    for (const key in data) {
-      if (data.hasOwnProperty(key)) {
-        const camelKey = toCamelCase(key);
-        normalized[camelKey] =
-          key === 'metadata' ? data[key] : normalizeData(data[key]);
-      }
+    for (const [key, value] of Object.entries(data)) {
+      normalized[toCamelCase(key)] =
+        key === 'metadata' ? value : normalizeData(value);
     }
     return normalized;
   }
 
   return data;
+};
+
+/**
+ * Normalization and dispatch run here, inside the boundary: anything the payload makes throw costs this component only.
+ */
+const ComponentBody: React.FC<{ component: GenUIComponent }> = ({ component }) => {
+  const { type, layout } = component;
+  const data = normalizeData(component.data);
+
+  // A host registration wins over the framework's own component of the same name.
+  const RegisteredComponent = getRegisteredGenUIComponent(type);
+  if (RegisteredComponent) {
+    return (
+      <RegisteredComponent
+        data={BUILTIN_TYPES.includes(type) ? data : component.data}
+        layout={layout}
+      />
+    );
+  }
+
+  switch (type) {
+    case 'text':
+      return <TextComponent data={data as TextComponentData} />;
+
+    case 'bento':
+      return <BentoComponent data={data as BentoComponentData} />;
+
+    case 'chart':
+      return <ChartComponent data={data as ChartComponentData} />;
+
+    case 'buttons':
+      return <ButtonsComponent data={data as ButtonsComponentData} />;
+
+    case 'tabs_feature':
+      return <TabsFeature data={data} />;
+
+    case 'steps_section':
+      return <StepsSection data={data} />;
+
+    case 'stats_banner':
+      return <StatsBanner data={data} />;
+
+    case 'testimonial_carousel':
+      return <TestimonialCarousel data={data} />;
+
+    case 'pricing_cards':
+      return <PricingCards data={data} />;
+
+    case 'content_grid':
+      return <ContentGrid data={data} />;
+
+    case 'hero_banner':
+      return <HeroBanner data={data} />;
+
+    case 'case_studies':
+      return <CaseStudies data={data} />;
+
+    case 'comparison_bars':
+      return <ComparisonBars data={data} />;
+
+    case 'metrics_trend':
+      return <MetricsTrend data={data} />;
+
+    case 'faq':
+      return <Faq data={data} />;
+
+    case 'pros_cons':
+      return <ProsCons data={data} />;
+
+    case 'quote':
+      return <QuoteBlock data={data} />;
+
+    case 'logo_wall':
+      return <LogoWall data={data} />;
+
+    default: {
+      console.warn(
+        `GenUI: unknown component type "${type}" (newer backend contract?), skipping`
+      );
+      if (
+        typeof process !== 'undefined' &&
+        process.env &&
+        process.env.NODE_ENV !== 'production'
+      ) {
+        return (
+          <div className="genui-error">
+            Unknown component type: {type}
+          </div>
+        );
+      }
+      return null;
+    }
+  }
 };
 
 const renderSingleComponent = (
@@ -70,17 +161,13 @@ const renderSingleComponent = (
 ): React.ReactNode => {
   const { type, layout } = component;
 
-  // A component with no data object can't render anything useful and
-  // would throw downstream (.map/.split on undefined), so skip it quietly.
+  // A component with no data object can't render anything useful and would throw downstream (.map/.split on undefined), so skip it quietly.
   if (component.data == null || typeof component.data !== 'object') {
     if (!getRegisteredGenUIComponent(type)) {
       console.warn(`GenUI: component "${type}" has no data, skipping`);
       return null;
     }
   }
-
-  // Normalize data to ensure camelCase format
-  const data = normalizeData(component.data);
 
   const wrapperStyle: React.CSSProperties = layout ? {
     width: layout.width,
@@ -91,98 +178,11 @@ const renderSingleComponent = (
 
   const key = `genui-component-${type}-${index}`;
 
-  const renderComponent = (): React.ReactNode => {
-    // A host registration wins over the framework's own component of the same name.
-    const RegisteredComponent = getRegisteredGenUIComponent(type);
-    if (RegisteredComponent) {
-      return (
-        <RegisteredComponent
-          data={BUILTIN_TYPES.includes(type) ? data : component.data}
-          layout={layout}
-        />
-      );
-    }
-
-    switch (type) {
-      case 'text':
-        return <TextComponent data={data as TextComponentData} />;
-
-      case 'bento':
-        return <BentoComponent data={data as BentoComponentData} />;
-
-      case 'chart':
-        return <ChartComponent data={data as ChartComponentData} />;
-
-      case 'buttons':
-        return <ButtonsComponent data={data as ButtonsComponentData} />;
-
-      case 'tabs_feature':
-        return <TabsFeature data={data} />;
-
-      case 'steps_section':
-        return <StepsSection data={data} />;
-
-      case 'stats_banner':
-        return <StatsBanner data={data} />;
-
-      case 'testimonial_carousel':
-        return <TestimonialCarousel data={data} />;
-
-      case 'pricing_cards':
-        return <PricingCards data={data} />;
-
-      case 'content_grid':
-        return <ContentGrid data={data} />;
-
-      case 'hero_banner':
-        return <HeroBanner data={data} />;
-
-      case 'case_studies':
-        return <CaseStudies data={data} />;
-
-      case 'comparison_bars':
-        return <ComparisonBars data={data} />;
-
-      case 'metrics_trend':
-        return <MetricsTrend data={data} />;
-
-      case 'faq':
-        return <Faq data={data} />;
-
-      case 'pros_cons':
-        return <ProsCons data={data} />;
-
-      case 'quote':
-        return <QuoteBlock data={data} />;
-
-      case 'logo_wall':
-        return <LogoWall data={data} />;
-
-      default: {
-        console.warn(
-          `GenUI: unknown component type "${type}" (newer backend contract?), skipping`
-        );
-        if (
-          typeof process !== 'undefined' &&
-          process.env &&
-          process.env.NODE_ENV !== 'production'
-        ) {
-          return (
-            <div className="genui-error">
-              Unknown component type: {type}
-            </div>
-          );
-        }
-        return null;
-      }
-    }
-  };
-
   // Isolate each component: a render-time throw must not take down the
   // sibling components, or the host application.
   const guarded = (
-    <ComponentErrorBoundary label={type}>
-      {renderComponent()}
+    <ComponentErrorBoundary label={type} resetKey={component}>
+      <ComponentBody component={component} />
     </ComponentErrorBoundary>
   );
 

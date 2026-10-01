@@ -115,9 +115,12 @@ class ZoneRenderCache:
         status = STATUS_FRESH if age <= self.fresh_ttl else STATUS_STALE
         return CacheLookup(payload=payload, age_seconds=age, status=status)
 
-    async def set(self, key: str, payload: Dict[str, Any]) -> None:
-        """Store a render payload, resetting its age."""
-        created_at = time.time()
+    async def set(self, key: str, payload: Dict[str, Any], age_seconds: float = 0.0) -> None:
+        """
+        Store a render payload.
+        A new render starts at age 0; a rewrite of an existing one passes its age, so its fresh window and its refresh stay where they were.
+        """
+        created_at = time.time() - age_seconds
         envelope = json.dumps({"created_at": created_at, "payload": payload})
 
         redis = await self._get_redis()

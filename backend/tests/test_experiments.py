@@ -64,12 +64,12 @@ class TestMetricsStore(unittest.TestCase):
 
         async def scenario():
             # personalized: 100 impressions, 10 clicks (CTR 0.10)
-            await store.record("acme", "home", "personalized", "impression", 100)
-            await store.record("acme", "home", "personalized", "click", 10)
+            await store.record("acme", "home", "exp", "personalized", "impression", 100)
+            await store.record("acme", "home", "exp", "personalized", "click", 10)
             # control: 100 impressions, 5 clicks (CTR 0.05)
-            await store.record("acme", "home", "control", "impression", 100)
-            await store.record("acme", "home", "control", "click", 5)
-            return await store.stats("acme", "home")
+            await store.record("acme", "home", "exp", "control", "impression", 100)
+            await store.record("acme", "home", "exp", "control", "click", 5)
+            return await store.stats("acme", "home", "exp")
 
         stats = run(scenario())
         self.assertEqual(stats["arms"]["personalized"]["ctr"], 0.10)
@@ -80,9 +80,9 @@ class TestMetricsStore(unittest.TestCase):
         store = MetricsStore()
 
         async def scenario():
-            await store.record("acme", "home", "personalized", "impression")
-            await store.record("acme", "home", "personalized", "click")
-            return await store.stats("acme", "home")
+            await store.record("acme", "home", "exp", "personalized", "impression")
+            await store.record("acme", "home", "exp", "personalized", "click")
+            return await store.stats("acme", "home", "exp")
 
         stats = run(scenario())
         self.assertIsNone(stats["uplift_percent"])
@@ -91,8 +91,8 @@ class TestMetricsStore(unittest.TestCase):
         store = MetricsStore()
 
         async def scenario():
-            await store.record("acme", "home", "personalized", "click")
-            return await store.stats("acme", "home")
+            await store.record("acme", "home", "exp", "personalized", "click")
+            return await store.stats("acme", "home", "exp")
 
         stats = run(scenario())
         self.assertIsNone(stats["arms"]["personalized"]["ctr"])
@@ -101,9 +101,9 @@ class TestMetricsStore(unittest.TestCase):
         store = MetricsStore()
 
         async def scenario():
-            await store.record("acme", "home", "personalized", "impression")
-            other_tenant = await store.stats("globex", "home")
-            other_zone = await store.stats("acme", "footer")
+            await store.record("acme", "home", "exp", "personalized", "impression")
+            other_tenant = await store.stats("globex", "home", "exp")
+            other_zone = await store.stats("acme", "footer", "exp")
             return other_tenant, other_zone
 
         other_tenant, other_zone = run(scenario())
@@ -114,8 +114,8 @@ class TestMetricsStore(unittest.TestCase):
         store = MetricsStore()
 
         async def scenario():
-            await store.record("acme", "home", "personalized", "conversion", 3)
-            return await store.stats("acme", "home")
+            await store.record("acme", "home", "exp", "personalized", "conversion", 3)
+            return await store.stats("acme", "home", "exp")
 
         stats = run(scenario())
         self.assertEqual(stats["arms"]["personalized"]["conversion"], 3)

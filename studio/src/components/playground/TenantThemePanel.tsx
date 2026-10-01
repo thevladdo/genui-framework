@@ -75,6 +75,13 @@ const TenantThemePanel = ({ theme, onLoad }: TenantThemePanelProps) => {
 
   const save = async () => {
     if (!session) return;
+    if (
+      !window.confirm(
+        `Save this theme to tenant "${session.tenant}"? It replaces the theme saved there, and the Segment Preview renders with it.`,
+      )
+    ) {
+      return;
+    }
     setBusy(true);
     setError(false);
     try {
@@ -110,6 +117,7 @@ const TenantThemePanel = ({ theme, onLoad }: TenantThemePanelProps) => {
             className={styles.select}
             value={sessionId(session)}
             onChange={(event) => onPick(event.target.value)}
+            disabled={busy}
             aria-label="Tenant this theme is saved to"
           >
             {sessions.map((connectedSession) => (

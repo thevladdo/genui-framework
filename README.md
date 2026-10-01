@@ -131,7 +131,7 @@ The compliance question "what did user X see on day Z?" as a screen instead of a
 
 ### 🚧 Content Policy
 
-The compliance guardrail with a face, for the person who owns it. An operator edits this tenant's **banned terms** (one per line) and they are enforced on the next render of every zone and every `/query`, with no redeploy and no developer: `GET` / `PUT /api/v1/content-policy` (admin key, tenant from the key, every change audit-logged as `content_policy_change`). The page states the split instead of implying more: terms are **enforced** by a lexical word-boundary match (a component containing one is dropped, chat text is redacted, hits are reported in `meta.sanitization.policy_violations`), while tone, semantics, synonyms and misspellings stay prompt-level **best-effort** and are labelled as such. A pill next to the editor opens the deployment-wide `CONTENT_POLICY` env terms read-only: an operator sees what infra enforces without being able to escalate a term to every tenant. See [Output Guarantees](#%EF%B8%8F-output-guarantees) point 5.
+The compliance guardrail with a face, for the person who owns it. An operator edits this tenant's **banned terms** (one per line) and they are enforced on the next render of every zone and every `/query`, renders already in the segment cache included, with no redeploy and no developer: `GET` / `PUT /api/v1/content-policy` (admin key, tenant from the key, every change audit-logged as `content_policy_change`). The page states the split instead of implying more: terms are **enforced** by a lexical word-boundary match (a component containing one is dropped, chat text is redacted, hits are reported in `meta.sanitization.policy_violations`), while tone, semantics, synonyms and misspellings stay prompt-level **best-effort** and are labelled as such. A pill next to the editor opens the deployment-wide `CONTENT_POLICY` env terms read-only: an operator sees what infra enforces without being able to escalate a term to every tenant. See [Output Guarantees](#%EF%B8%8F-output-guarantees) point 5.
 
 <div align="center">
   <br />
@@ -151,7 +151,7 @@ Manage the RAG knowledge base that feeds the AI: connect to your backend (URL + 
 
 ### 📈 Measurement
 
-The proof that personalization pays, on one page. Enter a `zone_id` and the dashboard reads `GET /events/stats`: CTR per experiment arm (personalized, control holdout, no experiment), the uplift percentage, and the outcome of the two proportion z-test. The verdict is deliberately honest: below 100 impressions per arm the page reports the result as **preliminary noise**, never as "significant", and with a single arm it says uplift is not measurable yet instead of inventing a number. An ops panel on the same page shows the segment cache state (`GET /zone/cache/stats`) and triggers segment warmup (`POST /zone/warmup`) with one zone render request per archetype, filling the same cache keys live traffic reads.
+The proof that personalization pays, on one page. Enter a `zone_id` and the dashboard reads `GET /events/stats`: CTR per experiment arm (personalized, control holdout, no experiment), the uplift percentage, and the outcome of the two proportion z-test. Below 100 impressions per arm the page reports the result as **preliminary noise**, never as "significant", with a single arm it says uplift is not measurable yet instead of inventing a number, and a significant result is labelled indicative because the test counts events, not visitors. The table shows the verified share of each arm and the page names the experiment the counts belong to. An ops panel on the same page shows the segment cache state (`GET /zone/cache/stats`) and triggers segment warmup (`POST /zone/warmup`) with one zone render request per archetype, filling the same cache keys live traffic reads.
 
 <div align="center">
   <br />
@@ -171,7 +171,7 @@ The disclaimer sits at the top at reading size, because "engineering documentati
 
 Every console page is scoped to one tenant, and the header of every page says which one: `Connected to <url>` plus a **tenant picker**. The scoping is not a UI convention, it is the key: an admin key resolves to exactly one tenant on the backend (`ADMIN_API_KEYS=sk_live_xyz:acme`), and the tenant of a request always comes from that key, never from the request body. `GET /api/v1/whoami` is what the console asks to learn it.
 
-So switching tenant is switching key. Connect the second tenant's key from the picker (`+ Connect another tenant`) and both stay connected in the browser session; the picker then moves the console between them, and every page remounts on the switch so one tenant's zones, audit trail or knowledge base never sit under another tenant's name. A call made with a session that is no longer the active one is refused client-side instead of quietly writing to the tenant you just left. Keys live in `sessionStorage` only, one per tenant.
+So switching tenant is switching key. Connect the second tenant's key from the picker (`+ Connect another tenant`) and both stay connected in the browser session; the picker then moves the console between them, and every page remounts on the switch so one tenant's zones, audit trail or knowledge base never sit under another tenant's name. The session is checked twice. A call made with a session that is no longer the active one is refused before it leaves, so nothing gets written to the tenant you just left. A reply that arrives after a switch is dropped: a slow list from the previous tenant can't replace the current one on screen, and a late error from it doesn't disconnect the tenant you're on. Destructive actions (deleting a document or a zone, discarding or approving a draft, saving a theme or the banned terms) name the tenant in their confirmation dialog and act with the session that loaded what you're looking at. If that session is no longer active, the action is refused and the message says why. Keys live in `sessionStorage` only, one per tenant.
 
 What this deliberately is **not**: an operator login. There are no accounts, no roles and no SSO here, so "one person, one login, many tenants" is not simulated with a key list. That, plus API key issuing and rotation, arrives with user auth, and until then the console tools stay local-only and admin-gated.
 
@@ -664,6 +664,31 @@ const FallbackBento = () => (
 />;
 ```
 
+#### A 503 is a temporary absence
+
+The backend answers `503` with `Retry-After` in two cases: a cold miss that waited past its limit while another request generates the same zone (`Retry-After: 60`), and an authoritative store it cannot reach (`Retry-After: 30`). The stream sends the same thing as an `error` event with `status: 503` and `retry_after`.
+
+**The library does not retry on its own.** A skeleton that stays on screen for a minute is worse than the content your site would show anyway. Without `errorComponent`, the visitor sees "Unable to load personalized content" and a **Try again** button. Fine for a real failure, poor for a zone that will be ready in a minute. The recommended fallback is `errorComponent` with your own non-personalized content, which fills the zone's slot with something useful whatever the cause.
+
+The function form receives a `GenUIError`, so you can tell the cases apart:
+
+```tsx
+<GenUIZone
+  zoneId="recommendations"
+  apiUrl={API}
+  errorComponent={(error) =>
+    error.status === 503 ? (
+      <FallbackBento /> // temporary: error.retryAfter says how long, in seconds
+    ) : (
+      <p>Recommendations are unavailable right now.</p>
+    )
+  }
+  onError={(error) => log(error.status, error.retryAfter, error.message)}
+/>
+```
+
+`status` is the HTTP status, or the one the stream reported. It is `undefined` for a network failure or a stream cut short. `retryAfter` is set only when the backend sent `Retry-After`. If you want the zone to try again later, schedule `refresh()` yourself, from `useZone`, after `retryAfter` seconds. The backend lists `Retry-After` in `Access-Control-Expose-Headers`, so a page on another origin reads it from a JSON response as well. A proxy in front that rewrites CORS headers has to keep it there. The stream carries it in the event body.
+
 ---
 
 ## 🪝 Hooks
@@ -743,6 +768,8 @@ const { behavior } = response.meta ?? {};
 
 It appears only when the request carried behavior data: consent withheld, or `privacy: 'strict'`, means no analysis to report, by design. Note that `userType` **is** one of the factors of the segment key (`type=`), while `engagementScore` is **not**: the `eng=` bucket is computed deterministically from scroll depth (`>= 70` high, `>= 30` mid), never from this model-estimated score, so a segment stays reproducible.
 
+**The hook holds one identity at a time.** `apiUrl`, `apiKey`, `userId` and `consent` together define it. When any of them changes, the chat starts a new session: history and profile are emptied, and a question still waiting for its answer is aborted. Its `query()` promise rejects with an `AbortError`, `error` is not set and `onProfileUpdate` is not called, so the answer lands nowhere. The first request of the new identity carries no history, no profile and no behavior from the previous one. A failed query hands `onError` a `GenUIError` with `status` and `retryAfter` (see [Fallback Content](#fallback-content--client-side-fallbacks)).
+
 ### useZone — Zone-Level Control
 
 For low-level zone control when you need more customization:
@@ -777,6 +804,8 @@ console.log(meta?.renderId); // "a1b2c3d4e5f6" — identity of the generated var
 console.log(meta?.cache); // { status: "fresh", segment: "role=developer|eng=high", ageSeconds: 42 }
 console.log(meta?.experiment); // { arm: "personalized", holdoutPercent: 10 } — when holdout is on
 ```
+
+`meta` describes one render and goes back to `null` whenever a new one starts, so a failed render never shows next to the previous variant's `renderId`. When `apiUrl`, `apiKey`, `userId` or `consent` change, the zone clears what it is showing and aborts the request in flight rather than keeping the previous identity's content on screen until the next response arrives. `error` is a `GenUIError`: `status` is the HTTP status (or the one a stream reported), `retryAfter` is in seconds when the backend sent it.
 
 ---
 
@@ -1296,9 +1325,11 @@ By default, zone renders are **not** generated per user per request. Users are c
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **fresh** (age ≤ `ZONE_CACHE_FRESH_TTL`) | Served from cache, no LLM call                                                                                                                                                                               |
 | **stale** (age ≤ `ZONE_CACHE_STALE_TTL`) | Served instantly from cache, re-rendered in background (single-flight)                                                                                                                                       |
-| **miss**                                 | Rendered live (cold start), then cached for the whole segment. Single-flight too: concurrent requests for the same key coalesce on one generation (`status: "coalesced"`) instead of each paying an LLM call |
+| **miss**                                 | Rendered live (cold start), then cached for the whole segment. Single-flight too: concurrent requests for the same key coalesce on one generation (`status: "coalesced"`) instead of each paying an LLM call. A request still waiting after 15 seconds gets a 503 with `Retry-After`, never a generation of its own |
 
-Anonymous users with no profile signals share a single `anon` segment — typically the most-hit cache entry. Changing any zone configuration (prompts, pinned content, constraints) automatically invalidates its cache entries.
+Anonymous users with no profile signals share a single `anon` segment, typically the most-hit cache entry. Changing any zone configuration (prompts, pinned content, constraints) automatically invalidates its cache entries.
+
+**A cached render answers to the content policy in force now.** The policy stays out of the cache key, so a save keeps every segment in place. Each cached payload remembers which banned terms it was checked against, and every read scans it only for terms added since. When one matches, the component carrying it is dropped, pinned content is enforced again, the hit shows up in `meta.sanitization.policy_violations`, and the reduced payload goes back into the cache with its original age. The cost is one policy read per cache hit, a scan only after a save, one cache write per affected entry, and no LLM call. The render gets its full size back at its normal refresh. The same does not hold for the knowledge base: a render keeps the links and figures of a document deleted after it was generated, until that segment is regenerated ([why](deploy/OUTPUT-GUARANTEES.md#honest-limits-what-is-best-effort-not-guaranteed)).
 
 **Shared renders see the segment archetype, never the raw profile.** The LLM input of a cached render is derived from the cache key itself: role, top interests, browsing style and engagement as short validated tags (slugified, length- and count-capped). Free-length client fields — low-confidence guesses, navigation paths, arbitrary profile text — never reach a render that other users will be served, so the first requester of a segment cannot poison what the whole segment sees for the TTL window. Fine-grained individual personalization belongs to the non-shared path: `cacheStrategy="live"` renders per request from the full (server-authoritative) profile, and is reserved to admin keys (see [Cost controls](#-cost-controls)).
 
@@ -1376,14 +1407,15 @@ The registry has an admin HTTP surface (`/api/v1/zone/config`, admin key require
 | `PUT /api/v1/zone/config/{zone_id}`          | Saves the config as a **draft**. Production is untouched. `expected_version` gives optimistic concurrency: 409 when someone else edited in the meantime |
 | `POST /api/v1/zone/config/{zone_id}/approve` | Promotes the draft: from this response on, every render of the zone serves it                                                                           |
 | `DELETE /api/v1/zone/config/{zone_id}/draft` | Discards the draft; the approved record keeps serving                                                                                                   |
-| `DELETE /api/v1/zone/config/{zone_id}`       | Removes the whole entry: the zone goes back to host props                                                                                               |
+| `DELETE /api/v1/zone/config/{zone_id}`       | Removes the whole entry: the zone goes back to host props. `?expected_version=N` answers 409 if someone edited or approved since                        |
 
 Worth knowing:
 
 - **Previewing a draft** is a normal render request with `preview_draft: true` (admin keys only): the backend resolves the draft slot instead of the approved one and forces a live bypass, so a draft can be seen but never cached or served to real traffic. Warmup ignores the flag: a draft can never be warmed into the cache real users read.
 - **The observed catalog** is how the Studio knows which zones exist at all. The backend never scans host source code; a zone is just `<GenUIZone zoneId="hero" />` until it renders. So at every cached render the backend records `(tenant, zone_id)` in a per-tenant set (bounded, deduped: `zone_id` is logical identity, five mounts of `"hero"` are one zone). A new zone shows up as `ungoverned` the first time the site renders it, and the operator adopts it by saving a config.
 - **Every state transition is audited**: `draft_saved`, `approved`, `draft_discarded`, `deleted` become `zone_config_change` events carrying the admin key fingerprint, on the same audit trail as renders.
-- **Writes tell you where they landed**: responses carry `storage: "redis" | "memory"`. When Redis is down the write lives in one worker's memory and dies with it; the Studio shows a warning instead of losing an approval in silence.
+- **Writes tell you where they landed**: responses carry `storage: "redis" | "memory"`, and `memory` means no Redis is configured, so the write lives in one worker. With Redis configured and down, a write answers 503: kept in one worker's memory, it would be replaced by the older Redis copy on reconnection.
+- **Concurrent edits cannot overwrite each other.** Saving a draft, approving and deleting check `expected_version` and write in one Redis transaction, so two operators clicking at the same time get one success and one 409.
 
 ---
 
@@ -1398,11 +1430,15 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 4
 
 **Why Redis is required with more than one worker.** Profiles, rate-limit counters, uplift metrics and the single-flight render lock are cross-process state. Without Redis each worker keeps a private in-memory copy: a user's profile flip-flops depending on which worker serves the request and vanishes on restart, the effective rate limit becomes `limit × workers`, impressions/clicks under-count (the uplift numbers become wrong), and every worker re-renders the same stale segment — the exact LLM cost the cache exists to avoid.
 
-**Degradation semantics (what a Redis blip does).** Store operations never fail closed: on a Redis error the store serves from a bounded in-memory fallback and the process retries the connection with exponential backoff (1s doubling up to 30s), returning to Redis as soon as it answers. A blip degrades the process _briefly and visibly_ — never permanently and never with a 500:
+**Degradation semantics (what a Redis blip does).** What a store does on a Redis error depends on whether its data can be regenerated. In every case the process retries the connection with exponential backoff (1s doubling up to 30s) and returns to Redis as soon as it answers, so a blip degrades the process _briefly and visibly_, never permanently and never with a 500:
+
+- **Caches and counters fall back to memory**: render cache, rate limits, LLM budget, event counters, ingest progress. They regenerate or approximate, so memory is the right trade.
+- **Stored configuration does not.** Content policy, zone registry and theme serve the last version this worker read or wrote. A zone render checked against that copy carries `meta.sanitization.policy_last_known: true`. A worker that never read it answers 503 with `Retry-After`. The policy never shrinks to the env terms, an unreadable approval never turns into the host props, and a save answers 503 instead of living in one worker.
+- **Profiles have no fallback.** Read, sync, export and erasure answer 503 with `Retry-After`; a render goes on with the client's copy and writes nothing.
 
 - `GET /health` reports `"redis": "connected" | "reconnecting" | "disabled"` and the overall status turns `degraded` while Redis is unreachable — or not configured outside explicit dev mode (`GENUI_DEV_OPEN=1`).
 - Socket timeouts are capped (~2s), so a hung Redis costs one slow operation, not a hung request.
-- The in-memory fallbacks are bounded (2000 entries for renders and profiles, oldest evicted): a long outage on a multi-worker deployment means _reduced consistency_, not memory exhaustion — but it is a shock absorber for blips, **not an operating mode**. Fix the Redis, don't run on the fallback.
+- The in-memory fallbacks are bounded (2000 renders, oldest evicted): a long outage on a multi-worker deployment means _reduced consistency_, not memory exhaustion. It is a shock absorber for blips, **not an operating mode**. Fix the Redis, don't run on the fallback.
 
 **What a slow Qdrant does.** The same rule, applied to the vector database. Search runs on the async client, and every remaining Qdrant call (health probe, document upload, listing, deletion, stats) runs in the worker's threadpool, so a slow answer never occupies the event loop that is serving renders next to it. The connection is opened once per process instead of once per request, but the health answer is still a live round-trip: a reused connection can report `qdrant_connected: false` and it will, because it asks. `QDRANT_TIMEOUT_SECONDS` (default `2`, matching the Redis socket cap) bounds every call, so an unresponsive Qdrant costs one slow operation. Raise it if you bulk-index large documents into a remote instance; the upload response reports `chunks_indexed`, so a cap set too tight shows up there instead of hiding.
 
@@ -1434,7 +1470,7 @@ docker compose up -d --build
 With BYOK the LLM bill is on **your** key, and the client `pk_` key is public (it ships with the page). The principle: **a public credential must never convert traffic into LLM spend without a limit.** Cost is controlled where it is born (cache misses and live renders), not downstream:
 
 - **`cacheStrategy="live"` is admin-only.** A request body field must not let any visitor force one LLM call per page load. Client keys sending `"live"` get a 403; the segment cache serves them instead.
-- **Cold misses are single-flight.** When a popular segment expires, concurrent requests coalesce on one generation (the same lock that guards stale refreshes). The extra requests wait briefly and are served the winner's render (`meta.cache.status: "coalesced"`).
+- **Cold misses are single-flight.** When a popular segment expires, concurrent requests coalesce on one generation (the same lock that guards stale refreshes). The extra requests wait briefly and are served the winner's render (`meta.cache.status: "coalesced"`). If the winner is still writing after 15 seconds, the waiters get a 503 with `Retry-After` (on the stream, an `error` event with `status: 503`) and nobody generates outside the lock. A winner that slow means the provider is slow, and letting every waiter generate on its own would put the full request rate on the provider, and on the bill, at that exact moment.
 - **Batches are capped and charged for what they spend.** `/zone/batch-render` accepts at most `ZONE_BATCH_MAX` zones (413 above) and a batch of N zones consumes N rate-limit slots, not 1.
 - **Per-tenant LLM budget, on every surface that spends.** `LLM_BUDGET_PER_HOUR` caps how many LLM generations one tenant can trigger per hour, across all workers (same shared Redis store as the rate limit). It covers zone renders **and** chat: one `POST /query` is charged for the model calls it actually makes, two per message and three when the request carries behavior data, because the chat fans out to the response, profile and behavior agents. Over the cap: cached renders keep being served (stale entries simply stop refreshing), new generations return 429. Admin-triggered renders (warmup, admin `"live"`) and admin chat are exempt, so pre-warming after a deploy never competes with the abuse cap.
 - **Over the cap, chat stops instead of degrading.** A zone render has a cached copy to fall back on, so its degradation is invisible. A chat answer has none: the answer itself is the expensive call, and serving it without the accessory analyses would save the small half of the cost while spending the large one. So the request returns 429 and says which knob to turn.
@@ -1469,7 +1505,7 @@ What reaches the frontend is guaranteed by the system, not by prompt obedience:
 
 > Because URLs and numbers must exist in the input, enumerate your content in `contextPrompt` (or `pinnedContent` / RAG) — content the model cannot reference, it cannot link or claim.
 
-The full chain (`validate → URL guard → numeric grounding → content policy → redundancy → component budget → pinned`) runs on **every** serving path (sync, SSE streaming and `/query`), and always _before_ a render is cached. On the React side, `useZone` and `useGenUI` expose the report as `meta.sanitization` (`removedUrls`, `droppedComponents`, `removedNumbers`, `policyViolations`), so a host can observe enforcement without parsing wire data. [`deploy/OUTPUT-GUARANTEES.md`](deploy/OUTPUT-GUARANTEES.md) states each guarantee with its enforcing code reference, its test, and its honest limits, written to be attached to a contract.
+The full chain (`validate → URL guard → numeric grounding → content policy → redundancy → component budget → pinned`) runs on **every** serving path (sync, SSE streaming and `/query`), and always _before_ a render is cached; on the zone paths it is a single object both paths feed, and a cache hit is checked again against the current content policy. On the React side, `useZone` and `useGenUI` expose the report as `meta.sanitization` (`removedUrls`, `droppedComponents`, `removedNumbers`, `policyViolations`), so a host can observe enforcement without parsing wire data. [`deploy/OUTPUT-GUARANTEES.md`](deploy/OUTPUT-GUARANTEES.md) states each guarantee with its enforcing code reference, its test, and its honest limits, written to be attached to a contract.
 
 ---
 
@@ -1587,7 +1623,11 @@ So the whole library runs off one switch:
 
 Consent settles the ambient browser signals too. Nothing runs without an explicit grant, so Do Not Track and Global Privacy Control have nothing left to block, and a visitor who answered your consent prompt has made a more specific statement than a browser-wide default.
 
-`privacy` and `consent` are available on `GenUIZone`, `useZone` and `useGenUI` with the same meaning. A zone starts the page's behavior tracker itself once consent is granted, so a page built out of zones alone is no longer silently collecting nothing; a page that also uses `useGenUI` keeps a single tracker, the first one started.
+`privacy` and `consent` are available on `GenUIZone`, `useZone` and `useGenUI` with the same meaning. A zone starts the page's behavior tracker itself once consent is granted, so a page built out of zones alone is no longer silently collecting nothing. There is one tracker per page, and it belongs to the `userId` it was started for. A zone, chat or `trackInteraction` call reads it or writes into it only with its own consent and the same `userId`. A chat without consent on a page where a consented zone runs sends no behavior at all.
+
+**Consent is checked on every request.** When `consent` goes from `true` to `false` the tracker stops and is discarded, the chat drops its profile and history from memory, and the next request carries no `userId`, no profile and no behavior. Changing `userId` works the same way: nothing of the previous user survives in memory, and answers still on their way for them are thrown away.
+
+The profile cached in IndexedDB is stored per backend and client key (`apiUrl` plus `apiKey`), so two backends or two tenants on the same origin never read each other's record. Profiles written by earlier versions, keyed by `userId` alone, are deleted the first time a newer version opens the database. The server-side profile is the source of truth, and the local copy fills again from use.
 
 ### Access and erasure
 
@@ -1601,7 +1641,7 @@ curl -X DELETE -H "X-API-Key: pk_live_abc" -H "X-User-Token: $TOKEN" \
   http://localhost:8000/api/v1/profile/u-42
 ```
 
-The export returns the stored profile plus the audit entries that name that user, which is all of it: renders served, chat queries, impressions and clicks, profile syncs, updates and erasures. Nothing else in the system is keyed by a person. Cached renders belong to a segment, event counters to a zone and an arm, themes and zone configs to the operator. Both routes carry the same identity guard as the rest of the per-user surface: a signed `X-User-Token` whose subject matches the id, or an admin key. An export endpoint with a weak guard is a data breach with a compliance label on it.
+The export returns the stored profile plus the audit entries that name that user, which is all of it: renders served, chat answers (without the question), impressions and clicks, profile syncs, updates and erasures. Nothing else in the system is keyed by a person. Cached renders belong to a segment, event counters to a zone, an experiment and an arm, themes and zone configs to the operator. Both routes carry the same identity guard as the rest of the per-user surface: a signed `X-User-Token` whose subject matches the id, or an admin key. An export endpoint with a weak guard is a data breach with a compliance label on it.
 
 When the audit trail is going to your log pipeline (the production default), the export says `"queryable": false` with a note pointing there, rather than returning an empty history that would read as "nothing ever happened".
 
@@ -1616,6 +1656,8 @@ When the audit trail is going to your log pipeline (the production default), the
   "note": "..."
 }
 ```
+
+**Only when it happened.** The response goes out after Redis has confirmed the delete. With Redis unreachable it is a `503` with `Retry-After` and a detail saying the profile was NOT erased, and the attempt is on the audit trail with `outcome: "store_unavailable"`. Retry after the interval. The export follows the same rule: a `503`, never an empty profile.
 
 A record of what was shown to whom is worth nothing if the party who showed it can edit it afterwards, and in a regulated deployment that record is also the operator's own evidence. On top of that, in the production configuration those lines have already left this process for your log pipeline, so the backend could not rewrite them if it wanted to. The trail is bounded instead of edited: rotation on the file sink, your pipeline's retention policy otherwise. And the erasure is itself recorded in it, so a later export shows when the right was exercised. Whether that balance holds for your deployment is a call for your DPO, on your retention numbers, and the numbers are below.
 
@@ -1632,7 +1674,7 @@ Storage limitation is configuration here, and this is the only place the default
 | Event counters                | none                                             | kept            | Aggregate per zone and arm, no identifiers                                     |
 | IndexedDB profile and history | the visitor                                      | until cleared   | Only written with consent; `clearProfile()` / `clearHistory()` erase it        |
 
-`PROFILE_TTL_SECONDS` applies to the Redis store; the in-memory fallback is bounded by size and lost on restart.
+`PROFILE_TTL_SECONDS` applies to the Redis store. Without Redis the in-memory store is bounded by size and lost on restart; with Redis there is no in-memory copy.
 
 ### The documents your legal team will ask for
 
@@ -1707,7 +1749,7 @@ token = sign_user_token("change-me-long-random", user_id, "acme")  # default TTL
 # hand `token` to the browser; the frontend sends it as X-User-Token
 ```
 
-On the React side, pass it as the `userToken` prop (on `GenUIZone`, `useZone`, or `useGenUI`) next to `userId` — the library adds the `X-User-Token` header to every render/stream/query call; omit it and no header is sent.
+On the React side, pass it as the `userToken` prop (on `GenUIZone`, `useZone`, or `useGenUI`) next to `userId`: the library adds the `X-User-Token` header to every render/stream/query call and to the zone's impression and click events; omit it and no header is sent.
 
 The identity contract, in one table:
 
@@ -1733,7 +1775,14 @@ When a `userId` identifies someone, the **server-side profile store** (Redis, or
 
 ### Audit log — what was shown to whom
 
-Every zone render, query, profile sync, and profile deletion emits an append-only JSON event (`AUDIT_LOG_PATH` file, or the `genui.audit` logger): tenant, user, zone, segment, cache state, the exact titles/links displayed, and what the guarantee chain removed before serving (`sanitization`). In regulated sectors this answers "why did user X see content Y on date Z?". API keys appear only as fingerprints, never raw. The trail is queryable via `GET /api/v1/audit` (admin, tenant-scoped, filters for user/zone/event/date, paginated) and through the Studio's Audit Viewer; see [Audit in production](#audit-in-production) for the read path's limit with an external log sink.
+Every zone render, query, profile sync, and profile deletion emits an append-only JSON event (`AUDIT_LOG_PATH` file, or the `genui.audit` logger): tenant, user, zone, segment, cache state, the exact titles/links displayed, and what the guarantee chain removed before serving (`sanitization`). In regulated sectors this answers "why did user X see content Y on date Z?". API keys appear only as fingerprints, never raw.
+
+A line holds what it claims to hold:
+
+- **Titles and links come from every component type**, custom ones included. The summary reads field names, not types (any `url`, `link`, `*_url` field, markdown links in body text, and title-like fields), with the same walk the pinned-content check uses.
+- **A chat line never holds the question.** It records the number of components, the confidence and how many profile updates were applied. The question is free text and can carry anything, special categories included.
+- **The page is a path.** `current_page` is recorded without its query string and fragment.
+- **What the client said is marked as such.** `declared` lists the fields taken as the browser sent them: `page` on a render; `render_id`, `arm`, `segment`, `item_title`, `item_url` on a UI event. A UI event keeps its `user_id` only when it passes the same identity guard as the render; otherwise the event is recorded with no user. The trail is queryable via `GET /api/v1/audit` (admin, tenant-scoped, filters for user/zone/event/date, paginated) and through the Studio's Audit Viewer; see [Audit in production](#audit-in-production) for the read path's limit with an external log sink.
 
 ```json
 {
@@ -1742,6 +1791,8 @@ Every zone render, query, profile sync, and profile deletion emits an append-onl
   "tenant": "acme",
   "user_id": "u42",
   "zone_id": "homepage-for-you",
+  "page": "https://example.com/products",
+  "declared": ["page"],
   "cache": { "status": "fresh", "segment": "role=developer|eng=high" },
   "shown_titles": ["API Docs", "Case Study"],
   "shown_links": ["/docs/api", "/cases/1"]
@@ -1762,6 +1813,8 @@ With `streaming` enabled, components appear one by one as the model generates th
 
 Under the hood the zone consumes `POST /api/v1/zone/render/stream` (Server-Sent Events): each `component` event is **already validated and URL-sanitized** before being emitted; the final `complete` event carries the authoritative response (including pinned-content enforcement) and replaces the streamed state. Cache hits stream their components in a single burst, so `streaming` is most useful for `cacheStrategy="live"` zones (admin keys only, see [Cost controls](#-cost-controls)). Holdout, audit log, caching, single-flight and the LLM budget behave exactly like the non-streaming endpoint.
 
+**A stream that ends without `complete` is an error.** Components streamed before a cut, or before an `error` event, have not been through pinned-content enforcement, so the zone does not keep them. `components` goes back to empty, `error` is set, and `onRender` is not called. An `error` event with `status: 503` and `retry_after` reaches you as a `GenUIError` with the same `status` and `retryAfter` as the non-streaming 503.
+
 ### SSR-safety
 
 The library can be imported and rendered in server environments (Next.js, Remix, Astro): CSS is shipped as a separate file (no style injection at import time), IndexedDB persistence degrades to a no-op without a browser, and the BehaviorTracker won't attach listeners without a DOM.
@@ -1781,7 +1834,9 @@ With `trackEvents` (default `true`), every `GenUIZone`:
 - emits an **impression** when the zone enters the viewport (once per generated variant), and
 - captures **clicks** on any link inside the zone (title + URL),
 
-sending them to `POST /api/v1/events` tagged with the variant identity (`render_id`), the experiment arm, and the segment. Custom events (e.g. conversions) can be sent with `sendGenUIEvents()`.
+sending them to `POST /api/v1/events` tagged with the variant identity (`render_id`), the experiment arm, and the segment. Custom events (e.g. conversions) can be sent with `sendGenUIEvents(apiUrl, apiKey, events, userToken)`; they reach the audit log, while the counters only take impressions and clicks.
+
+The browser key is public, so the backend treats an event as the browser's word. The zone sends its `userToken` along, and an event's `user_id` is kept only when that token proves it. For such a user the server computes the arm itself, and the event counts as **verified**. Everything else is counted too (anonymous visitors, events without a token): uplift can be measured without naming anyone, it just isn't verified.
 
 ### Holdout (control group)
 
@@ -1801,9 +1856,11 @@ GET /api/v1/events/stats?zone_id=homepage-for-you   (admin key)
 ```json
 {
   "zone_id": "homepage-for-you",
+  "experiment": "genui-exp-1",
+  "unit": "event",
   "arms": {
-    "personalized": { "impression": 5400, "click": 540, "ctr": 0.1 },
-    "control": { "impression": 600, "click": 30, "ctr": 0.05 }
+    "personalized": { "impression": 5400, "click": 540, "ctr": 0.1, "verified": { "impression": 4100, "click": 420 } },
+    "control": { "impression": 600, "click": 30, "ctr": 0.05, "verified": { "impression": 450, "click": 22 } }
   },
   "uplift_percent": 100.0,
   "significance": {
@@ -1811,13 +1868,20 @@ GET /api/v1/events/stats?zone_id=homepage-for-you   (admin key)
     "z_score": 3.94,
     "p_value": 0.00008,
     "significant_95": true,
-    "sample_warning": false
+    "sample_warning": false,
+    "indicative": true
   },
   "holdout_percent": 10
 }
 ```
 
-`uplift_percent` is the headline number; `significance` tells you whether to believe it — a two-proportion z-test between arms (`significant_95: true` means p < 0.05; `sample_warning` flags arms under 100 impressions, where any conclusion is preliminary). Raw events also land in the audit log for offline slicing (per segment, per item, per time window).
+`uplift_percent` is the headline number; `significance` is a two-proportion z-test between arms (`significant_95: true` means p < 0.05; `sample_warning` flags arms under 100 impressions, where any conclusion is preliminary). Raw events also land in the audit log for offline slicing (per segment, per item, per time window).
+
+Three things to read alongside the numbers:
+
+- **`experiment`** is the `HOLDOUT_SALT` the counters belong to. Counters are kept per experiment, so a new salt starts from zero instead of adding to the previous assignment. Counters recorded before this key existed are not read.
+- **`verified`** is the part of each count whose user passed the identity guard, with the arm computed by the server. The rest is anonymous, or came from a browser that sent no valid token.
+- **`unit: "event"`**: the test counts impressions and clicks, not visitors. One visitor who sees the zone 10 times is 10 observations, and those observations are not independent, so the p-value comes out lower than it should. That is why `indicative` is `true`: treat a significant result as a strong signal, not as proof. Counting per visitor needs deduplication the counters don't do.
 
 ### Observability
 
@@ -1962,7 +2026,7 @@ useGenUI({
 - `consent: true`: explicit grant from your consent flow. Capture starts, at the level you chose, and the profile is cached on the device.
 - `consent: false` or unset: nothing is captured, at any level, and nothing is stored on the device. Personalization continues from the anonymous segment.
 
-`privacy` picks what is captured; `consent` decides whether anything is. Fine-grained tracker overrides live in `behaviorTrackingOptions` (they win over the top-level shortcuts). Zone impression/click events (`/events`, uplift measurement) capture only the framework's own generated content, never host page data, and carry a `userId` only under the same consent. The auto-captured `current_page` sent by zones follows the same privacy level; an explicit `currentPage` prop is your own choice and is sent as-is.
+`privacy` picks what is captured; `consent` decides whether anything is. Withdrawing consent stops the tracker and throws away what it collected, and a tracker started for one `userId` is never read on behalf of another. Fine-grained tracker overrides live in `behaviorTrackingOptions` (they win over the top-level shortcuts). Zone impression/click events (`/events`, uplift measurement) capture only the framework's own generated content, never host page data, and carry a `userId` only under the same consent. The auto-captured `current_page` sent by zones follows the same privacy level; an explicit `currentPage` prop is your own choice and is sent as-is.
 
 ### Manual Tracking
 

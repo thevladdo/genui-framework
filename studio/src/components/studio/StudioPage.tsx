@@ -20,7 +20,7 @@ import {
   type KnowledgeDocument,
   type SearchResult,
 } from '../../lib/api';
-import { clearSession, getSession, sessionId, type AdminSession } from '../../lib/session';
+import { clearSession, getSession, isActive, sessionId, type AdminSession } from '../../lib/session';
 import { ConnectGate } from './ConnectGate';
 import { ConsoleHeader } from './ConsoleHeader';
 import { BackfillDialog, CorpusDecision, SpendConfirm } from './CorpusModals';
@@ -592,8 +592,13 @@ const QueryTester = ({ session }: { session: AdminSession }) => {
 };
 
 // Page
-export const StudioPage = () => {
-  const [session, setSession] = useState<AdminSession | null>(() => getSession());
+const StudioWorkbench = ({
+  session,
+  onSession,
+}: {
+  session: AdminSession;
+  onSession: (next: AdminSession | null) => void;
+}) => {
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [corpus, setCorpus] = useState<CorpusState | null>(null);
   const [loading, setLoading] = useState(false);
@@ -606,9 +611,9 @@ export const StudioPage = () => {
   >(null);
   const [backfillRemaining, setBackfillRemaining] = useState<number | null>(null);
   const [backfillRun, setBackfillRun] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!session) return;
     setLoading(true);
     setDocuments([]);
     try {
@@ -616,15 +621,15 @@ export const StudioPage = () => {
       setDocuments(base.documents);
       setCorpus(base.corpus);
     } catch {
-      // A dead session (expired key, backend down) falls back to the gate, or to another connected tenant when there is one
-      setSession(clearSession());
+      // A dead session (expired key, backend down) falls back to the gate, or to another connected tenant when there is one.
+      // clearSession drops the active session, so an error for a tenant already left must not reach it.
+      if (isActive(session)) onSession(clearSession());
     } finally {
       setLoading(false);
     }
-  }, [session]);
+  }, [session, onSession]);
 
   const runBackfill = useCallback(async () => {
-    if (!session) return;
     const ingestId = newIngestId();
     setBackfillRun(ingestId);
     setBackfilling(true);
@@ -649,7 +654,6 @@ export const StudioPage = () => {
   }, [session, refresh]);
 
   const openBackfill = useCallback(async () => {
-    if (!session) return;
     setBackfillOpen(true);
     setBackfillEstimate(null);
     setBackfillError(null);
@@ -674,26 +678,20 @@ export const StudioPage = () => {
   }, [refresh]);
 
   const onDelete = async (source: string) => {
-    if (!session) return;
-    if (!window.confirm(`Delete "${source}" and all its chunks?`)) return;
+    if (!window.confirm(`Delete "${source}" and all its chunks from tenant "${session.tenant}"?`)) return;
+    setDeleteError(null);
     try {
       await deleteDocument(session, source);
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Delete failed');
     } finally {
       void refresh();
     }
   };
 
-  if (!session) {
-    return <ConnectGate onConnected={setSession} />;
-  }
-
   return (
-    <main
-      key={sessionId(session)}
-      className={styles.page}
-      style={{ marginTop: "3rem" }}
-    >
-      <ConsoleHeader session={session} onSession={setSession} />
+    <main className={styles.page} style={{ marginTop: "3rem" }}>
+      <ConsoleHeader session={session} onSession={onSession} />
 
       <UploadZone
         session={session}
@@ -701,6 +699,7 @@ export const StudioPage = () => {
         onUploaded={() => void refresh()}
         onCrossed={setDecision}
       />
+      {deleteError && <p className={styles.error} role="alert">{deleteError}</p>}
       <DocumentsTable
         documents={documents}
         corpus={corpus}
@@ -736,6 +735,22 @@ export const StudioPage = () => {
         />
       )}
     </main>
+  );
+};
+
+export const StudioPage = () => {
+  const [session, setSession] = useState<AdminSession | null>(() => getSession());
+
+  if (!session) {
+    return <ConnectGate onConnected={setSession} />;
+  }
+
+  return (
+    <StudioWorkbench
+      key={sessionId(session)}
+      session={session}
+      onSession={setSession}
+    />
   );
 };
 

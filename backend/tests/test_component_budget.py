@@ -10,11 +10,17 @@ import unittest
 
 from schemas.components import apply_component_budget
 
+from memory_stores import use_memory_stores
+
 try:
     from api import zone_router  # noqa: F401
     HAS_APP = True
 except Exception:
     HAS_APP = False
+
+
+def setUpModule():
+    use_memory_stores()
 
 
 def _c(ctype: str) -> dict:

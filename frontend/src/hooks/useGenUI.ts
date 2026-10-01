@@ -13,6 +13,7 @@ import type {
 import {
   getProfile,
   createEmptyProfile,
+  profileScope,
   applyProfileUpdates,
   clearProfile as clearProfileDB,
   profileToApiFormat,
@@ -26,6 +27,7 @@ import {
   BehaviorTrackerOptions,
   initBehaviorTracker,
   getBehaviorTracker,
+  behaviorTrackerFor,
   stopBehaviorTracker,
 } from '../utils/behaviorTracker';
 import {
@@ -34,6 +36,7 @@ import {
   type GenUIDisclosure,
 } from '../utils/disclosure';
 import { consentGranted } from '../utils/privacy';
+import { GenUIError, asGenUIError, errorFromResponse } from '../utils/errors';
 
 
 const generateSessionId = (): string => {
@@ -86,7 +89,7 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
   } = options;
 
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  const [error, setError] = useState<GenUIError | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [history, setHistory] = useState<ConversationMessage[]>([]);
   const [behaviorTracker, setBehaviorTracker] = useState<BehaviorTracker | null>(null);
@@ -97,41 +100,56 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
   // the integrator's. Denied, the chat still answers: it just answers
   // without remembering anything locally and without naming anyone.
   const persist = enablePersistence && consentGranted(consent);
+  const storeScope = profileScope(apiUrl, apiKey);
 
   const sessionIdRef = useRef<string>(generateSessionId());
 
-  // Initialize profile, history, and behavior tracker on mount
+  // Everything this hook holds in memory belongs to one identity: the backend, the key, the user and their consent.
+  // When any of them changes, the session, history and profile of the previous one are dropped, and the answers still in flight for it are aborted and discarded, so nothing of it can reach the next request.
+  const identity = JSON.stringify([apiUrl, apiKey ?? null, userId, consentGranted(consent)]);
+  const identityRef = useRef(identity);
+  const identityScopeRef = useRef(new AbortController());
+
+  useEffect(() => {
+    if (identityRef.current === identity) return;
+    identityRef.current = identity;
+    identityScopeRef.current.abort();
+    identityScopeRef.current = new AbortController();
+    sessionIdRef.current = generateSessionId();
+    setHistory([]);
+    setProfile(null);
+    setError(null);
+    setLastDisclosure(null);
+    setIsLoading(false);
+  }, [identity]);
+
+  // Initialize profile, history, and behavior tracker for the current identity
   useEffect(() => {
     // Without consent no tracker is created at all, rather than one that
     // exists and never captures: a dormant instance would also shadow the
     // one a zone on the same page is entitled to start.
-    const startsTracker = enableBehaviorTracking && consentGranted(consent);
+    const tracker =
+      enableBehaviorTracking && consentGranted(consent)
+        ? initBehaviorTracker({
+            sessionId: sessionIdRef.current,
+            userId,
+            privacy,
+            consent,
+            ...behaviorTrackingOptions,
+          })
+        : null;
+    setBehaviorTracker(tracker);
 
+    let cancelled = false;
     const init = async () => {
-      // Initialize behavior tracking
-      if (startsTracker) {
-        const tracker = initBehaviorTracker({
-          sessionId: sessionIdRef.current,
-          userId,
-          privacy,
-          consent,
-          ...behaviorTrackingOptions,
-        });
-        setBehaviorTracker(tracker);
-      }
-
       if (!persist) return;
 
       try {
-        // Load profile
-        let loadedProfile = await getProfile(userId);
-        if (!loadedProfile) {
-          loadedProfile = createEmptyProfile(userId);
-        }
-        setProfile(loadedProfile);
-
-        // Load conversation history
+        const loadedProfile =
+          (await getProfile(userId, storeScope)) ?? createEmptyProfile(userId);
         const loadedHistory = await getConversationHistory(sessionIdRef.current);
+        if (cancelled) return;
+        setProfile(loadedProfile);
         setHistory(loadedHistory);
       } catch (err) {
         console.error('Failed to initialize GenUI:', err);
@@ -143,14 +161,23 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
     // Only stop what this hook started: on a page that also has zones,
     // the running tracker may not be ours to shut down.
     return () => {
-      if (startsTracker) {
+      cancelled = true;
+      if (tracker && getBehaviorTracker() === tracker) {
         stopBehaviorTracker();
       }
     };
-  }, [userId, persist, enableBehaviorTracking, privacy, consent]);
+  }, [userId, storeScope, persist, enableBehaviorTracking, privacy, consent]);
 
 
   const query = useCallback(async (text: string): Promise<GenUIResponse> => {
+    const scope = identityScopeRef.current.signal;
+    const sessionId = sessionIdRef.current;
+    const consented = consentGranted(consent);
+    // After every await: an answer for an identity that is gone lands nowhere
+    const ensureCurrent = () => {
+      if (scope.aborted) throw new DOMException('Identity changed', 'AbortError');
+    };
+
     setIsLoading(true);
     setError(null);
 
@@ -163,13 +190,13 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
       };
 
       if (persist) {
-        await addToHistory(sessionIdRef.current, userMessage);
+        await addToHistory(sessionId, userMessage);
+        ensureCurrent();
       }
       
       setHistory(prev => [...prev, userMessage]);
 
-      // Get behavior data
-      const tracker = getBehaviorTracker();
+      const tracker = behaviorTrackerFor(userId, consent);
       const behaviorData = tracker ? tracker.getCompactSummary() : null;
 
       // Prepare request body
@@ -177,11 +204,8 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
         query: text,
         // 'anonymous' is the local default, not an identity: sending it
         // would share one server-side profile across all anonymous users
-        user_id:
-          consentGranted(consent) && userId && userId !== 'anonymous'
-            ? userId
-            : undefined,
-        user_profile: profile ? profileToApiFormat(profile) : null,
+        user_id: consented && userId && userId !== 'anonymous' ? userId : undefined,
+        user_profile: consented && profile ? profileToApiFormat(profile) : null,
         conversation_history: history.slice(-10).map(msg => ({
           role: msg.role,
           content: msg.content,
@@ -198,14 +222,17 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
           ...(userToken ? { 'X-User-Token': userToken } : {}),
         },
         body: JSON.stringify(requestBody),
+        signal: scope,
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `API error: ${response.status}`);
+        const error = await errorFromResponse(response, 'API error');
+        ensureCurrent();
+        throw error;
       }
 
       const data = await response.json();
+      ensureCurrent();
 
       // Transform snake_case to camelCase
       const genUIResponse: GenUIResponse = {
@@ -254,7 +281,8 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
       };
 
       if (persist) {
-        await addToHistory(sessionIdRef.current, assistantMessage);
+        await addToHistory(sessionId, assistantMessage);
+        ensureCurrent();
       }
       
       setHistory(prev => [...prev, assistantMessage]);
@@ -263,8 +291,10 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
       if (genUIResponse.profileUpdates.shouldUpdate && persist) {
         const updatedProfile = await applyProfileUpdates(
           userId,
-          genUIResponse.profileUpdates.updates
+          genUIResponse.profileUpdates.updates,
+          storeScope
         );
+        ensureCurrent();
         setProfile(updatedProfile);
         onProfileUpdate?.(updatedProfile);
       }
@@ -277,14 +307,16 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
       return genUIResponse;
 
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
+      // Discarded with its identity: not an error of the current one
+      if (scope.aborted) throw err;
+      const error = asGenUIError(err);
       setError(error);
       onError?.(error);
       throw error;
     } finally {
-      setIsLoading(false);
+      if (!scope.aborted) setIsLoading(false);
     }
-  }, [apiUrl, apiKey, userToken, userId, consent, profile, history, persist, onProfileUpdate, onError]);
+  }, [apiUrl, apiKey, userToken, userId, consent, profile, history, persist, storeScope, onProfileUpdate, onError]);
 
 
   /**
@@ -306,10 +338,10 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
    */
   const clearProfile = useCallback(async () => {
     if (enablePersistence) {
-      await clearProfileDB(userId);
+      await clearProfileDB(userId, storeScope);
     }
     setProfile(createEmptyProfile(userId));
-  }, [userId, enablePersistence]);
+  }, [userId, storeScope, enablePersistence]);
 
 
   /**
@@ -345,22 +377,16 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
     interactionType: 'click' | 'hover' | 'focus' | 'scroll-into-view',
     metadata?: Record<string, unknown>
   ) => {
-    const tracker = getBehaviorTracker();
-    if (tracker) {
-      tracker.trackInteraction(elementId, elementType, interactionType, metadata);
-    }
-  }, []);
+    behaviorTrackerFor(userId, consent)?.trackInteraction(elementId, elementType, interactionType, metadata);
+  }, [userId, consent]);
 
 
   /**
    * Track navigation to a new page/route
    */
   const trackNavigation = useCallback((path: string, title?: string) => {
-    const tracker = getBehaviorTracker();
-    if (tracker) {
-      tracker.trackNavigation(path, title);
-    }
-  }, []);
+    behaviorTrackerFor(userId, consent)?.trackNavigation(path, title);
+  }, [userId, consent]);
 
   return {
     query,

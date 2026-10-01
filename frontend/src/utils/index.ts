@@ -7,6 +7,7 @@ export {
   getProfile,
   saveProfile,
   createEmptyProfile,
+  profileScope,
   applyProfileUpdates,
   clearProfile,
   profileToApiFormat,
@@ -33,6 +34,8 @@ export type {
   HoverEvent,
   ElementInteraction,
 } from './behaviorTracker';
+
+export { GenUIError } from './errors';
 
 export { sanitizeUrl } from './sanitizeUrl';
 

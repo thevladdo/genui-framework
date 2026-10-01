@@ -2,7 +2,7 @@
  * Content Studio + Measurement dashboard API client.
  */
 
-import { getSession, sessionId, type AdminSession } from "./session";
+import { isActive, type AdminSession } from "./session";
 import type { CacheStats, EventStats, WarmupResult } from "./measure";
 import type { PreviewRenderResponse } from "./segment";
 
@@ -120,19 +120,28 @@ const call = async (
   return response;
 };
 
-const request = async (
+const never = <T>(): Promise<T> => new Promise<T>(() => {});
+
+// Scoped to one tenant session, checked when the call leaves and again when the body has arrived.
+const request = async <T = unknown>(
   session: AdminSession,
   path: string,
   init: RequestInit = {},
-): Promise<Response> => {
-  const active = getSession();
-  if (!active || sessionId(active) !== sessionId(session)) {
+): Promise<T> => {
+  if (!isActive(session)) {
     throw new Error(
       `This view is scoped to tenant "${session.tenant}", which is no longer ` +
         "the active session. Reload the page to work on the current tenant.",
     );
   }
-  return call(session, path, init);
+  let body: T;
+  try {
+    body = (await (await call(session, path, init)).json()) as T;
+  } catch (error) {
+    if (!isActive(session)) return never<T>();
+    throw error;
+  }
+  return isActive(session) ? body : never<T>();
 };
 
 export interface WhoAmI {
@@ -159,8 +168,10 @@ export const verifySession = async (
 export const listDocuments = async (
   session: AdminSession,
 ): Promise<KnowledgeBase> => {
-  const response = await request(session, "/api/v1/documents");
-  const body = await response.json();
+  const body = await request<Partial<KnowledgeBase> | null>(
+    session,
+    "/api/v1/documents",
+  );
   return {
     documents: Array.isArray(body?.documents) ? body.documents : [],
     corpus: body?.corpus ?? null,
@@ -176,22 +187,20 @@ export const uploadDocument = async (
   form.append("file", file);
   if (options.dryRun) form.append("dry_run", "true");
   if (options.ingestId) form.append("ingest_id", options.ingestId);
-  const response = await request(session, "/api/v1/documents/upload", {
+  return request<IndexReport>(session, "/api/v1/documents/upload", {
     method: "POST",
     body: form,
   });
-  return (await response.json()) as IndexReport;
 };
 
 export const readIngest = async (
   session: AdminSession,
   ingestId: string,
 ): Promise<IngestStatus> => {
-  const response = await request(
+  return request<IngestStatus>(
     session,
     `/api/v1/documents/ingest/${encodeURIComponent(ingestId)}`,
   );
-  return (await response.json()) as IngestStatus;
 };
 
 export const cancelIngest = async (
@@ -209,7 +218,7 @@ export const backfillContext = async (
   session: AdminSession,
   options: { dryRun?: boolean; maxChunks?: number; ingestId?: string } = {},
 ): Promise<BackfillReport> => {
-  const response = await request(session, "/api/v1/documents/backfill", {
+  return request<BackfillReport>(session, "/api/v1/documents/backfill", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -218,7 +227,6 @@ export const backfillContext = async (
       ...(options.ingestId ? { ingest_id: options.ingestId } : {}),
     }),
   });
-  return (await response.json()) as BackfillReport;
 };
 
 /**
@@ -235,7 +243,11 @@ export const backfillInRuns = async (
     const report = await backfillContext(session, { ingestId });
     const remaining = report.chunks_plain_remaining ?? 0;
     onRemaining(remaining);
-    if (report.status !== "partial" || report.chunks_contextualized === 0 || remaining === 0) {
+    if (
+      report.status !== "partial" ||
+      report.chunks_contextualized === 0 ||
+      remaining === 0
+    ) {
       return report;
     }
   }
@@ -256,42 +268,38 @@ export const eventStats = async (
   session: AdminSession,
   zoneId: string,
 ): Promise<EventStats> => {
-  const response = await request(
+  return request<EventStats>(
     session,
     `/api/v1/events/stats?zone_id=${encodeURIComponent(zoneId)}`,
   );
-  return (await response.json()) as EventStats;
 };
 
 export const zoneCacheStats = async (
   session: AdminSession,
 ): Promise<CacheStats> => {
-  const response = await request(session, "/api/v1/zone/cache/stats");
-  return (await response.json()) as CacheStats;
+  return request<CacheStats>(session, "/api/v1/zone/cache/stats");
 };
 
 export const warmupZones = async (
   session: AdminSession,
   zones: unknown[],
 ): Promise<WarmupResult> => {
-  const response = await request(session, "/api/v1/zone/warmup", {
+  return request<WarmupResult>(session, "/api/v1/zone/warmup", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ zones }),
   });
-  return (await response.json()) as WarmupResult;
 };
 
 export const renderZone = async (
   session: AdminSession,
   payload: Record<string, unknown>,
 ): Promise<PreviewRenderResponse> => {
-  const response = await request(session, "/api/v1/zone/render", {
+  return request<PreviewRenderResponse>(session, "/api/v1/zone/render", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  return (await response.json()) as PreviewRenderResponse;
 };
 
 export interface ZoneGovernedConfig {
@@ -342,19 +350,17 @@ const CONFIG_BASE = "/api/v1/zone/config";
 export const listZoneConfigs = async (
   session: AdminSession,
 ): Promise<ZoneListResponse> => {
-  const response = await request(session, CONFIG_BASE);
-  return (await response.json()) as ZoneListResponse;
+  return request<ZoneListResponse>(session, CONFIG_BASE);
 };
 
 export const getZoneConfig = async (
   session: AdminSession,
   zoneId: string,
 ): Promise<ZoneConfigDetail> => {
-  const response = await request(
+  return request<ZoneConfigDetail>(
     session,
     `${CONFIG_BASE}/${encodeURIComponent(zoneId)}`,
   );
-  return (await response.json()) as ZoneConfigDetail;
 };
 
 export const saveZoneDraft = async (
@@ -363,7 +369,7 @@ export const saveZoneDraft = async (
   config: Record<string, unknown>,
   expectedVersion?: number | null,
 ): Promise<ZoneWriteResponse> => {
-  const response = await request(
+  return request<ZoneWriteResponse>(
     session,
     `${CONFIG_BASE}/${encodeURIComponent(zoneId)}`,
     {
@@ -375,7 +381,6 @@ export const saveZoneDraft = async (
       }),
     },
   );
-  return (await response.json()) as ZoneWriteResponse;
 };
 
 export const approveZoneConfig = async (
@@ -383,7 +388,7 @@ export const approveZoneConfig = async (
   zoneId: string,
   expectedVersion?: number | null,
 ): Promise<ZoneWriteResponse> => {
-  const response = await request(
+  return request<ZoneWriteResponse>(
     session,
     `${CONFIG_BASE}/${encodeURIComponent(zoneId)}/approve`,
     {
@@ -392,7 +397,6 @@ export const approveZoneConfig = async (
       body: JSON.stringify({ expected_version: expectedVersion ?? null }),
     },
   );
-  return (await response.json()) as ZoneWriteResponse;
 };
 
 export const discardZoneDraft = async (
@@ -407,10 +411,17 @@ export const discardZoneDraft = async (
 export const deleteZoneConfig = async (
   session: AdminSession,
   zoneId: string,
+  expectedVersion?: number | null,
 ): Promise<void> => {
-  await request(session, `${CONFIG_BASE}/${encodeURIComponent(zoneId)}`, {
-    method: "DELETE",
-  });
+  const query =
+    expectedVersion == null ? "" : `?expected_version=${expectedVersion}`;
+  await request(
+    session,
+    `${CONFIG_BASE}/${encodeURIComponent(zoneId)}${query}`,
+    {
+      method: "DELETE",
+    },
+  );
 };
 
 export interface AuditEntry {
@@ -469,8 +480,7 @@ export const queryAudit = async (
     if (value !== undefined && value !== "") qs.set(key, String(value));
   }
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  const response = await request(session, `/api/v1/audit${suffix}`);
-  return (await response.json()) as AuditQueryResponse;
+  return request<AuditQueryResponse>(session, `/api/v1/audit${suffix}`);
 };
 
 export interface ContentPolicyResponse {
@@ -482,20 +492,18 @@ export interface ContentPolicyResponse {
 export const getContentPolicy = async (
   session: AdminSession,
 ): Promise<ContentPolicyResponse> => {
-  const response = await request(session, "/api/v1/content-policy");
-  return (await response.json()) as ContentPolicyResponse;
+  return request<ContentPolicyResponse>(session, "/api/v1/content-policy");
 };
 
 export const saveContentPolicy = async (
   session: AdminSession,
   bannedTerms: string[],
 ): Promise<ContentPolicyResponse> => {
-  const response = await request(session, "/api/v1/content-policy", {
+  return request<ContentPolicyResponse>(session, "/api/v1/content-policy", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ banned_terms: bannedTerms }),
   });
-  return (await response.json()) as ContentPolicyResponse;
 };
 
 export interface TenantThemeResponse {
@@ -512,20 +520,18 @@ export interface TenantThemeWriteResponse {
 export const getTenantTheme = async (
   session: AdminSession,
 ): Promise<TenantThemeResponse> => {
-  const response = await request(session, "/api/v1/theme");
-  return (await response.json()) as TenantThemeResponse;
+  return request<TenantThemeResponse>(session, "/api/v1/theme");
 };
 
 export const saveTenantTheme = async (
   session: AdminSession,
   theme: Record<string, string>,
 ): Promise<TenantThemeWriteResponse> => {
-  const response = await request(session, "/api/v1/theme", {
+  return request<TenantThemeWriteResponse>(session, "/api/v1/theme", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ theme }),
   });
-  return (await response.json()) as TenantThemeWriteResponse;
 };
 
 export interface BackendHealth {
@@ -537,8 +543,7 @@ export interface BackendHealth {
 export const backendHealth = async (
   session: AdminSession,
 ): Promise<BackendHealth> => {
-  const response = await request(session, "/health");
-  return (await response.json()) as BackendHealth;
+  return request<BackendHealth>(session, "/health");
 };
 
 export const searchDocuments = async (
@@ -546,11 +551,14 @@ export const searchDocuments = async (
   query: string,
   topK = 5,
 ): Promise<SearchResult[]> => {
-  const response = await request(session, "/api/v1/documents/search", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, top_k: topK }),
-  });
-  const body = await response.json();
+  const body = await request<{ results?: SearchResult[] } | null>(
+    session,
+    "/api/v1/documents/search",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, top_k: topK }),
+    },
+  );
   return Array.isArray(body?.results) ? body.results : [];
 };

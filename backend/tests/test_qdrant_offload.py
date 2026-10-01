@@ -38,6 +38,8 @@ from tests.test_embeddings import (
     fake_settings,
 )
 
+from memory_stores import use_memory_stores
+
 try:
     from fastapi.testclient import TestClient
 
@@ -46,6 +48,10 @@ try:
     HAVE_APP = True
 except Exception:
     HAVE_APP = False
+
+
+def setUpModule():
+    use_memory_stores()
 
 
 class SharedVectorStoreTest(VectorStoreTestCase):

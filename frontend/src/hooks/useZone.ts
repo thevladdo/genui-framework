@@ -6,11 +6,22 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { GenUIComponent, SanitizationReport, UserProfile } from "../types";
 import type { GenUICustomComponentDef } from "../registry";
-import { getProfile, profileToApiFormat } from "../utils/indexeddb";
 import {
-  getBehaviorTracker,
+  getProfile,
+  profileScope,
+  profileToApiFormat,
+} from "../utils/indexeddb";
+import {
+  behaviorTrackerFor,
   initBehaviorTracker,
+  stopBehaviorTracker,
 } from "../utils/behaviorTracker";
+import {
+  GenUIError,
+  asGenUIError,
+  errorFromResponse,
+  parseRetryAfter,
+} from "../utils/errors";
 import { parseDisclosure, type GenUIDisclosure } from "../utils/disclosure";
 import { consentGranted, redactPII, type PrivacyLevel } from "../utils/privacy";
 import { readSSEStream } from "../utils/sse";
@@ -114,8 +125,8 @@ export interface UseZoneOptions {
   streaming?: boolean;
   /** Callback when zone renders successfully */
   onRender?: (components: GenUIComponent[]) => void;
-  /** Callback on render error */
-  onError?: (error: Error) => void;
+  /** Callback on render error, with the HTTP status and Retry-After when known */
+  onError?: (error: GenUIError) => void;
 }
 
 export interface ZoneCacheMeta {
@@ -169,8 +180,8 @@ export interface UseZoneReturn {
   components: GenUIComponent[];
   /** Loading state */
   isLoading: boolean;
-  /** Error state */
-  error: Error | null;
+  /** Error state, with the HTTP status and Retry-After when known */
+  error: GenUIError | null;
   /** Render metadata */
   meta: ZoneRenderMeta | null;
   /** IDs of pinned content that was included */
@@ -218,7 +229,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
   // emits the loading skeleton instead of empty HTML, and the client's
   // first paint matches it: no hydration mismatch, no layout shift.
   const [isLoading, setIsLoading] = useState(loadOnMount);
-  const [error, setError] = useState<Error | null>(null);
+  const [error, setError] = useState<GenUIError | null>(null);
   const [meta, setMeta] = useState<ZoneRenderMeta | null>(null);
   const [pinnedContentIncluded, setPinnedContentIncluded] = useState<string[]>(
     [],
@@ -242,6 +253,8 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
 
     setIsLoading(true);
     setError(null);
+    // Metadata describe one render: a failure must not leave the previous variant's renderId and disclosure standing next to it
+    setMeta(null);
 
     try {
       // One decision, three consequences: reading the profile off the
@@ -256,7 +269,10 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
       let userProfile: Record<string, unknown> | null = null;
       if (consented) {
         try {
-          const profile = await getProfile(userId);
+          const profile = await getProfile(
+            userId,
+            profileScope(apiUrl, apiKey),
+          );
           if (profile) {
             userProfile = profileToApiFormat(profile);
           }
@@ -266,11 +282,10 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
       }
 
       // Get behavior data (already sanitized at capture time by the tracker)
-      let behaviorData: Record<string, unknown> | null = null;
-      const tracker = getBehaviorTracker();
-      if (consented && tracker) {
-        behaviorData = tracker.getCompactSummary();
-      }
+      const tracker = behaviorTrackerFor(userId, consent);
+      const behaviorData: Record<string, unknown> | null = tracker
+        ? tracker.getCompactSummary()
+        : null;
 
       // The auto-captured page path follows the tracker's privacy level; an
       // explicit currentPage prop is the integrator's own choice and goes raw
@@ -381,10 +396,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(
-          errorData.detail || `Zone render failed: ${response.status}`,
-        );
+        throw await errorFromResponse(response, "Zone render failed");
       }
 
       if (streaming && response.body) {
@@ -392,7 +404,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
         // the final `complete` event is authoritative and replaces them
         setComponents([]);
         let finalComponents: GenUIComponent[] | null = null;
-        let streamError: Error | null = null;
+        let streamError: GenUIError | null = null;
 
         await readSSEStream(response, (event, data) => {
           if (!mountedRef.current || controller.signal.aborted) return;
@@ -408,13 +420,24 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
           } else if (event === "complete") {
             finalComponents = applyResponse(data);
           } else if (event === "error") {
-            streamError = new Error(data?.detail || "Zone stream failed");
+            streamError = new GenUIError(
+              typeof data?.detail === "string" ? data.detail : "Zone stream failed",
+              typeof data?.status === "number" ? data.status : undefined,
+              parseRetryAfter(data?.retry_after),
+            );
           }
         });
 
-        if (streamError) throw streamError;
         if (!mountedRef.current || controller.signal.aborted) return;
-        onRender?.(finalComponents ?? []);
+        // Only `complete` carries the authoritative render (pinned content enforced): components streamed before a failure or a cut are not a result.
+        if (streamError || !finalComponents) {
+          setComponents([]);
+          throw (
+            streamError ??
+            new GenUIError("Zone stream ended before the complete event")
+          );
+        }
+        onRender?.(finalComponents);
         return;
       }
 
@@ -429,7 +452,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
       if (controller.signal.aborted) return;
       if (!mountedRef.current) return;
 
-      const error = err instanceof Error ? err : new Error(String(err));
+      const error = asGenUIError(err);
       setError(error);
       onError?.(error);
     } finally {
@@ -467,7 +490,6 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
    */
   const refresh = useCallback(async () => {
     setComponents([]);
-    setMeta(null);
     await render();
   }, [render]);
 
@@ -487,17 +509,36 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
     };
   }, []);
 
-  // Behavior capture used to start only from useGenUI, so a page built
-  // out of zones alone collected nothing and never said so.
-  // A zone now starts the page tracker itself, but only once consent is granted.
-  // One tracker per page: another zone that finds one running leaves it
-  // alone, since re-initializing would throw away the signals collected
-  // so far, and nobody stops it on unmount because it belongs to the page rather than to this zone.
+  // Everything shown belongs to one identity (backend, key, user, consent).
+  // When it changes, the previous identity's render leaves the screen at once and its inflight request is aborted, instead of staying visible until the next response replaces it.
+  const consented = consentGranted(consent);
+  const identity = JSON.stringify([apiUrl, apiKey ?? null, userId, consented]);
+  const identityRef = useRef(identity);
   useEffect(() => {
-    if (!consentGranted(consent)) return;
-    if (getBehaviorTracker()) return;
-    initBehaviorTracker({ userId, privacy, consent });
-  }, [consent, privacy, userId]);
+    if (identityRef.current === identity) return;
+    identityRef.current = identity;
+    abortRef.current?.abort();
+    setComponents([]);
+    setMeta(null);
+    setPinnedContentIncluded([]);
+    setError(null);
+    setIsLoading(false);
+  }, [identity]);
+
+  // A zone starts the page tracker once consent is granted, so a page built out of zones alone collects behavior too.
+  // One tracker per page: a zone that finds one running for the same user leaves it alone, since re-initializing would throw away the signals collected so far, and unmounting does not stop it because it belongs to the page rather than to this zone.
+  // A tracker started for another user is replaced, and a revoked consent stops it.
+  const trackerConsentRef = useRef(consented);
+  useEffect(() => {
+    const revoked = trackerConsentRef.current && !consented;
+    trackerConsentRef.current = consented;
+    if (revoked) {
+      stopBehaviorTracker();
+      return;
+    }
+    if (!consented || behaviorTrackerFor(userId, true)) return;
+    initBehaviorTracker({ userId, privacy, consent: true });
+  }, [consented, privacy, userId]);
 
   // Everything that changes WHAT this zone requests, compared BY VALUE.
   // Hosts routinely pass fresh object/array literals on every render

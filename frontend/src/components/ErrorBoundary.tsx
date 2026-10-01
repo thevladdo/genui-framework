@@ -20,10 +20,15 @@ interface ErrorBoundaryProps {
   label?: string;
   /** Notified when a child throws */
   onError?: (error: Error) => void;
+  /**
+   * When this value changes the boundary clears a caught error and renders its children again: a new payload deserves its own attempt.
+   */
+  resetKey?: unknown;
 }
 
 interface ErrorBoundaryState {
   hasError: boolean;
+  resetKey?: unknown;
 }
 
 export class ComponentErrorBoundary extends React.Component<
@@ -32,10 +37,19 @@ export class ComponentErrorBoundary extends React.Component<
 > {
   constructor(props: ErrorBoundaryProps) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, resetKey: props.resetKey };
   }
 
-  static getDerivedStateFromError(): ErrorBoundaryState {
+  static getDerivedStateFromProps(
+    props: ErrorBoundaryProps,
+    state: ErrorBoundaryState
+  ): Partial<ErrorBoundaryState> | null {
+    return props.resetKey !== state.resetKey
+      ? { hasError: false, resetKey: props.resetKey }
+      : null;
+  }
+
+  static getDerivedStateFromError(): Partial<ErrorBoundaryState> {
     return { hasError: true };
   }
 

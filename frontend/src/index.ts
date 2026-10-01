@@ -69,7 +69,6 @@ export type {
   // Theme
   GenUITheme,
   GenUISectionProps,
-  GenUIProviderProps,
   
   // Component Data
   TextComponentData,
@@ -143,6 +142,8 @@ export {
   initDB,
   getProfile,
   saveProfile,
+  createEmptyProfile,
+  profileScope,
   applyProfileUpdates,
   clearProfile,
   profileToApiFormat,
@@ -153,15 +154,18 @@ export {
   initBehaviorTracker,
   getBehaviorTracker,
   stopBehaviorTracker,
+  GenUIError,
   DEFAULT_CHAT_DISCLOSURE_TEXT,
   DEFAULT_DISCLOSURE_TEXT,
   digitalSourceType,
   disclosureJsonLd,
   noticeComesFirst,
   parseDisclosure,
+  sendGenUIEvents,
 } from './utils';
 
 export type {
+  GenUIEvent,
   BehaviorRecord,
   ClickEvent,
   ScrollEvent,

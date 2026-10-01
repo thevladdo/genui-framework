@@ -8,6 +8,71 @@ The entire history lives below, newest first.
 
 ## [Unreleased]
 
+### An audit that holds what it says
+
+The data protection statement said the audit records what was shown, not what was asked. The chat line held the first 200 characters of the question. Titles and links were read only from `bento` and `buttons`, so a hero, a pricing grid or a logo wall left the summary empty. `POST /events` wrote whatever `user_id` the browser sent, and a new experiment added its counts to the previous one.
+
+- **The question is gone from the chat line.** It keeps the number of components, the confidence and the number of profile updates.
+- **The summary reads every type.** `summarize_shown_components` uses the same walk as the pinned-content check (`iter_shown`): URL fields, title fields and markdown links in body text, whatever the component, custom ones included. A pinned link the model already put in a markdown link is no longer added a second time.
+- **An event names a user only with proof.** The zone sends its `userToken` with impressions and clicks. A `user_id` that fails the identity guard is dropped, and the event is still counted. For a verified user the server computes the arm.
+- **The browser's word is labelled.** Audit lines carry `declared`, the fields taken as sent: `render_id`, `arm`, `segment`, `item_title`, `item_url` on events, `page` on renders. The page is recorded without its query string.
+- **Counters are per experiment.** The key includes `HOLDOUT_SALT`. `/events/stats` names the `experiment`, gives each arm its `verified` share, says `unit: "event"`, and marks the z-test `indicative`. The Studio's Measure page labels a significant result the same way and shows the verified counts.
+- **`sendGenUIEvents` is exported**, as the README already said, with a fourth `userToken` argument.
+
+**Migration**
+
+- Counters written before this version sit under a key without the experiment and are no longer read. `/events/stats` starts from zero for the current `HOLDOUT_SALT`.
+- `MetricsStore.record` and `MetricsStore.stats` take the experiment after the zone.
+- Deployments that want identified events need the zone's `userToken` set, as renders already do. Without it events are counted anonymously.
+
+### Late replies in the console
+
+After a tenant switch, a slow reply for the previous tenant still landed. In the Content Studio, tenant A's list could arrive after tenant B's and replace it, under B's name. The delete button then used B's key, so a document with the same name was deleted from B. And a late error from A disconnected B.
+
+- **A reply counts only for the session that asked.** Every console call checks the session when it leaves and again when the reply arrives. A reply or an error for a session that is no longer active is dropped on every page, and it never disconnects the tenant you're on.
+- **The Content Studio remounts on a switch**, like the other pages, so its list, corpus state and backfill dialogs belong to one tenant.
+- **Destructive dialogs name the tenant.** Deleting a document or a zone, discarding or approving a draft, and saving a theme or the banned terms all ask with the tenant's name, and act with the session that loaded the view. If the active session changed in the meantime, the action is refused with a message that says so. The Playground tenant picker is locked while a theme save is in flight.
+
+### Identity in the browser
+
+Consent was checked on the way in and nowhere after. After a switch from user A to user B, B's first chat request carried A's last 10 turns and A's profile. After a revoked consent the profile stayed in memory and went out with the next request, and the page tracker kept recording clicks. A chat without consent sent the behavior that a consented zone on the same page had collected.
+
+- **A new identity starts from nothing.** `apiUrl`, `apiKey`, `userId` and `consent` together are the identity of `useGenUI` and `useZone`. When one of them changes, the chat gets a new session, history and profile are emptied, and requests in flight are aborted and their answers discarded. A pending `query()` rejects with an `AbortError` and sets no `error`. A zone clears what it shows instead of leaving the previous user's render on screen until the next one arrives.
+- **Revoking consent stops the tracker.** The tracker stops and is discarded, the profile leaves memory, and the next request carries no `userId`, profile or behavior. There is still one tracker per page, and it is tied to the `userId` it was started for: it is read, or written through `trackInteraction`, only with the reader's own consent and the same `userId`. A zone that finds a tracker running for another user replaces it.
+- **A stream cut short is an error.** A stream that closes without `complete` sets `error` and does not call `onRender`, and partial components are cleared, on an `error` event too. `meta` resets at the start of every render, so a failure no longer leaves the previous `renderId` in place.
+- **One odd key costs one component.** Data normalization now runs inside the component's error boundary and uses `Object.entries`. Model output with `hasOwnProperty` as a key used to take the whole zone down. `ComponentErrorBoundary` gets a `resetKey` prop, and the renderer passes the component, so a new payload gets a fresh try instead of staying on the fallback.
+- **Errors say what happened.** `onError`, `errorComponent` and `error` receive a `GenUIError` (exported) with `status` and, on a 503, `retryAfter` in seconds, whether it came as a JSON response or as a stream `error` event. The library does not retry. The README recommends `errorComponent` with the site's own non-personalized content.
+- **`Retry-After` reaches pages on other origins.** It is not a CORS-safelisted header, so a browser hid it from a site calling the backend from another origin and `retryAfter` came back empty from a JSON response. The backend now lists it in `Access-Control-Expose-Headers`.
+
+**Migration**
+
+- The profile cache in IndexedDB is keyed by backend and client key. The database moves to version 2 and deletes the profiles written by version 1, which were keyed by `userId` alone. `getProfile`, `saveProfile`, `clearProfile` and `applyProfileUpdates` take an optional `scope` argument (use `profileScope(apiUrl, apiKey)`, now exported, to reach the hooks' record). A call without it reads and writes its own namespace.
+- `GenUIProviderProps` is no longer exported: no provider existed to take those props.
+- The `onError` and `errorComponent` callbacks are typed with `GenUIError`. Callbacks written for `Error` still compile.
+- With `streaming`, components received before an `error` event or a cut no longer stay on screen: the zone shows `errorComponent` or its default error state.
+
+### When Redis does not answer
+
+The fail-open rule written for caches also covered three things that are not caches. With Redis down a banned term saved from the console stopped applying, an unreadable approval let the host page's props render the zone, and an erasure answered `profile_erased: true` while the profile stayed in Redis and came back on reconnection.
+
+- **Stored configuration survives an outage.** Content policy, zone registry and theme tell "nothing stored" from "store unreachable". A worker keeps the last version it read or wrote and serves it while Redis is down. A zone render checked against that copy says so in `meta.sanitization.policy_last_known`, and the flag clears on the first render after Redis answers. A worker that never read the policy or the approval answers 503 with `Retry-After` instead of falling back to the env terms alone or to the host props.
+- **A write Redis refused is not reported as saved.** Saving a policy or theme, or editing, approving or deleting a zone config, answers 503 while Redis is down. The old in-memory write lived in one worker and the older Redis copy replaced it on reconnection.
+- **Erasure only when it happened.** `DELETE /api/v1/profile/{user_id}` answers once Redis has confirmed the delete. With Redis unreachable it is a 503 with `Retry-After` and a detail that says the profile was NOT erased, and the attempt goes on the audit trail with `outcome: "store_unavailable"`. Export, read and sync answer 503 instead of "no profile". With Redis configured a profile never sits in process memory, where an erasure served by another worker could not reach it.
+- **Concurrent writes keep both.** A chat answer and a render of the same visitor used to read the profile, merge, and write, and the second write erased the first. Profile merges and the registry's version-checked writes (save draft, approve, delete) now run as one WATCH/MULTI transaction and retry when another writer got there first. Against a real Redis, 50 concurrent merges keep 50 out of 50; the old read-merge-write kept 2. `DELETE /api/v1/zone/config/{zone_id}` accepts `?expected_version=N` and the console sends it.
+- **The console cannot wipe what it could not read.** When the content policy fails to load, Save stays disabled: an empty editor saved once Redis is back would have replaced the stored terms with nothing. `storage: "memory"` now means only that no Redis is configured, and the console warnings say that.
+- **A worker that is still connecting makes its requests wait instead of refusing them.** While a fresh worker opened its first Redis connection, requests that arrived in the meantime were told there was no connection, and a zone governed by the registry answered 503 with Redis perfectly healthy: every start or deploy under traffic did it. They now wait for the connection in flight.
+- **The suite stays off your Redis.** The store singletons read `REDIS_URL` from `backend/.env`, so tests that render read and wrote the policy and registry of the local Redis. They now run on in-memory stores (`tests/memory_stores.py`).
+
+### The render cache and the content policy
+
+A banned term saved from the console was promised on the next render, but the segment cache kept serving renders generated before the save, for up to the 24-hour stale window.
+
+- **A cache hit answers to the current policy.** Each cached render records the banned terms it was checked against, and every read scans it for terms added since. A component that carries one is dropped, pinned content is enforced again, the hit is reported in `meta.sanitization.policy_violations`, and the reduced render goes back into the cache with its original age. It costs one policy read per hit and no LLM call. The sync path, the stream and the coalesced waiters all read through the same function.
+- **A generation running during the save cannot slip through.** The cold path checks its result against the policy once more before the write, and any other write is caught by the next read.
+- **One chain, two paths.** The sync render and the stream each kept their own copy of the guards in the same order, and the component budget had already been forgotten once on one of them. They now feed one `GuardChain`, and one test envelope trips every ring and requires both paths to land on the same result.
+- **A slow cold miss no longer turns into a stampede.** A request that waited 15 seconds for the single-flight winner used to generate on its own, so with a slow provider every queued request became an LLM call. It now gets a 503 with `Retry-After`, or an `error` event with `status: 503` on the stream.
+- **Stated limit: the knowledge base.** A render keeps the links and figures of a document deleted after it was generated, until its segment is regenerated. The contract document says so, with the bound and the way to force it.
+
 ### Green from a clean clone
 
 A fresh clone on another machine could not reproduce what the suites reported. Four things they depended on existed only on the disk that ran them.

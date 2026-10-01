@@ -56,7 +56,7 @@ from rag.contextualizer import (
     prompt_cache_mode,
 )
 from schemas.components import GENUI_CONTRACT_VERSION
-from utils.redis_conn import shared_redis
+from utils.redis_conn import RETRY_AFTER_SECONDS, StoreUnavailable, shared_redis
 from utils.tracing import span
 
 logging.basicConfig(
@@ -244,6 +244,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Not a CORS-safelisted header: a page on another origin cannot read it unless listed
+    expose_headers=["Retry-After"],
 )
 
 app.include_router(zone_config_router)
@@ -269,6 +271,20 @@ async def embedding_config_error_handler(
     the message — never a silent OpenAI fallback or a mute no-RAG render.
     """
     return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(StoreUnavailable)
+async def store_unavailable_handler(
+    request: Request, exc: StoreUnavailable
+) -> JSONResponse:
+    """
+    State that cannot be regenerated (policy, registry, theme, profile) was unreadable and no known version could stand in: a retryable refusal, never an answer built on "nothing stored".
+    """
+    return JSONResponse(
+        status_code=503,
+        content={"detail": str(exc)},
+        headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
+    )
 
 
 # Observability: HTTP metrics middleware + health/readiness/liveness + /metrics
@@ -480,13 +496,12 @@ async def process_query(
             except Exception as e:
                 logger.warning(f"Profile update persistence failed: {e}")
 
-        # Audit: what was answered/shown to whom
+        # The question is free text a visitor may fill with anything, special categories included: the line records what was answered, never what was asked.
         get_audit_logger().log(
             "query",
             tenant=auth.tenant,
             user_id=request.user_id,
             key=auth.key_fingerprint,
-            query=request.query[:200],
             confidence=frontend_response["meta"].get("confidence"),
             component_count=len(frontend_response["components"]),
             profile_updates_applied=len(profile_updates.get("updates", [])),
@@ -1406,32 +1421,41 @@ async def delete_profile(
     """
     Erase a user profile (GDPR right-to-erasure).
 
-    What goes: the profile, which is the whole of the personalization
-    data held about this person. Nothing else is keyed by a user.
+    What goes: the profile, which is the whole of the personalization data held about this person.
+    Nothing else is keyed by a user.
 
-    What stays: the audit trail. It is append-only by design, because a
-    record of what was shown to whom is worth nothing if the party who
-    showed it can rewrite it afterwards, and in a regulated deployment
-    it is also the operator's evidence of their own compliance. Rewriting
-    it on request would destroy the accountability it exists for, and in
-    the production setup it is not even ours to rewrite: the lines have
-    already left for the host's log pipeline. So it is bounded instead
-    of edited, by rotation on the file sink and by the pipeline's
-    retention policy otherwise, and the erasure itself is recorded in
-    it, so a later export shows when the right was exercised.
+    What stays: the audit trail.
+    It is append-only by design, because a record of what was shown to whom is worth nothing if the party who showed it can rewrite it afterwards, and in a regulated deployment it is also the operator's evidence of their own compliance.
+    Rewriting it on request would destroy the accountability it exists for, and in the production setup it is not even ours to rewrite: the lines have already left for the host's log pipeline.
+    So it is bounded instead of edited, by rotation on the file sink and by the pipeline's retention policy otherwise, and the erasure itself is recorded in it, so a later export shows when the right was exercised.
 
-    The response says which of the two happened, rather than reporting a
-    clean "deleted" that would overstate it.
+    The response says which of the two happened, rather than reporting a clean "deleted" that would overstate it.
+    It answers only after the store confirmed the delete: with the store unreachable it is a 503 saying the profile was NOT erased, and the attempt is on the trail.
     """
     check_user_access(auth, user_id, user_token)
     store = get_profile_store()
-    existed = await store.delete(auth.tenant, user_id)
+    try:
+        existed = await store.delete(auth.tenant, user_id)
+    except StoreUnavailable as e:
+        get_audit_logger().log(
+            "profile_delete",
+            tenant=auth.tenant,
+            user_id=user_id,
+            key=auth.key_fingerprint,
+            outcome="store_unavailable",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"The profile was NOT erased. {e}",
+            headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
+        )
 
     get_audit_logger().log(
         "profile_delete",
         tenant=auth.tenant,
         user_id=user_id,
         key=auth.key_fingerprint,
+        outcome="erased",
         existed=existed,
     )
 

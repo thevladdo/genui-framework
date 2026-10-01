@@ -16,6 +16,8 @@ import unittest
 
 from schemas.registry import BUILTIN_TYPES, BUILTIN_TYPE_DOCS, builtin_catalog
 
+from memory_stores import use_memory_stores
+
 BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SURFACES = {
@@ -37,6 +39,10 @@ try:
     }
 except Exception: 
     PROMPTS = {}
+
+
+def setUpModule():
+    use_memory_stores()
 
 
 def _declaration(relative_path, class_name):

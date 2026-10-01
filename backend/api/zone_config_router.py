@@ -183,10 +183,18 @@ async def discard_zone_draft(
 async def delete_zone_config(
     zone_id: str = _ZONE_ID,
     auth: AuthContext = Depends(require_admin),
+    expected_version: Optional[int] = None,
 ):
-    """Remove the whole registry entry: the zone goes back to host props."""
+    """
+    Remove the whole registry entry: the zone goes back to host props.
+    ?expected_version=N: 409 when someone else edited or approved since N.
+    """
     store = get_zone_config_store()
-    if not await store.delete(auth.tenant, zone_id):
+    try:
+        deleted = await store.delete(auth.tenant, zone_id, expected_version)
+    except VersionConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if not deleted:
         raise HTTPException(
             status_code=404, detail=f"No registry entry for zone '{zone_id}'"
         )

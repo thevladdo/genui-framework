@@ -54,11 +54,11 @@ class TestTwoProportionSignificance(unittest.TestCase):
         store = MetricsStore()
 
         async def scenario():
-            await store.record("acme", "home", "personalized", "impression", 10000)
-            await store.record("acme", "home", "personalized", "click", 1000)
-            await store.record("acme", "home", "control", "impression", 10000)
-            await store.record("acme", "home", "control", "click", 500)
-            return await store.stats("acme", "home")
+            await store.record("acme", "home", "exp", "personalized", "impression", 10000)
+            await store.record("acme", "home", "exp", "personalized", "click", 1000)
+            await store.record("acme", "home", "exp", "control", "impression", 10000)
+            await store.record("acme", "home", "exp", "control", "click", 500)
+            return await store.stats("acme", "home", "exp")
 
         stats = run(scenario())
         self.assertIsNotNone(stats["significance"])
@@ -68,8 +68,8 @@ class TestTwoProportionSignificance(unittest.TestCase):
         store = MetricsStore()
 
         async def scenario():
-            await store.record("acme", "home", "personalized", "impression", 100)
-            return await store.stats("acme", "home")
+            await store.record("acme", "home", "exp", "personalized", "impression", 100)
+            return await store.stats("acme", "home", "exp")
 
         self.assertIsNone(run(scenario())["significance"])
 

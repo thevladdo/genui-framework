@@ -27,6 +27,7 @@ from unittest import mock
 from metrics.store import MetricsStore
 from profiles.store import _MEMORY_MAX_PROFILES, ProfileStore
 from utils.rate_limit import RateLimiter
+from utils.redis_conn import StoreUnavailable
 from utils.zone_cache import ZoneRenderCache
 
 
@@ -50,9 +51,12 @@ class FakeRedisServer:
 
     def __init__(self):
         self.up = True
+        self.ping_delay = 0.0
         self.data = {}
         self.hashes = {}
         self.connect_attempts = 0
+        # Bumped on every write: what WATCH compares at EXEC
+        self.versions = {}
 
     def has_key(self, fragment: str) -> bool:
         keys = list(self.data) + list(self.hashes)
@@ -68,23 +72,33 @@ class FakeRedisClient:
             raise ConnectionError("simulated redis outage")
 
     async def ping(self):
+        if self._server.ping_delay:
+            await asyncio.sleep(self._server.ping_delay)
         self._check()
         return True
 
     async def get(self, key):
         self._check()
-        return self._server.data.get(key)
+        value = self._server.data.get(key)
+        # A real round trip yields before the reply is used: concurrent read-modify-writes interleave here, as they do against Redis
+        await asyncio.sleep(0)
+        return value
 
     async def set(self, key, value, ex=None, nx=False):
         self._check()
         if nx and key in self._server.data:
             return None
         self._server.data[key] = value
+        self._server.versions[key] = self._server.versions.get(key, 0) + 1
         return True
 
     async def delete(self, key):
         self._check()
+        self._server.versions[key] = self._server.versions.get(key, 0) + 1
         return 1 if self._server.data.pop(key, None) is not None else 0
+
+    def pipeline(self, transaction=True):
+        return FakePipeline(self)
 
     async def incr(self, key):
         self._check()
@@ -116,6 +130,52 @@ class FakeRedisClient:
         return None
 
 
+class FakeWatchError(Exception):
+    pass
+
+
+class FakePipeline:
+    """WATCH/MULTI/EXEC: EXEC fails when a watched key was written after WATCH."""
+
+    def __init__(self, client: FakeRedisClient):
+        self._client = client
+        self._watched = {}
+        self._queue = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        self._watched, self._queue = {}, []
+
+    async def watch(self, *keys):
+        self._client._check()
+        self._watched = {k: self._client._server.versions.get(k, 0) for k in keys}
+
+    async def get(self, key):
+        return await self._client.get(key)
+
+    def multi(self):
+        self._queue = []
+
+    def set(self, key, value, ex=None):
+        self._queue.append((self._client.set, key, value))
+        return self
+
+    def delete(self, key):
+        self._queue.append((self._client.delete, key))
+        return self
+
+    async def execute(self):
+        self._client._check()
+        versions = self._client._server.versions
+        stale = any(versions.get(k, 0) != v for k, v in self._watched.items())
+        queue, self._queue, self._watched = self._queue, [], {}
+        if stale:
+            raise FakeWatchError("watched key changed")
+        return [await op(*args) for op, *args in queue]
+
+
 def fake_redis_modules(server: FakeRedisServer):
     """sys.modules entries so `import redis.asyncio as aioredis` hits the fake."""
 
@@ -126,9 +186,17 @@ def fake_redis_modules(server: FakeRedisServer):
 
     asyncio_mod = types.ModuleType("redis.asyncio")
     asyncio_mod.from_url = from_url
+    exceptions_mod = types.ModuleType("redis.exceptions")
+    exceptions_mod.RedisError = type("RedisError", (Exception,), {})
+    exceptions_mod.WatchError = FakeWatchError
     redis_mod = types.ModuleType("redis")
     redis_mod.asyncio = asyncio_mod
-    return {"redis": redis_mod, "redis.asyncio": asyncio_mod}
+    redis_mod.exceptions = exceptions_mod
+    return {
+        "redis": redis_mod,
+        "redis.asyncio": asyncio_mod,
+        "redis.exceptions": exceptions_mod,
+    }
 
 
 class FakeRedisTestCase(unittest.TestCase):
@@ -145,16 +213,18 @@ class FakeRedisTestCase(unittest.TestCase):
 class TestStoresRecoverFromBlip(FakeRedisTestCase):
     """
     Timeline for every store:
-      1. Redis down at FIRST touch (the compose-race / sticky-flag case):
-         the operation falls back to memory and does not raise.
-      2. Redis comes back and the backoff window expires: the next
-         operation must land on Redis again — not stay in-memory forever.
+      1. Redis down at FIRST touch (the compose-race / sticky-flag case): the operation falls back to memory and does not raise, or, for the profile store, is refused with StoreUnavailable.
+      2. Redis comes back and the backoff window expires: the next operation must land on Redis again, not stay in memory forever.
     """
 
-    def _timeline(self, store, do_write, fragment_for):
+    def _timeline(self, store, do_write, fragment_for, refuses=False):
         async def scenario():
             self.server.up = False
-            await do_write("first")  # fail-open, no exception
+            if refuses:
+                with self.assertRaises(StoreUnavailable):
+                    await do_write("first")
+            else:
+                await do_write("first")  # fail-open, no exception
             self.assertFalse(self.server.has_key(fragment_for("first")))
 
             self.server.up = True
@@ -181,6 +251,7 @@ class TestStoresRecoverFromBlip(FakeRedisTestCase):
             store,
             lambda tag: store.set("tenant", f"user-{tag}", {"name": tag}),
             lambda tag: f"user-{tag}",
+            refuses=True,
         )
 
     def test_rate_limiter_recovers(self):
@@ -195,26 +266,28 @@ class TestStoresRecoverFromBlip(FakeRedisTestCase):
         store = MetricsStore(redis_url=unique_url())
         self._timeline(
             store,
-            lambda tag: store.record("tenant", f"zone-{tag}", "personalized", "impression"),
+            lambda tag: store.record("tenant", f"zone-{tag}", "exp", "personalized", "impression"),
             lambda tag: f"zone-{tag}",
         )
 
 
 class TestEstablishedConnectionBlip(FakeRedisTestCase):
     """
-    A blip AFTER a successful connection: the failing command falls back
-    to memory (fail-open), drops the client, and the store reconnects
-    once the backoff expires — instead of hammering a dead server.
+    A blip AFTER a successful connection: the failing command falls back to memory (fail-open) or is refused (profiles), drops the client, and the store reconnects once the backoff expires, instead of hammering a dead server.
     """
 
-    def _timeline(self, store, do_write, fragment_for):
+    def _timeline(self, store, do_write, fragment_for, refuses=False):
         async def scenario():
             await do_write("pre")
             self.assertTrue(self.server.has_key(fragment_for("pre")))
             self.assertEqual(store._conn.status, "connected")
 
             self.server.up = False
-            await do_write("during")  # no exception = fail-open kept
+            if refuses:
+                with self.assertRaises(StoreUnavailable):
+                    await do_write("during")
+            else:
+                await do_write("during")  # no exception = fail-open kept
             self.assertFalse(self.server.has_key(fragment_for("during")))
             self.assertEqual(store._conn.status, "reconnecting")
 
@@ -240,6 +313,7 @@ class TestEstablishedConnectionBlip(FakeRedisTestCase):
             store,
             lambda tag: store.set("tenant", f"user-{tag}", {"name": tag}),
             lambda tag: f"user-{tag}",
+            refuses=True,
         )
 
     def test_rate_limiter_blip(self):
@@ -254,7 +328,7 @@ class TestEstablishedConnectionBlip(FakeRedisTestCase):
         store = MetricsStore(redis_url=unique_url())
         self._timeline(
             store,
-            lambda tag: store.record("tenant", f"zone-{tag}", "personalized", "impression"),
+            lambda tag: store.record("tenant", f"zone-{tag}", "exp", "personalized", "impression"),
             lambda tag: f"zone-{tag}",
         )
 
@@ -356,6 +430,22 @@ try:
     HAVE_APP = True
 except Exception:  # fastapi/qdrant/openai not installed in the shell python
     HAVE_APP = False
+
+
+class TestConcurrentFirstConnect(FakeRedisTestCase):
+    def test_callers_during_a_connect_wait_for_it(self):
+        """A fresh worker takes a burst before its first connect finishes."""
+        from utils.redis_conn import ReconnectingRedis
+
+        self.server.ping_delay = 0.05
+        handle = ReconnectingRedis(unique_url())
+
+        async def burst():
+            return await asyncio.gather(*(handle.get() for _ in range(8)))
+
+        clients = run(burst())
+        self.assertTrue(all(client is not None for client in clients))
+        self.assertEqual(self.server.connect_attempts, 1)
 
 
 @unittest.skipUnless(HAVE_APP, "api.main not importable in this interpreter")

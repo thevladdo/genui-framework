@@ -565,6 +565,7 @@ export interface UserProfile {
 
 export type { PrivacyLevel } from "../utils/privacy";
 import type { PrivacyLevel } from "../utils/privacy";
+import type { GenUIError } from "../utils/errors";
 
 export type {
   GenUIDisclosure,
@@ -633,8 +634,8 @@ export interface UseGenUIOptions {
   disclosureText?: string;
   /** Callback when profile is updated */
   onProfileUpdate?: (profile: UserProfile) => void;
-  /** Callback on API error */
-  onError?: (error: Error) => void;
+  /** Called on a failed query, with the HTTP status and Retry-After when known */
+  onError?: (error: GenUIError) => void;
 }
 
 export interface UseGenUIReturn {
@@ -643,7 +644,7 @@ export interface UseGenUIReturn {
   /** Current loading state */
   isLoading: boolean;
   /** Last error if any */
-  error: Error | null;
+  error: GenUIError | null;
   /** Current user profile */
   profile: UserProfile | null;
   /** Manually update profile */
@@ -692,11 +693,4 @@ export interface GenUISectionProps {
   className?: string;
   /** Custom styles */
   style?: React.CSSProperties;
-}
-
-export interface GenUIProviderProps {
-  children: React.ReactNode;
-  theme?: GenUITheme;
-  apiUrl: string;
-  userId?: string;
 }

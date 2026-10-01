@@ -46,7 +46,6 @@ from schemas import (
     validate_components,
     zone_output_json_schema,
 )
-from utils.content_policy import policy_for
 from utils.content_policy_store import effective_policy
 from utils.disclosure import (
     PROVENANCE_NONE,
@@ -56,7 +55,7 @@ from utils.disclosure import (
 from utils.json_stream import ComponentStreamParser
 from utils.numeric_guard import NumericGuard
 from utils.redundancy_guard import RedundancyGuard
-from utils.url_guard import UrlGuard, is_image_field, is_url_field, normalize_url
+from utils.url_guard import UrlGuard, is_image_field, iter_shown, normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +98,8 @@ class ZoneRenderResult:
     dropped_components: List[str] = field(default_factory=list)
     removed_numbers: List[str] = field(default_factory=list)
     policy_violations: List[str] = field(default_factory=list)
+    # Banned terms this render was checked against, so a cache hit only rescans for terms added after it
+    policy_terms: List[str] = field(default_factory=list)
     # Marking of this content: whether a model wrote it, when, and with
     # which provenance. Computed here, where the input corpus and the
     # generation timestamp are known, and carried into the cache with
@@ -117,16 +118,9 @@ class ZoneRenderResult:
             "dropped_components": self.dropped_components,
             "removed_numbers": self.removed_numbers,
             "policy_violations": self.policy_violations,
+            "policy_terms": self.policy_terms,
             "disclosure": self.disclosure,
         }
-
-
-# Field names that can carry the visible wording of an element. Wider than
-# the redundancy guard's label list on purpose: that one answers "is this
-# dict a clickable element", this one "did this text reach the page".
-_SHOWN_TITLE_FIELDS = (
-    "title", "label", "name", "headline", "heading", "quote", "alt",
-)
 
 
 def _is_material(item: Dict[str, Any]) -> bool:
@@ -143,27 +137,144 @@ def _is_material(item: Dict[str, Any]) -> bool:
 
 
 def _collect_shown(node: Any, links: Set[str], titles: Set[str]) -> None:
-    """
-    Collect every URL and every visible title in a component's data.
+    """Every URL and visible title in a component's data, normalized for matching."""
+    for kind, value in iter_shown(node):
+        if kind == "link":
+            links.add(normalize_url(value))
+        else:
+            titles.add(value.lower())
 
-    Type-agnostic on purpose: the enterprise components carry their links
-    in hero CTAs, plan buttons, grid items and logos, and a per-type scan
-    goes stale every time a component type is added (it did).
+
+def enforce_pinned(
+    components: List[Dict[str, Any]],
+    pinned_content: List[Dict[str, Any]],
+    max_items: int,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
     """
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if isinstance(value, str):
-                if not value.strip():
-                    continue
-                if is_url_field(key):
-                    links.add(normalize_url(value))
-                elif key.lower() in _SHOWN_TITLE_FIELDS:
-                    titles.add(value.strip().lower())
-            else:
-                _collect_shown(value, links, titles)
-    elif isinstance(node, list):
-        for item in node:
-            _collect_shown(item, links, titles)
+    Guarantee every pinned item appears in the output.
+
+    Presence is computed from the actual components (by URL or title); missing items are appended as cards to the first bento component (or a new one when none exists).
+
+    Presence is read from the whole component tree, not from bento and buttons only: a pinned link the model used as a hero CTA, a pricing plan's button or a content_grid item is on the page, and appending a card for it would show the visitor the same link twice.
+
+    Pinned images are the exception, for the reason given on _is_material: they are material for the components, so an unused one is not appended.
+    One the model does use counts as included.
+    """
+    if not pinned_content:
+        return components, []
+
+    links: Set[str] = set()
+    titles: Set[str] = set()
+    for component in components:
+        _collect_shown(component.get("data", {}), links, titles)
+
+    included: List[str] = []
+    missing: List[Dict[str, Any]] = []
+    for item in pinned_content:
+        identifier = item.get("url") or item.get("id") or item.get("title", "")
+        url = item.get("url")
+        title = (item.get("title") or "").strip().lower()
+        if (url and normalize_url(str(url)) in links) or (title and title in titles):
+            included.append(identifier)
+        elif not _is_material(item):
+            missing.append(item)
+
+    if missing:
+        extra_cards = []
+        for item in missing:
+            card = {
+                "title": item.get("title", "Untitled"),
+                "description": item.get("description") or "",
+            }
+            if item.get("url"):
+                card["link"] = item["url"]
+            extra_cards.append(card)
+            included.append(item.get("url") or item.get("id") or item.get("title", ""))
+
+        target = next(
+            (c for c in components if c.get("type") == "bento"), None
+        )
+        if target is not None:
+            cards = target["data"].get("cards", [])
+            # Pinned content wins over generated content within max_items
+            overflow = len(cards) + len(extra_cards) - max(max_items, len(extra_cards))
+            if overflow > 0:
+                cards = cards[:-overflow]
+            target["data"]["cards"] = cards + extra_cards
+        else:
+            components.append({
+                "type": "bento",
+                "data": {
+                    "cards": extra_cards,
+                    "columns": min(max(len(extra_cards), 1), 3),
+                },
+            })
+
+    return components, included
+
+
+class GuardChain:
+    """
+    The post-generation guards of one render, applied one component at a time.
+
+    Order: schema -> URL whitelist -> numeric grounding -> content policy -> redundancy -> component budget.
+    The sync path feeds it the parsed list, the streaming path each component as the parser completes it, so both paths run the same rings in the same order by construction.
+    Redundancy and the budget count span components, so an instance serves exactly one render.
+    Pinned enforcement is not a ring: it runs on the finished list, after the chain.
+    """
+
+    def __init__(
+        self,
+        url_guard: UrlGuard,
+        numeric_guard: NumericGuard,
+        policy,
+        custom_types: Optional[Dict[str, Any]],
+        max_components: Optional[int],
+    ):
+        self.url_guard = url_guard
+        self.numeric_guard = numeric_guard
+        self.policy = policy
+        self.custom_types = custom_types
+        self.max_components = max_components
+        self.redundancy = RedundancyGuard(enforce=settings.dedup_components_enabled)
+        self.components: List[Dict[str, Any]] = []
+        self.dropped: List[str] = []
+        self.removed_urls: List[str] = []
+        self.removed_numbers: List[str] = []
+        self.policy_violations: List[str] = []
+
+    def feed(self, raw: Any) -> Optional[Dict[str, Any]]:
+        """Run one raw component through every ring; the survivor, or None."""
+        valid, errors = validate_components([raw], self.custom_types)
+        self.dropped.extend(errors)
+        if not valid:
+            return None
+        batch = [component_to_dict(valid[0])]
+
+        # Stripping an <img src> that was a link leaves an image-shaped hole, so image variants degrade to text-only right after the whitelist
+        batch, removed = self.url_guard.sanitize_components(batch)
+        batch = downgrade_image_variants(batch)
+        self.removed_urls.extend(removed)
+        if batch:
+            batch, removed = self.numeric_guard.sanitize_components(batch)
+            self.removed_numbers.extend(removed)
+        if batch:
+            batch, violations = self.policy.sanitize_components(batch)
+            self.policy_violations.extend(violations)
+        # Redundancy before the budget: a duplicate must not eat the slot of a component that had something new to say
+        if batch:
+            batch, redundant = self.redundancy.sanitize_components(batch)
+            self.dropped.extend(redundant)
+        if not batch:
+            return None
+        _, over_budget = apply_component_budget(
+            self.components + batch, self.max_components
+        )
+        if over_budget:
+            self.dropped.extend(over_budget)
+            return None
+        self.components.append(batch[0])
+        return batch[0]
 
 
 class ZoneAgent:
@@ -327,8 +438,10 @@ CRITICAL RULES:
             response_text = await self._call_llm(prompt, custom_types)
             parsed = self._parse_response(response_text)
 
-            policy = await effective_policy(request.tenant, settings.content_policy)
-            return self._validate_and_sanitize(request, retrieved, parsed, custom_types, policy)
+            chain = await self._guard_chain(request, retrieved, custom_types)
+            for raw_component in parsed.get("components", []):
+                chain.feed(raw_component)
+            return self._result(request, retrieved, parsed, chain, chain.components)
 
         except Exception as e:
             logger.error(f"Zone rendering failed: {e}")
@@ -359,75 +472,22 @@ CRITICAL RULES:
             custom_types = merge_custom_types(request.custom_components)
             retrieved = await self._retrieve_results(request)
             prompt = self._build_zone_prompt(request, retrieved, custom_types)
-            guard = self._build_url_guard(request, retrieved)
-            numeric_guard = self._build_numeric_guard(request, retrieved)
-            policy = await effective_policy(request.tenant, settings.content_policy)
-            redundancy = RedundancyGuard(enforce=settings.dedup_components_enabled)
-
+            chain = await self._guard_chain(request, retrieved, custom_types)
             parser = ComponentStreamParser()
-            emitted: List[Dict[str, Any]] = []
-            dropped: List[str] = []
-            removed_urls: List[str] = []
-            removed_numbers: List[str] = []
-            policy_violations: List[str] = []
 
             async for delta in self.llm.stream_json(self.SYSTEM_PROMPT, prompt):
                 for raw_component in parser.feed(delta):
-                    valid, errors = validate_components([raw_component], custom_types)
-                    dropped.extend(errors)
-                    if not valid:
-                        continue
-                    component = component_to_dict(valid[0])
-                    sanitized, removed = guard.sanitize_components([component])
-                    sanitized = downgrade_image_variants(sanitized)
-                    removed_urls.extend(removed)
-                    if sanitized:
-                        sanitized, removed = numeric_guard.sanitize_components(sanitized)
-                        removed_numbers.extend(removed)
-                    if sanitized:
-                        sanitized, violations = policy.sanitize_components(sanitized)
-                        policy_violations.extend(violations)
-                    if sanitized:
-                        sanitized, redundant = redundancy.sanitize_components(sanitized)
-                        dropped.extend(redundant)
-                    if not sanitized:
-                        continue
-                    if (
-                        request.max_components
-                        and len(emitted) >= request.max_components
-                    ):
-                        dropped.append(
-                            f"{sanitized[0].get('type', 'component')}: over the "
-                            f"zone component budget ({request.max_components})"
-                        )
-                        continue
-                    emitted.append(sanitized[0])
-                    yield {"type": "component", "component": sanitized[0]}
+                    component = chain.feed(raw_component)
+                    if component is not None:
+                        yield {"type": "component", "component": component}
 
             parsed = self._parse_response(parser.text)
-
             # Pinned enforcement on a copy: the streamed dicts must not be
             # mutated after they have been yielded
-            components, pinned_included = self._enforce_pinned(
-                copy.deepcopy(emitted),
-                request.pinned_content or [],
-                request.max_items,
-            )
-
             yield {
                 "type": "complete",
-                "result": ZoneRenderResult(
-                    components=components,
-                    pinned_content_included=pinned_included,
-                    personalization_applied=bool(parsed.get("personalization_applied", False)),
-                    confidence=float(parsed.get("confidence", 0.5)),
-                    reasoning=str(parsed.get("reasoning", "")),
-                    profile_factors_used=list(parsed.get("profile_factors", [])),
-                    removed_urls=removed_urls,
-                    dropped_components=dropped,
-                    removed_numbers=removed_numbers,
-                    policy_violations=policy_violations,
-                    disclosure=self._disclosure_for(request, retrieved, components),
+                "result": self._result(
+                    request, retrieved, parsed, chain, copy.deepcopy(chain.components)
                 ),
             }
 
@@ -450,62 +510,38 @@ CRITICAL RULES:
         )
 
 
-    # Validation, URL whitelist, pinned enforcement  
-    def _validate_and_sanitize(
+    # Guard chain and result assembly
+    async def _guard_chain(
+        self,
+        request: ZoneRenderRequest,
+        retrieved: List[Any],
+        custom_types: Optional[Dict[str, Any]],
+    ) -> GuardChain:
+        """The guards of this render, built from its input and the current policy."""
+        return GuardChain(
+            url_guard=self._build_url_guard(request, retrieved),
+            numeric_guard=self._build_numeric_guard(request, retrieved),
+            policy=await effective_policy(request.tenant, settings.content_policy),
+            custom_types=custom_types,
+            max_components=request.max_components,
+        )
+
+    def _result(
         self,
         request: ZoneRenderRequest,
         retrieved: List[Any],
         parsed: Dict[str, Any],
-        custom_types: Optional[Dict[str, Any]] = None,
-        policy=None,
+        chain: GuardChain,
+        components: List[Dict[str, Any]],
     ) -> ZoneRenderResult:
-        """Turn raw LLM output into a guaranteed-valid render result."""
-        # 1. Schema validation, component by component (built-in Pydantic schemas + host-registered JSON Schemas)
-        valid_models, dropped = validate_components(
-            parsed.get("components", []), custom_types
-        )
-        components = [component_to_dict(c) for c in valid_models]
+        """
+        Close a render: pinned enforcement on what the chain kept, then the report.
 
-        # 2. URL whitelist: only URLs that existed in the input survive.
-        # Stripping an <img src> that was a link leaves an image-shaped hole,
-        # so degrade image variants (hero split, with-image) to text-only.
-        guard = self._build_url_guard(request, retrieved)
-        components, removed_urls = guard.sanitize_components(components)
-        components = downgrade_image_variants(components)
-
-        # 3. Numeric grounding: displayed numbers (stats, prices, chart points)
-        # must trace to a number present in the input
-        numeric_guard = self._build_numeric_guard(request, retrieved)
-        components, removed_numbers = numeric_guard.sanitize_components(components)
-
-        # 4. Per-tenant content policy: banned terms drop the component
-        if policy is None:
-            policy = policy_for(request.tenant, settings.content_policy)
-        components, policy_violations = policy.sanitize_components(components)
-
-        # 4b. Redundancy: a zone is read as ONE band, so a component may not
-        # spend itself repeating a link the visitor has already been shown.
-        # Before the budget on purpose: a duplicate must not eat the slot of
-        # a component that had something new to say.
-        components, redundant = RedundancyGuard(
-            enforce=settings.dedup_components_enabled
-        ).sanitize_components(components)
-        dropped.extend(redundant)
-
-        # 4c. Component budget: a zone is one band of a host page.
-        # Extra components are cut (first ones win) and reported.
-        components, over_budget = apply_component_budget(
-            components, request.max_components
-        )
-        dropped.extend(over_budget)
-
-        # 5. Pinned content: verified on the actual output, not on the model's claims;
-        # missing items are appended. 
-        # Runs AFTER the guards: pinneditems are operator-authored input, never model output to distrust.
-        components, pinned_included = self._enforce_pinned(
+        Pinned runs after the guards because pinned items are operator-authored input, never model output to distrust.
+        """
+        components, pinned_included = enforce_pinned(
             components, request.pinned_content or [], request.max_items
         )
-
         return ZoneRenderResult(
             components=components,
             pinned_content_included=pinned_included,
@@ -513,10 +549,11 @@ CRITICAL RULES:
             confidence=float(parsed.get("confidence", 0.5)),
             reasoning=str(parsed.get("reasoning", "")),
             profile_factors_used=list(parsed.get("profile_factors", [])),
-            removed_urls=removed_urls,
-            dropped_components=dropped,
-            removed_numbers=removed_numbers,
-            policy_violations=policy_violations,
+            removed_urls=chain.removed_urls,
+            dropped_components=chain.dropped,
+            removed_numbers=chain.removed_numbers,
+            policy_violations=chain.policy_violations,
+            policy_terms=list(chain.policy.banned_terms),
             disclosure=self._disclosure_for(request, retrieved, components),
         )
 
@@ -625,81 +662,6 @@ CRITICAL RULES:
                 json.dumps(getattr(result, "metadata", None) or {}, default=str)
             )
         return guard
-
-    def _enforce_pinned(
-        self,
-        components: List[Dict[str, Any]],
-        pinned_content: List[Dict[str, Any]],
-        max_items: int,
-    ) -> Tuple[List[Dict[str, Any]], List[str]]:
-        """
-        Guarantee every pinned item appears in the output.
-
-        Presence is computed from the actual components (by URL or title);
-        missing items are appended as cards to the first bento component
-        (or a new one when none exists).
-
-        Presence is read from the whole component tree, not from bento and
-        buttons only: a pinned link the model used as a hero CTA, a pricing
-        plan's button or a content_grid item is on the page, and appending a
-        card for it would show the visitor the same link twice.
-
-Pinned images are the exception, for the reason given on
-        _is_material: they are material for the components, so an unused one
-        is not appended. One the model does use counts as included.
-        """
-        if not pinned_content:
-            return components, []
-
-        links: Set[str] = set()
-        titles: Set[str] = set()
-        for component in components:
-            _collect_shown(component.get("data", {}), links, titles)
-
-        included: List[str] = []
-        missing: List[Dict[str, Any]] = []
-        for item in pinned_content:
-            identifier = item.get("url") or item.get("id") or item.get("title", "")
-            url = item.get("url")
-            title = (item.get("title") or "").strip().lower()
-            if (url and normalize_url(str(url)) in links) or (title and title in titles):
-                included.append(identifier)
-            elif not _is_material(item):
-                missing.append(item)
-
-        if missing:
-            extra_cards = []
-            for item in missing:
-                card = {
-                    "title": item.get("title", "Untitled"),
-                    "description": item.get("description") or "",
-                }
-                if item.get("url"):
-                    card["link"] = item["url"]
-                extra_cards.append(card)
-                included.append(item.get("url") or item.get("id") or item.get("title", ""))
-
-            target = next(
-                (c for c in components if c.get("type") == "bento"), None
-            )
-            if target is not None:
-                cards = target["data"].get("cards", [])
-                # Pinned content wins over generated content within max_items
-                overflow = len(cards) + len(extra_cards) - max(max_items, len(extra_cards))
-                if overflow > 0:
-                    cards = cards[:-overflow]
-                target["data"]["cards"] = cards + extra_cards
-            else:
-                components.append({
-                    "type": "bento",
-                    "data": {
-                        "cards": extra_cards,
-                        "columns": min(max(len(extra_cards), 1), 3),
-                    },
-                })
-
-        return components, included
-
 
     # Retrieval and prompt building
     async def _retrieve_results(self, request: ZoneRenderRequest) -> List[Any]:

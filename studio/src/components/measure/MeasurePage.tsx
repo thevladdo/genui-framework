@@ -127,6 +127,7 @@ const ZoneStats = ({ session }: { session: AdminSession }) => {
                   <th scope="col">Impressions</th>
                   <th scope="col">Clicks</th>
                   <th scope="col">CTR</th>
+                  <th scope="col">Verified (imp. / clicks)</th>
                 </tr>
               </thead>
               <tbody>
@@ -136,6 +137,9 @@ const ZoneStats = ({ session }: { session: AdminSession }) => {
                     <td>{formatCount(row.impression)}</td>
                     <td>{formatCount(row.click)}</td>
                     <td>{formatCtr(row.ctr)}</td>
+                    <td>
+                      {formatCount(row.verified?.impression ?? 0)} / {formatCount(row.verified?.click ?? 0)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -147,6 +151,14 @@ const ZoneStats = ({ session }: { session: AdminSession }) => {
               Holdout is set to {stats.holdout_percent}% of traffic
               (HOLDOUT_PERCENT). Arms fill up automatically as GenUIZone
               emits impressions and clicks.
+            </p>
+          )}
+          {stats.experiment != null && (
+            <p className={styles.footnote}>
+              Counts of experiment "{stats.experiment}" (HOLDOUT_SALT) only.
+              Verified events come from a user whose X-User-Token checked
+              out, with the arm computed by the server; the rest are
+              anonymous or as the browser reported them.
             </p>
           )}
         </>

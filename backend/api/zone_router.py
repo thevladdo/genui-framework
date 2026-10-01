@@ -8,53 +8,39 @@ Unlike the chat-based query endpoint, zones are:
 - Configured with pinned content that must always appear
 - Constrained to specific component types
 
-Execution model (segment cache, stale-while-revalidate):
-Renders are cached per (tenant, zone config, user segment) instead of
-being generated per request. Most users collapse into a small number of
-segments, so the LLM runs once per segment per TTL window:
+Execution model (segment cache, stale-while-revalidate).
+Renders are cached per (tenant, zone config, user segment) instead of being generated per request.
+Most users collapse into a small number of segments, so the LLM runs once per segment per TTL window:
 
 - fresh hit: served from cache, no LLM call
-- stale hit: served from cache immediately, re-rendered in background
-  (single-flight: only one refresh per key runs at a time)
-- miss: rendered live (cold start), then cached for the whole segment
-  (single-flight too: concurrent requests coalesce on one generation)
+- stale hit: served from cache immediately, re-rendered in background (single-flight: only one refresh per key runs at a time)
+- miss: rendered live (cold start), then cached for the whole segment (single-flight too: concurrent requests coalesce on one generation; a waiter that outlasts the wait gets a 503, never a second generation)
 
-Set cache_strategy="live" on a request (admin keys only) or
-zone_cache_enabled=false globally to bypass the cache for genuinely
-dynamic zones.
+Every payload taken from the cache is held to the content policy in force when it is served, not the one it was generated under: the policy is edited live, the cache lives for the whole stale window.
 
-Cost model: a public client key must not be able to convert traffic
-into LLM spend without a limit. The LLM only runs where a generation
-is born (cold miss, refresh, cache-off), every such point charges the
-per-tenant LLM budget (LLM_BUDGET_PER_HOUR), "live" is admin-only,
-and batch renders are size-capped and charged proportionally in the
-rate limit.
+Set cache_strategy="live" on a request (admin keys only) or zone_cache_enabled=false globally to bypass the cache for zones whose content changes on every request.
+
+Cost model: a public client key must not be able to convert traffic into LLM spend without a limit.
+The LLM only runs where a generation is born (cold miss, refresh, cache-off), every such point charges the per-tenant LLM budget (LLM_BUDGET_PER_HOUR), "live" is admin-only, and batch renders are size-capped and charged proportionally in the rate limit.
 
 Security model:
-- All endpoints require an API key (client keys for rendering, admin
-  keys for warmup/stats). With no keys configured, auth is open (dev).
-- When user_id is provided, the server-side profile is authoritative;
-  the client-supplied profile only seeds the store on first sight.
-- Cached (shared) renders are generated from the segment ARCHETYPE —
-  short tags parsed from the cache key — never from the raw client
-  profile, so one user cannot poison what the whole segment is served.
-  Individual personalization requires the non-shared path
-  (cache_strategy="live").
-- Every render is audit-logged: what was shown, to whom, from which
-  segment and cache state.
+- All endpoints require an API key (client keys for rendering, admin keys for warmup/stats). With no keys configured, auth is open (dev).
+- When user_id is provided, the server-side profile is authoritative; the client-supplied profile only seeds the store on first sight.
+- Cached (shared) renders are generated from the segment ARCHETYPE (short tags parsed from the cache key), never from the raw client profile, so one user cannot poison what the whole segment is served. Individual personalization requires the non-shared path (cache_strategy="live").
+- Every render is audit-logged: what was shown, to whom, from which segment and cache state.
 
 Transparency:
-- Every served payload carries meta.disclosure: whether a model wrote
-  the content, when it was generated, and the provenance of the visible
-  text. It is computed once, into the cached payload, so cache hits
-  carry the generation timestamp and not the moment they were served.
+- Every served payload carries meta.disclosure: whether a model wrote the content, when it was generated, and the provenance of the visible text. It is computed once, into the cached payload, so cache hits carry the generation timestamp and not the moment they were served.
 """
 
 import asyncio
+import copy
 import json
 import logging
 import time
 import uuid
+from urllib.parse import urlsplit
+from dataclasses import replace
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timezone
 
@@ -62,7 +48,12 @@ from fastapi import APIRouter, Depends, HTTPException, Security
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from agents.zone_agent import ZoneAgent, ZoneRenderRequest as ZoneAgentRequest, create_zone_agent
+from agents.zone_agent import (
+    ZoneAgent,
+    ZoneRenderRequest as ZoneAgentRequest,
+    create_zone_agent,
+    enforce_pinned,
+)
 from api.deps import (
     budget_tenant,
     charge_llm_budget,
@@ -87,8 +78,12 @@ from profiles import is_identified
 from schemas.components import GENUI_CONTRACT_VERSION
 from segmentation import Segment, compute_segment, segment_archetype
 from utils.audit import summarize_shown_components
+from utils.content_policy import ContentPolicy
+from utils.content_policy_store import effective_policy
+from utils.redis_conn import RETRY_AFTER_SECONDS, StoreUnavailable
 from utils.tracing import span
 from utils.zone_cache import (
+    CacheLookup,
     ZoneRenderCache,
     build_cache_key,
     zone_config_hash,
@@ -470,6 +465,7 @@ def _payload_from_result(result) -> Dict[str, Any]:
         "personalization_applied": result.personalization_applied,
         "meta": meta,
         "rendered_at": _utc_now(),
+        "policy_terms": getattr(result, "policy_terms", []),
     }
 
 
@@ -522,33 +518,107 @@ def _resolve_strategy(request: ZoneRenderRequest, auth: AuthContext) -> Tuple[st
     return strategy, strategy == "live" or not settings.zone_cache_enabled
 
 
-# How long a cold-miss waiter polls for the single-flight winner's cache
-# write before rendering on its own (fail-open, e.g. the winner crashed).
+async def _enforce_current_policy(
+    request: ZoneRenderRequest, tenant: str, payload: Dict[str, Any]
+) -> Tuple[Dict[str, Any], bool]:
+    """
+    Hold a payload to the content policy in force now.
+
+    The payload records the banned terms it was checked against, and only terms added since are scanned.
+    A component carrying one is dropped, pinned enforcement runs again on what is left (a dropped bento may have carried a pinned card), and the hit joins meta.sanitization.policy_violations.
+    meta.sanitization.policy_last_known is true while the stored terms come from this process's last read because the policy store is unreachable.
+    Returns (payload, changed): a changed payload goes back to the cache so the scan is paid once.
+    """
+    policy = await effective_policy(tenant, settings.content_policy)
+    changed = False
+    sanitization = payload.get("meta", {}).get("sanitization", {})
+    if bool(sanitization.get("policy_last_known")) != policy.last_known:
+        sanitization = {
+            k: v for k, v in sanitization.items() if k != "policy_last_known"
+        }
+        if policy.last_known:
+            sanitization["policy_last_known"] = True
+        payload = {
+            **payload,
+            "meta": {**payload.get("meta", {}), "sanitization": sanitization},
+        }
+        changed = True
+
+    checked = set(payload.get("policy_terms") or [])
+    added = [term for term in policy.banned_terms if term not in checked]
+    if not added:
+        return payload, changed
+
+    payload = {**payload, "policy_terms": list(policy.banned_terms)}
+    kept, violations = ContentPolicy(added).sanitize_components(
+        payload.get("components", [])
+    )
+    if violations:
+        components, pinned_included = enforce_pinned(
+            copy.deepcopy(kept),
+            [p.model_dump() for p in (request.pinned_content or [])],
+            request.max_items or 6,
+        )
+        meta = dict(payload.get("meta", {}))
+        sanitization = dict(meta.get("sanitization", {}))
+        sanitization["policy_violations"] = (
+            list(sanitization.get("policy_violations", [])) + violations
+        )
+        meta["sanitization"] = sanitization
+        payload.update(
+            components=components,
+            pinned_content_included=pinned_included,
+            meta=meta,
+        )
+    return payload, True
+
+
+async def _lookup(
+    cache: ZoneRenderCache, cache_key: str, request: ZoneRenderRequest, tenant: str
+) -> Optional[CacheLookup]:
+    """Read a cached render held to the current policy (every cache read goes here)."""
+    lookup = await cache.get(cache_key)
+    if lookup is None:
+        return None
+    payload, changed = await _enforce_current_policy(request, tenant, lookup.payload)
+    if not changed:
+        return lookup
+    await cache.set(cache_key, payload, age_seconds=lookup.age_seconds)
+    return replace(lookup, payload=payload)
+
+
+# How long a cold-miss waiter polls for the single-flight winner's cache write before giving up with a 503.
 _COLD_WAIT_SECONDS = 15.0
 _COLD_POLL_SECONDS = 0.2
 
 
 async def _await_cold_fill(
-    cache: ZoneRenderCache, cache_key: str
-) -> Tuple[Optional[Any], bool]:
+    cache: ZoneRenderCache, cache_key: str, request: ZoneRenderRequest, tenant: str
+) -> Tuple[Optional[CacheLookup], bool]:
     """
     Wait for the single-flight winner of a cold miss to fill the cache.
 
     Returns (lookup, lock_acquired):
     - (lookup, False): the winner's payload arrived; serve it.
-    - (None, True): the lock freed without a write (winner failed);
-      the caller takes over as the new single renderer.
-    - (None, False): timed out; the caller renders unlocked (fail-open).
+    - (None, True): the lock freed without a write (winner failed or its lock expired); the caller takes over as the new single renderer.
+
+    Past the wait it raises 503 instead of generating without the lock: a winner this slow means the provider is slow, and every waiter generating on its own would multiply the load on the provider and the bill by the request rate exactly then.
+    Retry-After is the lock TTL, the longest a winner can hold the key before the next request takes over.
     """
     deadline = time.monotonic() + _COLD_WAIT_SECONDS
     while time.monotonic() < deadline:
         await asyncio.sleep(_COLD_POLL_SECONDS)
-        lookup = await cache.get(cache_key)
+        lookup = await _lookup(cache, cache_key, request, tenant)
         if lookup is not None:
             return lookup, False
         if await cache.acquire_refresh_lock(cache_key):
             return None, True
-    return None, False
+    logger.warning("Cold miss wait expired for %s: answering 503", cache_key)
+    raise HTTPException(
+        status_code=503,
+        detail="This zone is being generated; retry shortly",
+        headers={"Retry-After": str(settings.zone_cache_lock_ttl)},
+    )
 
 
 async def _render_cold(
@@ -569,17 +639,18 @@ async def _render_cold(
     """
     locked = await cache.acquire_refresh_lock(cache_key)
     if not locked:
-        lookup, locked = await _await_cold_fill(cache, cache_key)
+        lookup, locked = await _await_cold_fill(cache, cache_key, request, tenant)
         if lookup is not None:
             return lookup.payload, "coalesced"
     try:
         await charge_llm_budget(charge_to)
         payload = await _render_live(request, tenant, segment)
+        # A policy saved while the model was writing applies to this write
+        payload, _ = await _enforce_current_policy(request, tenant, payload)
         await cache.set(cache_key, payload)
         return payload, "miss"
     finally:
-        if locked:
-            await cache.release_refresh_lock(cache_key)
+        await cache.release_refresh_lock(cache_key)
 
 
 def _build_response(
@@ -637,7 +708,12 @@ def _audit_render(
         user_id=request.user_id,
         key=auth.key_fingerprint,
         zone_id=request.zone_id,
-        page=request.current_page,
+        # The page is the client's word, and its query string can carry anything the host put in a URL: only where, never the parameters.
+        page=(
+            urlsplit(request.current_page)._replace(query="", fragment="").geturl()
+            if request.current_page else None
+        ),
+        declared=["page"] if request.current_page else [],
         render_id=payload.get("render_id"),
         arm=arm,
         cache=cache_meta,
@@ -713,6 +789,7 @@ async def _handle_render(
             # operator disabled the cache globally: still their tenant's spend.
             await charge_llm_budget(budget_tenant(auth))
             payload = await _render_live(request, auth.tenant)
+            payload, _ = await _enforce_current_policy(request, auth.tenant, payload)
             cache_meta = {"status": "bypass", "strategy": strategy}
             _annotate("bypass")
             _audit_render(auth, request, payload, cache_meta, arm)
@@ -722,7 +799,7 @@ async def _handle_render(
         segment = _segment_for(request)
         cache_key = _cache_key_for(request, segment, auth.tenant)
 
-        lookup = await cache.get(cache_key)
+        lookup = await _lookup(cache, cache_key, request, auth.tenant)
 
         if lookup is not None:
             if lookup.status == "stale" and await cache.acquire_refresh_lock(cache_key):
@@ -769,7 +846,7 @@ async def render_zone(
     """
     try:
         return await _handle_render(request, auth, user_token)
-    except (AuthError, HTTPException):
+    except (AuthError, HTTPException, StoreUnavailable):
         raise
     except Exception as e:
         logger.error(f"Zone rendering failed for {request.zone_id}: {e}")
@@ -828,13 +905,15 @@ async def render_zone_stream(
             if not cache_bypassed:
                 segment = _segment_for(request)
                 cache_key = _cache_key_for(request, segment, auth.tenant)
-                lookup = await cache.get(cache_key)
+                lookup = await _lookup(cache, cache_key, request, auth.tenant)
                 hit_status = lookup.status if lookup is not None else None
 
                 if lookup is None:
                     locked = await cache.acquire_refresh_lock(cache_key)
                     if not locked:
-                        lookup, locked = await _await_cold_fill(cache, cache_key)
+                        lookup, locked = await _await_cold_fill(
+                            cache, cache_key, request, auth.tenant
+                        )
                         if lookup is not None:
                             hit_status = "coalesced"
 
@@ -883,6 +962,7 @@ async def render_zone_stream(
                     auth.tenant, "zone", time.perf_counter() - generation_started
                 )
                 payload = _payload_from_result(event["result"])
+                payload, _ = await _enforce_current_policy(request, auth.tenant, payload)
 
                 if cache_bypassed:
                     cache_meta = {"status": "bypass", "strategy": strategy}
@@ -898,6 +978,20 @@ async def render_zone_stream(
                 response = _build_response(request.zone_id, payload, cache_meta, arm)
                 yield _sse("complete", response.model_dump())
 
+        except HTTPException as e:
+            yield _sse("error", {
+                "detail": e.detail,
+                "status": e.status_code,
+                "retry_after": (e.headers or {}).get("Retry-After"),
+                "zone_id": request.zone_id,
+            })
+        except StoreUnavailable as e:
+            yield _sse("error", {
+                "detail": str(e),
+                "status": 503,
+                "retry_after": str(RETRY_AFTER_SECONDS),
+                "zone_id": request.zone_id,
+            })
         except Exception as e:
             if generation_started is not None and not generation_done:
                 get_ops_metrics().observe_generation(

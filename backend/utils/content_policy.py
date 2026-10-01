@@ -44,8 +44,10 @@ class ContentPolicyError(ValueError):
 class ContentPolicy:
     """Banned-term matcher: case-insensitive, word-boundary, phrase-aware."""
 
-    def __init__(self, banned_terms: Iterable[str]):
+    def __init__(self, banned_terms: Iterable[str], last_known: bool = False):
         self.banned_terms = [str(t).strip() for t in banned_terms if str(t).strip()]
+        # The stored terms are this process's last read, the store being unreachable
+        self.last_known = last_known
         self._patterns = [
             # (?<!\w)/(?!\w) instead of \b: correct also for terms that
             # start or end with a non-word character

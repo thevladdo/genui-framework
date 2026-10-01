@@ -26,6 +26,8 @@ from utils.disclosure import (
     disclosure_block,
 )
 
+from memory_stores import use_memory_stores
+
 try:
     from agents.response_agent import ResponseAgent
     from agents.zone_agent import ZoneAgent, ZoneRenderRequest as AgentZoneRequest
@@ -47,6 +49,10 @@ CORPUS = (
     "Our sustainability report is at https://example.com/sustainability. "
     "Carbon neutral since 2019."
 )
+
+
+def setUpModule():
+    use_memory_stores()
 
 
 class TestContentProvenance(unittest.TestCase):

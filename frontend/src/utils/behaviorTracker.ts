@@ -169,6 +169,11 @@ export class BehaviorTracker {
     return this.level;
   }
 
+  /** The identity this tracker was started for */
+  getUserId(): string {
+    return this.options.userId;
+  }
+
   private createEmptyRecord(): BehaviorRecord {
     return {
       sessionId: this.sessionId,
@@ -642,6 +647,18 @@ export const initBehaviorTracker = (
 export const getBehaviorTracker = (): BehaviorTracker | null => {
   return trackerInstance;
 };
+
+/**
+ * The page tracker as seen by one consumer: only with that consumer's consent, and only when it was started for the same userId.
+ * One tracker serves the page, but a chat without consent, or one speaking for someone else, must not ship what a consented zone collected.
+ */
+export const behaviorTrackerFor = (
+  userId: string,
+  consent?: boolean,
+): BehaviorTracker | null =>
+  consentGranted(consent) && trackerInstance?.getUserId() === userId
+    ? trackerInstance
+    : null;
 
 export const stopBehaviorTracker = (): void => {
   if (trackerInstance) {

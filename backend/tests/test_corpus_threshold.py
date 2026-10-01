@@ -21,6 +21,8 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from memory_stores import use_memory_stores
+
 try:
     from rag.contextualizer import estimate_tokens
     from utils.tenant_counter import TenantCounter
@@ -37,6 +39,7 @@ except Exception:
 
 def setUpModule():
     """Runs and stops recorded here stay in memory, off the Redis of whoever runs the suite."""
+    use_memory_stores()
     try:
         from rag import ingest_status
         from utils.tenant_json_store import TenantJsonStore

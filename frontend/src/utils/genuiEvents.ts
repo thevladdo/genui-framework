@@ -23,13 +23,16 @@ export interface GenUIEvent {
 }
 
 /**
- * Send a batch of events. Uses keepalive so events survive navigation
- * (e.g. a click immediately followed by a page change).
+ * Send a batch of events.
+ * Uses keepalive so events survive navigation (e.g. a click immediately followed by a page change).
+ *
+ * The backend keeps an event's user_id only when userToken proves it, the same way it does for renders; without the token the events are still counted, with no user attached.
  */
 export const sendGenUIEvents = (
   apiUrl: string,
   apiKey: string | undefined,
   events: GenUIEvent[],
+  userToken?: string,
 ): void => {
   if (!events.length || typeof fetch === 'undefined') return;
 
@@ -39,6 +42,7 @@ export const sendGenUIEvents = (
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+        ...(userToken ? { 'X-User-Token': userToken } : {}),
       },
       body: JSON.stringify({ events }),
       keepalive: true,

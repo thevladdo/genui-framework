@@ -67,6 +67,11 @@ export const getSession = (): AdminSession | null => {
   return sessions.find((s) => sessionId(s) === active) ?? null;
 };
 
+export const isActive = (session: AdminSession): boolean => {
+  const active = getSession();
+  return active !== null && sessionId(active) === sessionId(session);
+};
+
 export const saveSession = (session: AdminSession): void => {
   const { sessions } = read();
   write({

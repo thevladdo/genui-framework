@@ -135,6 +135,8 @@ test("significant with a solid sample is the only green", () => {
   );
   assert.equal(v.tone, "success");
   assert.match(v.detail, /p = 0\.016/);
+  assert.match(v.label, /indicative/i);
+  assert.match(v.detail, /not visitors/i);
 });
 
 test("solid sample but p >= 0.05 = honest 'no difference yet'", () => {

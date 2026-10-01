@@ -30,6 +30,8 @@ from llm.factory import ProviderConfig, provider_configured
 from metrics.ops import OpsMetrics, sample_key
 from utils.audit import AuditLogger
 
+from memory_stores import use_memory_stores
+
 try:  # app-level deps: available in the backend venv, not in the shell python
     from fastapi.testclient import TestClient
 
@@ -45,6 +47,10 @@ try:  # app-level deps: available in the backend venv, not in the shell python
     HAVE_APP = True
 except Exception:
     HAVE_APP = False
+
+
+def setUpModule():
+    use_memory_stores()
 
 
 class TestSampleKey(unittest.TestCase):

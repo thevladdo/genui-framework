@@ -1,27 +1,21 @@
 """
 Shared Redis connection with reconnect backoff.
 
-Every store with an in-memory fallback (zone cache, profiles, rate
-limiter, metrics) gets its client from here instead of keeping its own
-permanent `_redis_unavailable` flag. The contract:
+Every Redis-backed store (zone cache, profiles, registry, rate limiter, metrics) gets its client from here instead of keeping its own permanent `_redis_unavailable` flag.
+The contract:
 
-- fail-open: when Redis is not usable *right now*, `get()` returns None
-  and the caller serves from its in-memory fallback — never a 500;
-- fail-briefly, not permanently: a failure arms an exponential backoff
-  window (1s doubling up to 30s); after it expires the next call probes
-  Redis again and the stores return to the shared backend as soon as it
-  answers.
+- `get()` returns None when Redis is not usable *right now*; the caller decides what that means. A cache serves from its in-memory fallback. A store of state that cannot be regenerated (content policy, zone registry, theme, profiles) serves the last version this process read or wrote, or raises StoreUnavailable: never "nothing stored";
+- fail-briefly, not permanently: a failure arms an exponential backoff window (1s doubling up to 30s); after it expires the next call probes Redis again and the stores return to the shared backend as soon as it answers.
 
-One handle (one connection pool, one backoff clock, one reported state)
-is shared per URL across all stores in the process: Redis has a single
-real state, so it is probed and reported once.
+One handle (one connection pool, one backoff clock, one reported state) is shared per URL across all stores in the process: Redis has a single real state, so it is probed and reported once.
 /health reads the same handle the stores use.
 """
 
+import asyncio
 import logging
 import re
 import time
-from typing import Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +40,8 @@ class ReconnectingRedis:
         self._backoff = min_backoff
         self._retry_at = 0.0
         self._client = None
-        self._connecting = False  # single-flight guard for concurrent connects
+        # The connect in flight: callers that arrive meanwhile wait for it
+        self._pending: Optional[asyncio.Future] = None
 
     @property
     def status(self) -> str:
@@ -61,13 +56,9 @@ class ReconnectingRedis:
             return None
         if self._client is not None:
             return self._client
-        if self._connecting or time.monotonic() < self._retry_at:
+        if self._pending is None and time.monotonic() < self._retry_at:
             return None
-        self._connecting = True
-        try:
-            return await self._connect()
-        finally:
-            self._connecting = False
+        return await self._connect_once()
 
     async def mark_failure(self, error: Exception) -> None:
         """Report a failed command: drop the client and arm a backoff window."""
@@ -93,14 +84,19 @@ class ReconnectingRedis:
             except Exception as e:
                 await self.mark_failure(e)
                 return "reconnecting"
-        if self._connecting:
-            return self.status
-        self._connecting = True
-        try:
-            connected = await self._connect() is not None
-        finally:
-            self._connecting = False
+        connected = await self._connect_once() is not None
         return "connected" if connected else "reconnecting"
+
+    async def _connect_once(self):
+        """Join the connect in flight, or start one."""
+        if self._pending is None:
+            self._pending = asyncio.ensure_future(self._connect())
+            self._pending.add_done_callback(self._clear_pending)
+        return await asyncio.shield(self._pending)
+
+    def _clear_pending(self, done: "asyncio.Future") -> None:
+        if self._pending is done:
+            self._pending = None
 
     async def _connect(self):
         try:
@@ -162,3 +158,61 @@ def shared_redis(url: Optional[str]) -> ReconnectingRedis:
     if handle is None:
         handle = _handles[url or ""] = ReconnectingRedis(url)
     return handle
+
+
+# Past the reconnect backoff cap the store has been probed again.
+RETRY_AFTER_SECONDS = int(_MAX_BACKOFF_SECONDS)
+
+
+class StoreUnavailable(Exception):
+    """Redis is configured and did not answer, and no known version can stand in."""
+
+    def __init__(self, what: str = "state"):
+        super().__init__(
+            f"The {what} store is unreachable: nothing was read or changed. "
+            f"Retry in {RETRY_AFTER_SECONDS}s."
+        )
+
+
+# key -> (value, ttl seconds or None) to write, or None to delete
+Writes = Dict[str, Optional[Tuple[str, Optional[int]]]]
+
+
+async def atomic_update(
+    conn: ReconnectingRedis,
+    keys: List[str],
+    decide: Callable[[List[Optional[str]]], Tuple[Writes, Any]],
+    what: str = "state",
+) -> Any:
+    """
+    Read `keys`, let `decide` turn their values into writes, apply the writes in one MULTI.
+    WATCH makes EXEC fail when another client changed one of the keys after the read, and the read-decide-write runs again on the new values, so a concurrent write is merged instead of overwritten.
+
+    Returns what `decide` returns next to its writes; exceptions it raises propagate untouched.
+    Raises StoreUnavailable when Redis does not answer.
+    """
+    from redis.exceptions import RedisError, WatchError
+
+    redis = await conn.get()
+    if redis is None:
+        raise StoreUnavailable(what)
+    try:
+        async with redis.pipeline(transaction=True) as pipe:
+            while True:
+                await pipe.watch(*keys)
+                values = [await pipe.get(key) for key in keys]
+                writes, result = decide(values)
+                pipe.multi()
+                for key, write in writes.items():
+                    if write is None:
+                        pipe.delete(key)
+                    else:
+                        pipe.set(key, write[0], ex=write[1])
+                try:
+                    await pipe.execute()
+                    return result
+                except WatchError:
+                    continue
+    except (RedisError, OSError) as e:
+        await conn.mark_failure(e)
+        raise StoreUnavailable(what) from e

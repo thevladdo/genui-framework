@@ -84,11 +84,18 @@ const PolicyEditor = ({ session }: { session: AdminSession }) => {
   }, [load]);
 
   const save = async () => {
+    const terms = parseTerms(termsText);
+    if (
+      !window.confirm(
+        `Save ${terms.length} banned term${terms.length === 1 ? '' : 's'} to tenant "${session.tenant}"? They replace the list saved there.`,
+      )
+    ) {
+      return;
+    }
     setError(null);
     setNotice(null);
     setBusy(true);
     try {
-      const terms = parseTerms(termsText);
       const before = policy?.banned_terms ?? [];
       const saved = await saveContentPolicy(session, terms);
       setPolicy(saved);
@@ -100,7 +107,7 @@ const PolicyEditor = ({ session }: { session: AdminSession }) => {
         ' Enforced on the next render of every zone and every chat answer for this tenant.';
       const memoryWarning =
         saved.storage === 'memory'
-          ? ' WARNING: Redis is unreachable, this policy lives in one worker\'s memory and is lost on restart.'
+          ? ' WARNING: this backend has no Redis, the policy lives in one worker\'s memory and is lost on restart.'
           : '';
 
       let summary: string;
@@ -130,9 +137,9 @@ const PolicyEditor = ({ session }: { session: AdminSession }) => {
 
       {policy?.storage === 'memory' && (
         <p className={previewStyles.warnBanner} role="alert">
-          Redis is unreachable: the policy is currently stored in one
-          worker's memory and will be LOST on restart. Fix the backend's
-          Redis connection before relying on it.
+          This backend has no Redis: the policy is stored in one worker's
+          memory and will be LOST on restart. Configure REDIS_URL before
+          relying on it.
         </p>
       )}
 
@@ -165,7 +172,7 @@ const PolicyEditor = ({ session }: { session: AdminSession }) => {
         <button
           type="button"
           className={studioStyles.primaryButton}
-          disabled={busy}
+          disabled={busy || policy === null}
           onClick={() => void save()}
         >
           Save policy

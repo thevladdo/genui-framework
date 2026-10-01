@@ -21,6 +21,8 @@ from pydantic import ValidationError
 
 from zones import STATUS_APPROVED, STATUS_DRAFT, ZoneConfigStore
 
+from memory_stores import use_memory_stores
+
 try:  # app-level deps: available in the backend venv, not in the shell python
     import api.deps as deps
     import api.zone_router as zone_router
@@ -44,6 +46,10 @@ REGISTRY_CONFIG = {
     "preferred_component_type": "bento",
     "max_items": 3,
 }
+
+
+def setUpModule():
+    use_memory_stores()
 
 
 class TestZoneConfigStore(unittest.TestCase):

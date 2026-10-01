@@ -154,7 +154,7 @@ const ZoneEditor = ({
         `Draft v${saved.record.version} saved. Production still serves ` +
         (detail?.approved ? `approved v${detail.approved.version}.` : 'the host page props.') +
         (saved.storage === 'memory'
-          ? ' WARNING: Redis is unreachable, this draft lives in one worker\'s memory and is lost on restart.'
+          ? ' WARNING: this backend has no Redis, the draft lives in one worker\'s memory and is lost on restart.'
           : ''),
       );
       onChanged();
@@ -175,7 +175,7 @@ const ZoneEditor = ({
     const version = detail?.draft?.version ?? baseVersion;
     if (
       !window.confirm(
-        `Approve draft v${version} for zone "${zoneId}"? Every render of this zone starts serving it immediately (host page props are ignored).`,
+        `Approve draft v${version} for zone "${zoneId}" on tenant "${session.tenant}"? Every render of this zone starts serving it immediately (host page props are ignored).`,
       )
     ) {
       return;
@@ -196,7 +196,7 @@ const ZoneEditor = ({
   };
 
   const discard = async () => {
-    if (!window.confirm(`Discard the draft for "${zoneId}"? The approved config keeps serving.`)) return;
+    if (!window.confirm(`Discard the draft for "${zoneId}" on tenant "${session.tenant}"? The approved config keeps serving.`)) return;
     setBusy(true);
     setError(null);
     try {
@@ -213,7 +213,7 @@ const ZoneEditor = ({
   const removeConfig = async () => {
     if (
       !window.confirm(
-        `Delete the whole registry entry for "${zoneId}"? The zone goes back to whatever the host page props say (ungoverned).`,
+        `Delete the whole registry entry for "${zoneId}" on tenant "${session.tenant}"? The zone goes back to whatever the host page props say (ungoverned).`,
       )
     ) {
       return;
@@ -221,7 +221,7 @@ const ZoneEditor = ({
     setBusy(true);
     setError(null);
     try {
-      await deleteZoneConfig(session, zoneId);
+      await deleteZoneConfig(session, zoneId, baseVersion);
       await load();
       onChanged();
     } catch (e) {
@@ -449,9 +449,9 @@ const ZonesWorkbench = ({
 
         {storage === 'memory' && (
           <p className={previewStyles.warnBanner} role="alert">
-            Redis is unreachable: governance data is currently stored in
-            one worker's memory and will be LOST on restart. Fix the
-            backend's Redis connection before editing or approving.
+            This backend has no Redis: governance data is stored in one
+            worker's memory and will be LOST on restart. Configure
+            REDIS_URL before editing or approving.
           </p>
         )}
 

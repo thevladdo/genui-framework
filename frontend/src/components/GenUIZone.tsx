@@ -27,7 +27,7 @@ import { GenUISection } from './GenUISection';
 import { useZone, UseZoneOptions, PinnedContent } from '../hooks/useZone';
 import type { GenUICustomComponentDef } from '../registry';
 import type { GenUITheme, GenUIComponent } from '../types';
-import { getBehaviorTracker } from '../utils/behaviorTracker';
+import { behaviorTrackerFor } from '../utils/behaviorTracker';
 import { consentGranted, type PrivacyLevel } from '../utils/privacy';
 import {
   DEFAULT_DISCLOSURE_TEXT,
@@ -38,6 +38,7 @@ import {
   type GenUIDisclosureOptions,
 } from '../utils/disclosure';
 import { sendGenUIEvents } from '../utils/genuiEvents';
+import type { GenUIError } from '../utils/errors';
 
 
 export interface GenUIZoneProps {
@@ -149,8 +150,11 @@ export interface GenUIZoneProps {
   //  Loading/Error States 
   /** Custom loading component */
   loadingComponent?: React.ReactNode;
-  /** Custom error component */
-  errorComponent?: React.ReactNode | ((error: Error) => React.ReactNode);
+  /**
+   * Custom error component.
+   * The function form receives a GenUIError: `status` tells a temporary 503 (with `retryAfter` in seconds) from a real failure, so the site's own non-personalized content can stand in for the first and a message for the second.
+   */
+  errorComponent?: React.ReactNode | ((error: GenUIError) => React.ReactNode);
   /** Custom empty state component */
   emptyComponent?: React.ReactNode;
   /** Show loading skeleton (default: true) */
@@ -159,8 +163,8 @@ export interface GenUIZoneProps {
   //  Callbacks 
   /** Called when zone renders successfully */
   onRender?: (components: GenUIComponent[]) => void;
-  /** Called on render error */
-  onError?: (error: Error) => void;
+  /** Called on render error, with the HTTP status and Retry-After when known */
+  onError?: (error: GenUIError) => void;
 
   //  Debug 
   /** Show debug information */
@@ -331,9 +335,9 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
             ? userId
             : undefined,
         ts: new Date().toISOString(),
-      }]);
+      }], userToken);
     },
-    [trackEvents, apiUrl, apiKey, zoneId, userId, consent, meta?.renderId, meta?.experiment?.arm, meta?.cache?.segment]
+    [trackEvents, apiUrl, apiKey, userToken, zoneId, userId, consent, meta?.renderId, meta?.experiment?.arm, meta?.cache?.segment]
   );
 
   // Capture clicks on any link inside the zone (uplift measurement)
@@ -354,8 +358,9 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
 
   // Track zone visibility: behavior analytics + impression event
   useEffect(() => {
-    if (!zoneRef.current) return;
-    const tracker = getBehaviorTracker();
+    // Without meta the render in progress has not said which variant is on screen yet, so there is nothing to attribute a view to.
+    if (!zoneRef.current || !meta) return;
+    const tracker = behaviorTrackerFor(userId, consent);
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -368,12 +373,12 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
             'scroll-into-view',
             {
               hasContent: components.length > 0,
-              personalized: meta?.personalizationApplied ?? false,
+              personalized: meta.personalizationApplied,
             }
           );
 
           // Impression: once per generated variant actually seen
-          const variant = meta?.renderId ?? 'unknown';
+          const variant = meta.renderId ?? 'unknown';
           if (
             components.length > 0 &&
             impressionSentForRef.current !== variant
@@ -389,7 +394,7 @@ export const GenUIZone: React.FC<GenUIZoneProps> = ({
     observer.observe(zoneRef.current);
 
     return () => observer.disconnect();
-  }, [zoneId, components.length, meta?.personalizationApplied, meta?.renderId, emitEvent]);
+  }, [zoneId, userId, consent, components.length, meta, emitEvent]);
 
   // Render loading state
   if (isLoading && components.length === 0) {

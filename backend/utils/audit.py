@@ -27,6 +27,8 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
+from utils.url_guard import iter_shown
+
 logger = logging.getLogger("genui.audit")
 
 
@@ -229,30 +231,16 @@ class FileAuditReader(AuditReader):
 
 def summarize_shown_components(components: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Compact summary of what a render actually displayed, for audit events:
-    component types, card/button titles, and every link shown.
+    Compact summary of what a render actually displayed, for audit events: component types, visible titles, and every link shown, read with the same type-agnostic walk the pinned-content check uses.
     """
     types: List[str] = []
     titles: List[str] = []
     links: List[str] = []
 
     for component in components or []:
-        ctype = component.get("type", "unknown")
-        types.append(ctype)
-        data = component.get("data", {}) or {}
-
-        if ctype == "bento":
-            for card in data.get("cards", []) or []:
-                if card.get("title"):
-                    titles.append(str(card["title"]))
-                if card.get("link"):
-                    links.append(str(card["link"]))
-        elif ctype == "buttons":
-            for button in data.get("buttons", []) or []:
-                if button.get("label"):
-                    titles.append(str(button["label"]))
-                if button.get("url"):
-                    links.append(str(button["url"]))
+        types.append(component.get("type", "unknown"))
+        for kind, value in iter_shown(component.get("data", {}) or {}):
+            (links if kind == "link" else titles).append(value)
 
     return {
         "component_types": types,

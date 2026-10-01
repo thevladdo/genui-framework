@@ -6,7 +6,7 @@ import { openDB, IDBPDatabase } from 'idb';
 import type { UserProfile, ProfileUpdate } from '../types';
 
 const DB_NAME = 'genui-profile-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'profiles';
 const HISTORY_STORE = 'conversation-history';
 
@@ -49,9 +49,12 @@ export const initDB = async (): Promise<IDBPDatabase<GenUIDB>> => {
   }
   if (!dbPromise) {
     dbPromise = openDB<GenUIDB>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
+      upgrade(db, oldVersion, _newVersion, tx) {
         if (!db.objectStoreNames.contains(STORE_NAME)) {
           db.createObjectStore(STORE_NAME);
+        } else if (oldVersion < 2) {
+          // Version 1 keyed profiles by userId alone: no backend can claim them, and a scoped erasure would never reach them.
+          tx.objectStore(STORE_NAME).clear();
         }
 
         if (!db.objectStoreNames.contains(HISTORY_STORE)) {
@@ -65,13 +68,26 @@ export const initDB = async (): Promise<IDBPDatabase<GenUIDB>> => {
 
 
 /**
+ * Scope of a stored profile: the backend and the client key it was built for, so two backends or two tenants on one origin never share a record.
+ * The client key is public by design (it ships with the page).
+ */
+export const profileScope = (apiUrl: string, apiKey?: string): string =>
+  `${apiUrl.replace(/\/+$/, '')}|${apiKey ?? ''}`;
+
+// A call without a scope gets its own namespace, never a backend's record
+const profileKey = (userId: string, scope = ''): string => `${scope}\n${userId}`;
+
+/**
  * Get a user profile by ID
  */
-export const getProfile = async (userId: string): Promise<UserProfile | null> => {
+export const getProfile = async (
+  userId: string,
+  scope?: string
+): Promise<UserProfile | null> => {
   if (!hasIndexedDB()) return null;
   try {
     const db = await initDB();
-    const profile = await db.get(STORE_NAME, userId);
+    const profile = await db.get(STORE_NAME, profileKey(userId, scope));
     return profile || null;
   } catch (error) {
     console.error('Failed to get profile:', error);
@@ -83,11 +99,11 @@ export const getProfile = async (userId: string): Promise<UserProfile | null> =>
 /**
  * Save or update a user profile
  */
-export const saveProfile = async (profile: UserProfile): Promise<void> => {
+export const saveProfile = async (profile: UserProfile, scope?: string): Promise<void> => {
   if (!hasIndexedDB()) return;
   try {
     const db = await initDB();
-    await db.put(STORE_NAME, profile, profile.userId);
+    await db.put(STORE_NAME, profile, profileKey(profile.userId, scope));
   } catch (error) {
     console.error('Failed to save profile:', error);
     throw error;
@@ -118,9 +134,10 @@ export const createEmptyProfile = (userId: string): UserProfile => {
  */
 export const applyProfileUpdates = async (
   userId: string,
-  updates: ProfileUpdate[]
+  updates: ProfileUpdate[],
+  scope?: string
 ): Promise<UserProfile> => {
-  let profile = await getProfile(userId);
+  let profile = await getProfile(userId, scope);
   
   if (!profile) {
     profile = createEmptyProfile(userId);
@@ -154,7 +171,7 @@ export const applyProfileUpdates = async (
   }
   
   profile.updatedAt = new Date().toISOString();
-  await saveProfile(profile);
+  await saveProfile(profile, scope);
   
   return profile;
 };
@@ -163,11 +180,11 @@ export const applyProfileUpdates = async (
 /**
  * Clear a user's profile
  */
-export const clearProfile = async (userId: string): Promise<void> => {
+export const clearProfile = async (userId: string, scope?: string): Promise<void> => {
   if (!hasIndexedDB()) return;
   try {
     const db = await initDB();
-    await db.delete(STORE_NAME, userId);
+    await db.delete(STORE_NAME, profileKey(userId, scope));
   } catch (error) {
     console.error('Failed to clear profile:', error);
     throw error;

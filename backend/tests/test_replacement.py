@@ -19,6 +19,8 @@ import uuid
 from types import SimpleNamespace
 from unittest import mock
 
+from memory_stores import use_memory_stores
+
 try:
     from qdrant_client.http import models as qmodels
     from auth.keys import AuthContext
@@ -29,6 +31,10 @@ try:
     HAVE_APP = True
 except Exception:
     HAVE_APP = False
+
+
+def setUpModule():
+    use_memory_stores()
 
 
 def run(coro):

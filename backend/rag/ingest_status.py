@@ -34,7 +34,10 @@ def _store() -> TenantJsonStore:
     if _STORE is None:
         from config import settings
 
-        _STORE = TenantJsonStore(key_prefix="genui:ingest:", redis_url=settings.redis_url)
+        # A run is not stopped by an outage of its progress record: in flight, not authoritative.
+        _STORE = TenantJsonStore(
+            key_prefix="genui:ingest:", redis_url=settings.redis_url, authoritative=False
+        )
     return _STORE
 
 

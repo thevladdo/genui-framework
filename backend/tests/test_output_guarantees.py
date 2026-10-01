@@ -21,6 +21,8 @@ import unittest
 from utils.numeric_guard import NumericGuard, extract_numbers
 from utils.content_policy import ContentPolicy, ContentPolicyError, policy_for
 
+from memory_stores import use_memory_stores
+
 try:  # app-level deps: available in the backend venv, not in the shell python
     from agents.zone_agent import ZoneAgent, ZoneRenderRequest
     from agents.response_agent import ResponseAgent
@@ -38,6 +40,10 @@ except ImportError:
 
 
 # NumericGuard (pure)
+def setUpModule():
+    use_memory_stores()
+
+
 class TestNumericGuard(unittest.TestCase):
     def _guard(self, *texts):
         guard = NumericGuard()
@@ -289,6 +295,36 @@ _OVER_BUDGET_ENVELOPE = {
 }
 
 
+# One component per ring, in an order that makes every ring fire exactly once
+_EVERY_RING_ENVELOPE = {
+    "components": [
+        {"type": "not_a_type", "data": {}},
+        {"type": "hero_banner", "data": {
+            "variant": "split",
+            "image_url": "https://example.com/pricing",
+            "headline": "Build faster with a clearer workflow",
+            "primary_cta": {"label": "See pricing", "url": "https://example.com/pricing"},
+            "secondary_cta": {"label": "Explore", "url": "https://example.com/pricing"},
+        }},
+        {"type": "bento", "data": {"cards": [
+            {"title": "Partner programme", "description": "Work with us.",
+             "link": "https://evil.example/offer"},
+        ], "columns": 1}},
+        {"type": "stats_banner", "data": {"stats": [
+            {"value": "120", "label": "Countries"},
+            {"value": "5M", "label": "Users"},
+        ]}},
+        {"type": "text", "data": {"content": "Deposit now for guaranteed returns."}},
+        {"type": "text", "data": {"content": "Uptime sits at 99.9 percent."}},
+    ],
+    "pinned_included": [],
+    "personalization_applied": False,
+    "confidence": 0.8,
+    "reasoning": "every ring envelope",
+    "profile_factors": [],
+}
+
+
 def _zone_request(tenant="acme"):
     return ZoneRenderRequest(
         zone_id="stats-zone",
@@ -393,6 +429,45 @@ class TestZoneChain(unittest.TestCase):
         streamed = [e["component"] for e in events if e["type"] == "component"]
         self.assertEqual(len(streamed), 2, "the extras never cross the wire")
         self.assertEqual(len(events[-1]["result"].dropped_components), 2)
+
+    def test_both_paths_run_one_chain_ring_by_ring(self):
+        """
+        Each ring removes exactly one thing from this envelope, so a ring that stops running changes the outcome.
+        Both paths must land on the same components and the same report.
+        """
+        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+                          llm_client=_FakeLLM(_EVERY_RING_ENVELOPE))
+        request = _redundant_request()
+        request.base_prompt += " We serve 120 countries with 99.9% uptime."
+        request.max_components = 3
+
+        sync = asyncio.run(agent.render_zone_async(request))
+
+        async def collect():
+            return [e async for e in agent.render_zone_stream_async(request)]
+
+        events = asyncio.run(collect())
+        streamed = [e["component"] for e in events if e["type"] == "component"]
+        stream = events[-1]["result"]
+
+        for path, result in (("sync", sync), ("sse", stream)):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    [c["type"] for c in result.components],
+                    ["hero_banner", "bento", "stats_banner"])
+                hero = result.components[0]["data"]
+                self.assertNotIn("secondary_cta", hero)
+                self.assertEqual(hero["variant"], "centered", "a link is not an image")
+                self.assertEqual(result.removed_urls,
+                                 ["https://example.com/pricing", "https://evil.example/offer"])
+                self.assertEqual(result.removed_numbers, ["5M"])
+                self.assertEqual(result.policy_violations, ["guaranteed returns"])
+                self.assertEqual(len(result.dropped_components), 3)
+                self.assertIn("not_a_type", result.dropped_components[0])
+                self.assertIn("budget", result.dropped_components[-1])
+        self.assertEqual(sync.components, stream.components)
+        self.assertEqual(sync.dropped_components, stream.dropped_components)
+        self.assertEqual(streamed, stream.components)
 
     def test_policy_is_per_tenant(self):
         result = asyncio.run(self._agent().render_zone_async(_zone_request(tenant="globex")))

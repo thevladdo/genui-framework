@@ -23,7 +23,13 @@ const {
   sessionLabel,
   setActiveSession,
 } = require("./.build/session.js");
-const { listZoneConfigs, verifySession } = require("./.build/api.js");
+const {
+  deleteDocument,
+  listDocuments,
+  listZoneConfigs,
+  saveTenantTheme,
+  verifySession,
+} = require("./.build/api.js");
 
 const ACME = { baseUrl: "http://localhost:8000", adminKey: "sk_a", tenant: "acme" };
 const GLOBEX = { baseUrl: "http://localhost:8000", adminKey: "sk_g", tenant: "globex" };
@@ -137,6 +143,104 @@ test("a stale session is refused instead of writing to the wrong tenant", async 
   clearSession();
   clearSession();
   await assert.rejects(() => listZoneConfigs(ACME), /no longer the active session/);
+});
+
+
+const heldFetch = () => {
+  const held = [];
+  globalThis.fetch = (url, init) =>
+    new Promise((resolve) => held.push({ url, init, resolve }));
+  return held;
+};
+
+const reply = (status, body) => ({
+  ok: status < 400,
+  status,
+  json: async () => body,
+});
+
+const SETTLED = "settled";
+const PENDING = "pending";
+
+const outcome = (promise) =>
+  Promise.race([
+    promise.then(() => SETTLED, () => SETTLED),
+    new Promise((resolve) => setTimeout(() => resolve(PENDING), 20)),
+  ]);
+
+test("a response that lands after a tenant switch is dropped", async () => {
+  reset();
+  saveSession(GLOBEX);
+  saveSession(ACME);
+  const held = heldFetch();
+
+  const late = listDocuments(ACME);
+  setActiveSession(sessionId(GLOBEX));
+  const current = listDocuments(GLOBEX);
+  held[1].resolve(reply(200, { documents: [{ source_document: "g.pdf", chunks: 1 }] }));
+  held[0].resolve(reply(200, { documents: [{ source_document: "a.pdf", chunks: 1 }] }));
+
+  assert.deepEqual((await current).documents.map((d) => d.source_document), ["g.pdf"]);
+  assert.equal(await outcome(late), PENDING);
+});
+
+test("an error that lands after a tenant switch is dropped, not raised", async () => {
+  reset();
+  saveSession(GLOBEX);
+  saveSession(ACME);
+  const held = heldFetch();
+
+  const late = listDocuments(ACME);
+  setActiveSession(sessionId(GLOBEX));
+  held[0].resolve(reply(401, { detail: "Invalid API key" }));
+
+  assert.equal(await outcome(late), PENDING);
+  assert.deepEqual(getSession(), GLOBEX);
+  assert.equal(listSessions().length, 2);
+});
+
+test("a reply for the tenant still active is delivered, errors included", async () => {
+  reset();
+  saveSession(ACME);
+  const held = heldFetch();
+
+  const failing = listDocuments(ACME);
+  held[0].resolve(reply(500, { detail: "boom" }));
+  await assert.rejects(failing, /boom/);
+});
+
+test("a delete started from the tenant just left is refused", async () => {
+  reset();
+  saveSession(GLOBEX);
+  saveSession(ACME);
+  const listedBy = getSession();
+  const held = heldFetch();
+
+  setActiveSession(sessionId(GLOBEX));
+  await assert.rejects(
+    () => deleteDocument(listedBy, "shared-name.pdf"),
+    /tenant "acme", which is no longer the active session/,
+  );
+  assert.equal(held.length, 0);
+});
+
+test("a theme save follows the same rule", async () => {
+  reset();
+  saveSession(GLOBEX);
+  saveSession(ACME);
+  const held = heldFetch();
+
+  const inFlight = saveTenantTheme(ACME, { accent: "#ff0000" });
+  setActiveSession(sessionId(GLOBEX));
+  held[0].resolve(reply(200, { theme: { accent: "#ff0000" }, updated_at: "now", storage: "redis" }));
+  assert.equal(await outcome(inFlight), PENDING);
+
+  await assert.rejects(
+    () => saveTenantTheme(ACME, { accent: "#00ff00" }),
+    /no longer the active session/,
+  );
+  assert.equal(held.length, 1);
+  assert.equal(held[0].init.headers["X-API-Key"], "sk_a");
 });
 
 test("verifying a key is the one call made before any session exists", async () => {

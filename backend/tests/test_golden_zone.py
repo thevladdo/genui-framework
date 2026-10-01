@@ -52,6 +52,8 @@ from utils.url_guard import (
     normalize_url,
 )
 
+from memory_stores import use_memory_stores
+
 try:  # app-level deps: available in the backend venv, not in the shell python
     from agents.zone_agent import ZoneAgent, ZoneRenderRequest
     from config import settings
@@ -67,6 +69,10 @@ RECORD = os.environ.get("GENUI_GOLDEN_RECORD") == "1"
 
 
 # Invariant checker (pure: runs everywhere, reused by recorded and live)
+def setUpModule():
+    use_memory_stores()
+
+
 def _input_guard(fixture):
     """
     The whitelist DEFINITION: every URL legitimately present in the input.

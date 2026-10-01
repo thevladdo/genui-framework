@@ -23,6 +23,8 @@ from types import SimpleNamespace
 from llm.base import LLMChatClient
 from llm.openai_client import OpenAIChatClient
 
+from memory_stores import use_memory_stores
+
 try:  # app-level deps: available in the backend venv, not in the shell python
     from agents.response_agent import ResponseAgent
     from agents.profile_agent import ProfileAgent
@@ -39,6 +41,10 @@ VALID_PAYLOAD = json.dumps({
     "confidence": 0.9,
     "suggested_actions": [],
 })
+
+
+def setUpModule():
+    use_memory_stores()
 
 
 class RecordingLLM(LLMChatClient):

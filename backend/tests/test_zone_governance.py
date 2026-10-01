@@ -30,6 +30,8 @@ from zones import (
     ZoneConfigStore,
 )
 
+from memory_stores import use_memory_stores
+
 try:
     import api.deps as deps
     import api.zone_config_router as config_router
@@ -48,6 +50,10 @@ except ImportError:
 
 APPROVED_CONFIG = {"base_prompt": "APPROVED prompt, serving in production"}
 DRAFT_CONFIG = {"base_prompt": "DRAFT prompt, marketing is still editing"}
+
+
+def setUpModule():
+    use_memory_stores()
 
 
 def run(coro):
