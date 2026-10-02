@@ -6,7 +6,7 @@
  * Playground stays in the main bundle because it IS the public product.
  */
 
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { About } from './components/about/About';
 import { Compliance } from './components/compliance/Compliance';
 import { Footer } from './components/Footer';
@@ -16,6 +16,7 @@ import { Nav } from './components/Nav';
 import { RouteVeil } from './components/RouteVeil';
 import { PlaygroundPage } from './components/playground/PlaygroundPage';
 import { useHashRoute } from './hooks/useHashRoute';
+import { shouldShowIntro } from './lib/intro';
 import SideRays from './components/side-rays/SideRays';
 import DotGrid from './components/dot-grid/DotGrid';
 
@@ -36,6 +37,8 @@ const PreviewPage = import.meta.env.DEV
 const ZonesPage = import.meta.env.DEV
   ? lazy(() => import('./components/zones/ZonesPage'))
   : null;
+const IntroVideo = lazy(() => import('./components/intro/IntroVideo'));
+
 const AuditPage = import.meta.env.DEV
   ? lazy(() => import('./components/audit/AuditPage'))
   : null;
@@ -45,6 +48,10 @@ const PolicyPage = import.meta.env.DEV
 
 const App = () => {
   const { path, query, replaceQuery, navigate } = useHashRoute();
+  const [intro, setIntro] = useState<'open' | 'leaving' | null>(() =>
+    path === '/' && shouldShowIntro() ? 'open' : null,
+  );
+  const covered = intro === 'open';
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -96,14 +103,20 @@ const App = () => {
         returnDuration={1.5}
       />
 
-      <Nav path={path} />
+      {!covered && <Nav path={path} />}
       <RouteVeil />
 
       {path === '/' && (
         <>
           <SideRays {...sideRaysProps} />
-          <Home />
+          {!covered && <Home />}
         </>
+      )}
+
+      {intro && (
+        <Suspense fallback={null}>
+          <IntroVideo onReveal={() => setIntro('leaving')} onDone={() => setIntro(null)} />
+        </Suspense>
       )}
 
       {path === '/about' && <About />}
@@ -212,7 +225,7 @@ const App = () => {
         )
       )}
 
-      <Footer />
+      {!covered && <Footer />}
     </>
   );
 };
