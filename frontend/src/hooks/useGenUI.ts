@@ -43,6 +43,30 @@ const generateSessionId = (): string => {
   return `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 };
 
+// Stored with its identity: a reload resumes the conversation, another identity never does.
+const sessionStorageKey = (scope: string) => `genui:chat-session:${scope}`;
+
+// A stored session of another identity is removed on the way: the previous visitor's id does not stay on the device.
+const readStoredSession = (scope: string, identity: string): string | null => {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(sessionStorageKey(scope)) ?? 'null');
+    if (saved?.identity === identity && typeof saved.sessionId === 'string') return saved.sessionId;
+    sessionStorage.removeItem(sessionStorageKey(scope));
+  } catch {
+    // No sessionStorage (SSR, blocked storage)
+  }
+  return null;
+};
+
+const storeSession = (scope: string, identity: string, sessionId: string | null) => {
+  try {
+    if (sessionId) sessionStorage.setItem(sessionStorageKey(scope), JSON.stringify({ identity, sessionId }));
+    else sessionStorage.removeItem(sessionStorageKey(scope));
+  } catch {
+    // No sessionStorage (SSR, blocked storage): the session lasts as long as this page
+  }
+};
+
 export interface UseGenUIOptionsExtended extends UseGenUIOptions {
   enableBehaviorTracking?: boolean;
   behaviorTrackingOptions?: Partial<BehaviorTrackerOptions>;
@@ -109,12 +133,22 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
   const identity = JSON.stringify([apiUrl, apiKey ?? null, userId, consentGranted(consent)]);
   const identityRef = useRef(identity);
   const identityScopeRef = useRef(new AbortController());
+  const [restoredSession] = useState(() => {
+    if (persist) return readStoredSession(storeScope, identity);
+    storeSession(storeScope, identity, null);
+    return null;
+  });
+  const chatSessionRef = useRef<string | null>(restoredSession);
+  const sessionScopeRef = useRef(storeScope);
 
   useEffect(() => {
     if (identityRef.current === identity) return;
     identityRef.current = identity;
     identityScopeRef.current.abort();
     identityScopeRef.current = new AbortController();
+    storeSession(sessionScopeRef.current, identity, null);
+    sessionScopeRef.current = storeScope;
+    chatSessionRef.current = null;
     sessionIdRef.current = generateSessionId();
     setHistory([]);
     setProfile(null);
@@ -147,7 +181,8 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
       try {
         const loadedProfile =
           (await getProfile(userId, storeScope)) ?? createEmptyProfile(userId);
-        const loadedHistory = await getConversationHistory(sessionIdRef.current);
+        const chatSession = chatSessionRef.current;
+        const loadedHistory = chatSession ? await getConversationHistory(chatSession) : [];
         if (cancelled) return;
         setProfile(loadedProfile);
         setHistory(loadedHistory);
@@ -171,7 +206,6 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
 
   const query = useCallback(async (text: string): Promise<GenUIResponse> => {
     const scope = identityScopeRef.current.signal;
-    const sessionId = sessionIdRef.current;
     const consented = consentGranted(consent);
     // After every await: an answer for an identity that is gone lands nowhere
     const ensureCurrent = () => {
@@ -189,27 +223,18 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
         timestamp: new Date().toISOString(),
       };
 
-      if (persist) {
-        await addToHistory(sessionId, userMessage);
-        ensureCurrent();
-      }
-      
       setHistory(prev => [...prev, userMessage]);
 
       const tracker = behaviorTrackerFor(userId, consent);
       const behaviorData = tracker ? tracker.getCompactSummary() : null;
 
-      // Prepare request body
       const requestBody = {
         query: text,
+        session_id: chatSessionRef.current ?? undefined,
         // 'anonymous' is the local default, not an identity: sending it
         // would share one server-side profile across all anonymous users
         user_id: consented && userId && userId !== 'anonymous' ? userId : undefined,
         user_profile: consented && profile ? profileToApiFormat(profile) : null,
-        conversation_history: history.slice(-10).map(msg => ({
-          role: msg.role,
-          content: msg.content,
-        })),
         behavior_data: behaviorData,
       };
 
@@ -234,9 +259,14 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
       const data = await response.json();
       ensureCurrent();
 
+      const sessionId: string | null = typeof data.session_id === 'string' ? data.session_id : null;
+      chatSessionRef.current = sessionId;
+      if (persist) storeSession(storeScope, identity, sessionId);
+
       // Transform snake_case to camelCase
       const genUIResponse: GenUIResponse = {
         contractVersion: data.contract_version,
+        sessionId: sessionId ?? undefined,
         text: data.text,
         components: data.components,
         sources: data.sources,
@@ -268,6 +298,13 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
               }
             : undefined,
           disclosure: parseDisclosure(data.meta?.disclosure),
+          session: data.meta?.session
+            ? {
+                resumed: Boolean(data.meta.session.resumed),
+                stored: Boolean(data.meta.session.stored),
+                unsummarized: data.meta.session.unsummarized ?? 0,
+              }
+            : undefined,
         },
       };
 
@@ -280,7 +317,9 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
         timestamp: new Date().toISOString(),
       };
 
-      if (persist) {
+      // Kept under the backend's session id, so a reload that resumes the session shows it again
+      if (persist && sessionId) {
+        await addToHistory(sessionId, userMessage);
         await addToHistory(sessionId, assistantMessage);
         ensureCurrent();
       }
@@ -316,7 +355,7 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
     } finally {
       if (!scope.aborted) setIsLoading(false);
     }
-  }, [apiUrl, apiKey, userToken, userId, consent, profile, history, persist, storeScope, onProfileUpdate, onError]);
+  }, [apiUrl, apiKey, userToken, userId, consent, profile, persist, storeScope, identity, onProfileUpdate, onError]);
 
 
   /**
@@ -344,13 +383,30 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
   }, [userId, storeScope, enablePersistence]);
 
 
-  /**
-   * Clear conversation history
-   */
   const clearConversationHistory = useCallback(async () => {
-    if (enablePersistence) {
-      await clearHistoryDB(sessionIdRef.current);
+    const chatSession = chatSessionRef.current;
+    if (chatSession) {
+      try {
+        const response = await fetch(`${apiUrl}/api/v1/query/sessions/${encodeURIComponent(chatSession)}`, {
+          method: 'DELETE',
+          headers: {
+            ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+            ...(userToken ? { 'X-User-Token': userToken } : {}),
+          },
+        });
+        if (!response.ok) throw await errorFromResponse(response, 'Conversation not deleted');
+      } catch (err) {
+        const error = asGenUIError(err);
+        setError(error);
+        onError?.(error);
+        throw error;
+      }
+      if (enablePersistence) {
+        await clearHistoryDB(chatSession);
+      }
     }
+    chatSessionRef.current = null;
+    storeSession(storeScope, identity, null);
 
     setHistory([]);
     sessionIdRef.current = generateSessionId();
@@ -365,7 +421,7 @@ export const useGenUI = (options: UseGenUIOptionsExtended): UseGenUIReturnExtend
       });
       setBehaviorTracker(tracker);
     }
-  }, [enablePersistence, enableBehaviorTracking, userId, behaviorTrackingOptions, privacy, consent]);
+  }, [apiUrl, apiKey, userToken, storeScope, identity, onError, enablePersistence, enableBehaviorTracking, userId, behaviorTrackingOptions, privacy, consent]);
 
 
   /**

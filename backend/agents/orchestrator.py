@@ -148,6 +148,7 @@ class AgentOrchestrator:
         conversation_history: Optional[List[Dict]] = None,
         behavior_data: Optional[Dict[str, Any]] = None,
         tenant: Optional[str] = None,
+        conversation_summary: Optional[str] = None,
     ) -> OrchestratorResult:
         """
         Process a user query through all agents asynchronously.
@@ -157,14 +158,15 @@ class AgentOrchestrator:
             user_profile: Current user profile from IndexedDB
             conversation_history: Recent conversation messages
             behavior_data: User behavior data from BehaviorTracker
+            conversation_summary: Summary of the messages older than the history, for the response agent
             
         Returns:
             OrchestratorResult with combined agent outputs
         """
         if self.parallel_execution:
-            return await self._process_parallel_async(query, user_profile, conversation_history, behavior_data, tenant)
+            return await self._process_parallel_async(query, user_profile, conversation_history, behavior_data, tenant, conversation_summary)
         else:
-            return await self._process_sequential_async(query, user_profile, conversation_history, behavior_data, tenant)
+            return await self._process_sequential_async(query, user_profile, conversation_history, behavior_data, tenant, conversation_summary)
     
     def process_sync(
         self,
@@ -183,6 +185,7 @@ class AgentOrchestrator:
         conversation_history: Optional[List[Dict]],
         behavior_data: Optional[Dict[str, Any]],
         tenant: Optional[str] = None,
+        conversation_summary: Optional[str] = None,
     ) -> OrchestratorResult:
         """Run all agents in parallel using asyncio.gather for true async concurrency."""
         
@@ -192,6 +195,7 @@ class AgentOrchestrator:
             user_profile,
             conversation_history,
             tenant,
+            conversation_summary,
         )
         
         profile_task = self.profile_agent.analyze_message_async(
@@ -238,6 +242,7 @@ class AgentOrchestrator:
         conversation_history: Optional[List[Dict]],
         behavior_data: Optional[Dict[str, Any]],
         tenant: Optional[str] = None,
+        conversation_summary: Optional[str] = None,
     ) -> OrchestratorResult:
         """Run agents sequentially (for debugging or low-resource environments)."""
         
@@ -247,6 +252,7 @@ class AgentOrchestrator:
             user_profile,
             conversation_history,
             tenant,
+            conversation_summary,
         )
         
         # Then profile agent

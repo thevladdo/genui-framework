@@ -8,6 +8,24 @@ The entire history lives below, newest first.
 
 ## [Unreleased]
 
+### The chat remembers on the server
+
+The client used to send its last 10 messages with every question, and the server took them as given: a client could send 100, or someone else's. Nothing on the server knew that two messages belonged to one conversation, so there was no memory past that window and no way to link an answer to its conversation. The README promised that the history comes back after a reload. It didn't: the hook made a new local key on every mount and never read the old one.
+
+- **`/query` takes a `session_id` and always returns one.** The server mints it, a random secret scoped to the tenant of the key and, when the request has a verified `user_id`, to that user. Only the identity that started a session can read it. An id from another tenant or another user, an expired one, or one the client invented counts as absent, and the answer comes with a new id and `meta.session.resumed: false`. An anonymous session is not handed over to a user who logs in halfway through.
+- **The server builds the context.** The last `CHAT_WINDOW_MESSAGES` messages (6 by default) go into the prompt. Older ones are folded into a running summary written by the profile model, charged to `LLM_BUDGET_PER_HOUR` as one generation before it runs. Without budget the window slides anyway and `meta.session.unsummarized` counts what was dropped.
+- **A store outage is not a 500.** With the session store unreachable the chat still answers, without memory, with `meta.session.stored: false` and the same `session_id`, so the conversation resumes once the store is back.
+- **Two lifetimes.** An anonymous session lasts `CHAT_SESSION_TTL_SECONDS` (30 minutes) after its last message. A session with a user follows `PROFILE_TTL_SECONDS`, is listed in the profile export (with a `ref` matching the `session` field of its audit lines) and is deleted with the profile. `DELETE /api/v1/query/sessions/{session_id}` forgets a single conversation.
+- **`useGenUI` sends the session id and the new message, nothing else.** The id lives in memory, and in `sessionStorage` only with consent, so with consent a reload resumes the conversation and shows its history again. A change of identity drops it, and so does a page loaded by another identity or without consent. `clearHistory()` now returns a promise: it deletes the session on the server first and clears nothing if the server does not confirm.
+- **The query audit line** carries the session fingerprint, the number of session messages in the prompt and whether a summary was used. The question still stays out.
+- **The suite gives one answer however it is launched.** Run as `python -m unittest tests.test_x` from `backend/`, 18 modules failed to import the shared test helpers, and a module whose only shared import sat inside its optional-dependency guard skipped its route tests and still printed OK. They now run the same tests as `discover -s tests`, and `tests/test_suite_runs.py` holds the two counts together. `use_memory_stores()` no longer swallows a broken import, which would have left the tests on the developer's Redis.
+
+**Migration**
+
+- `conversation_history` is still accepted from clients that send no `session_id`, cut to the window, and ignored whenever one is sent.
+- The response agent no longer trims the history to 5 messages: the server decides the window.
+- `DELETE /api/v1/profile/{user_id}` also returns `chat_sessions_erased`, the sessions that still existed, and its 503 says the profile and its chat sessions were not erased.
+
 ### An audit that holds what it says
 
 The data protection statement said the audit records what was shown, not what was asked. The chat line held the first 200 characters of the question. Titles and links were read only from `bento` and `buttons`, so a hero, a pricing grid or a logo wall left the summary empty. `POST /events` wrote whatever `user_id` the browser sent, and a new experiment added its counts to the previous one.

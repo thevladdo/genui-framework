@@ -117,6 +117,7 @@ export type {
   ProfileUpdateInstruction,
   BehaviorMeta,
   SanitizationReport,
+  ChatSessionMeta,
   ResponseMeta,
   GenUIResponse,
   

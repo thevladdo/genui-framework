@@ -708,8 +708,8 @@ function ChatBot() {
     profile, // Current user profile
     updateProfile, // Manual profile update
     clearProfile, // Reset profile
-    history, // Conversation history
-    clearHistory, // Clear conversation
+    history, // Conversation shown to the user; the backend keeps the memory
+    clearHistory, // Forget the conversation, on the backend first
     disclosure, // AI interaction notice + marking of the last answer
     behaviorTracker, // Access behavior tracker
     trackInteraction, // Track custom events
@@ -743,8 +743,10 @@ function ChatBot() {
       // response.sources - Source citations
       // response.suggestedActions - Follow-up suggestions
       // response.profileUpdates - Profile learning data
+      // response.sessionId - Conversation id minted by the backend
       // response.meta - Confidence, sentiment, interaction type,
-      //   meta.sanitization (what the guarantee chain removed) and
+      //   meta.sanitization (what the guarantee chain removed),
+      //   meta.session (what the conversation memory did) and
       //   meta.behavior (see below)
     } catch (err) {
       // Handle error
@@ -768,7 +770,9 @@ const { behavior } = response.meta ?? {};
 
 It appears only when the request carried behavior data: consent withheld, or `privacy: 'strict'`, means no analysis to report, by design. Note that `userType` **is** one of the factors of the segment key (`type=`), while `engagementScore` is **not**: the `eng=` bucket is computed deterministically from scroll depth (`>= 70` high, `>= 30` mid), never from this model-estimated score, so a segment stays reproducible.
 
-**The hook holds one identity at a time.** `apiUrl`, `apiKey`, `userId` and `consent` together define it. When any of them changes, the chat starts a new session: history and profile are emptied, and a question still waiting for its answer is aborted. Its `query()` promise rejects with an `AbortError`, `error` is not set and `onProfileUpdate` is not called, so the answer lands nowhere. The first request of the new identity carries no history, no profile and no behavior from the previous one. A failed query hands `onError` a `GenUIError` with `status` and `retryAfter` (see [Fallback Content](#fallback-content--client-side-fallbacks)).
+**The hook holds one identity at a time.** `apiUrl`, `apiKey`, `userId` and `consent` together define it. When any of them changes, the chat starts a new session: history and profile are emptied, and a question still waiting for its answer is aborted. Its `query()` promise rejects with an `AbortError`, `error` is not set and `onProfileUpdate` is not called, so the answer lands nowhere. The first request of the new identity carries no session, no profile and no behavior from the previous one. A failed query hands `onError` a `GenUIError` with `status` and `retryAfter` (see [Fallback Content](#fallback-content--client-side-fallbacks)).
+
+**The backend remembers the conversation, the hook shows it.** Each `query()` sends the new message and the `session_id` of the conversation, never the earlier messages. The backend mints the id on the first answer and keeps the recent messages and a summary of the older ones (see [`POST /api/v1/query`](#post-apiv1query--chat-interface)). The hook holds the id in memory. With consent it also writes it to `sessionStorage` together with the identity, and keeps the displayed history in IndexedDB under it, so reloading the tab resumes the same conversation and shows it again. Without consent nothing is written and a reload starts over. A page loaded by a different identity, or without consent, never picks up a stored session and removes it. `clearHistory()` deletes the session on the backend first and only then clears the local history. If the backend does not confirm, it rejects with the `GenUIError`, clears nothing, and can be called again.
 
 ### useZone — Zone-Level Control
 
@@ -1472,7 +1476,7 @@ With BYOK the LLM bill is on **your** key, and the client `pk_` key is public (i
 - **`cacheStrategy="live"` is admin-only.** A request body field must not let any visitor force one LLM call per page load. Client keys sending `"live"` get a 403; the segment cache serves them instead.
 - **Cold misses are single-flight.** When a popular segment expires, concurrent requests coalesce on one generation (the same lock that guards stale refreshes). The extra requests wait briefly and are served the winner's render (`meta.cache.status: "coalesced"`). If the winner is still writing after 15 seconds, the waiters get a 503 with `Retry-After` (on the stream, an `error` event with `status: 503`) and nobody generates outside the lock. A winner that slow means the provider is slow, and letting every waiter generate on its own would put the full request rate on the provider, and on the bill, at that exact moment.
 - **Batches are capped and charged for what they spend.** `/zone/batch-render` accepts at most `ZONE_BATCH_MAX` zones (413 above) and a batch of N zones consumes N rate-limit slots, not 1.
-- **Per-tenant LLM budget, on every surface that spends.** `LLM_BUDGET_PER_HOUR` caps how many LLM generations one tenant can trigger per hour, across all workers (same shared Redis store as the rate limit). It covers zone renders **and** chat: one `POST /query` is charged for the model calls it actually makes, two per message and three when the request carries behavior data, because the chat fans out to the response, profile and behavior agents. Over the cap: cached renders keep being served (stale entries simply stop refreshing), new generations return 429. Admin-triggered renders (warmup, admin `"live"`) and admin chat are exempt, so pre-warming after a deploy never competes with the abuse cap.
+- **Per-tenant LLM budget, on every surface that spends.** `LLM_BUDGET_PER_HOUR` caps how many LLM generations one tenant can trigger per hour, across all workers (same shared Redis store as the rate limit). It covers zone renders **and** chat: one `POST /query` is charged for the model calls it actually makes, two per message and three when the request carries behavior data, because the chat fans out to the response, profile and behavior agents. When messages leave the conversation window, the summary that absorbs them is charged as one more, just before it is written; a tenant out of budget keeps chatting with a summary that stops growing. Over the cap: cached renders keep being served (stale entries simply stop refreshing), new generations return 429. Admin-triggered renders (warmup, admin `"live"`) and admin chat are exempt, so pre-warming after a deploy never competes with the abuse cap.
 - **Over the cap, chat stops instead of degrading.** A zone render has a cached copy to fall back on, so its degradation is invisible. A chat answer has none: the answer itself is the expensive call, and serving it without the accessory analyses would save the small half of the cost while spending the large one. So the request returns 429 and says which knob to turn.
 - **Provider timeout.** `LLM_TIMEOUT_SECONDS` bounds every LLM and embedding call; a slow or cold provider endpoint fails the request instead of holding it (and a worker slot) open for the SDK default of 10 minutes.
 
@@ -1611,7 +1615,7 @@ So the whole library runs off one switch:
 
 | Without `consent={true}`                               | With `consent={true}`                         |
 | ------------------------------------------------------ | --------------------------------------------- |
-| Nothing written to or read from IndexedDB              | Profile and chat history cached on the device |
+| Nothing written to or read from IndexedDB or sessionStorage | Profile and chat history cached on the device, chat session id kept for the tab |
 | No `userId` in the render, chat or event requests      | `userId` sent, server-side profile applies    |
 | Behavior tracker never starts, no behavior in the body | Tracker runs at the `privacy` level you chose |
 | Content served from the anonymous segment              | Content served from the visitor's own segment |
@@ -1641,23 +1645,24 @@ curl -X DELETE -H "X-API-Key: pk_live_abc" -H "X-User-Token: $TOKEN" \
   http://localhost:8000/api/v1/profile/u-42
 ```
 
-The export returns the stored profile plus the audit entries that name that user, which is all of it: renders served, chat answers (without the question), impressions and clicks, profile syncs, updates and erasures. Nothing else in the system is keyed by a person. Cached renders belong to a segment, event counters to a zone, an experiment and an arm, themes and zone configs to the operator. Both routes carry the same identity guard as the rest of the per-user surface: a signed `X-User-Token` whose subject matches the id, or an admin key. An export endpoint with a weak guard is a data breach with a compliance label on it.
+The export returns the stored profile, the chat sessions started while identified (recent messages and summary, each with the `ref` that the audit lines of its answers carry) and the audit entries that name that user. That is all of it: renders served, chat answers (without the question), impressions and clicks, profile syncs, updates and erasures. Nothing else in the system is keyed by a person. Anonymous chat sessions name no one and expire on their own. Cached renders belong to a segment, event counters to a zone, an experiment and an arm, themes and zone configs to the operator. Both routes carry the same identity guard as the rest of the per-user surface: a signed `X-User-Token` whose subject matches the id, or an admin key. An export endpoint with a weak guard is a data breach with a compliance label on it.
 
 When the audit trail is going to your log pipeline (the production default), the export says `"queryable": false` with a note pointing there, rather than returning an empty history that would read as "nothing ever happened".
 
-**Erasure, honestly.** The profile is deleted. The audit entries naming that user are not, and the response says so:
+**Erasure, honestly.** The profile and the user's chat sessions are deleted. The audit entries naming that user are not, and the response says so:
 
 ```json
 {
   "status": "deleted",
   "existed": true,
   "profile_erased": true,
+  "chat_sessions_erased": 2,
   "audit_retained": true,
   "note": "..."
 }
 ```
 
-**Only when it happened.** The response goes out after Redis has confirmed the delete. With Redis unreachable it is a `503` with `Retry-After` and a detail saying the profile was NOT erased, and the attempt is on the audit trail with `outcome: "store_unavailable"`. Retry after the interval. The export follows the same rule: a `503`, never an empty profile.
+**Only when it happened.** The response goes out after Redis has confirmed the delete. With Redis unreachable it is a `503` with `Retry-After` and a detail saying the profile and its chat sessions were NOT erased, and the attempt is on the audit trail with `outcome: "store_unavailable"`. Retry after the interval. The export follows the same rule: a `503`, never an empty profile.
 
 A record of what was shown to whom is worth nothing if the party who showed it can edit it afterwards, and in a regulated deployment that record is also the operator's own evidence. On top of that, in the production configuration those lines have already left this process for your log pipeline, so the backend could not rewrite them if it wanted to. The trail is bounded instead of edited: rotation on the file sink, your pipeline's retention policy otherwise. And the erasure is itself recorded in it, so a later export shows when the right was exercised. Whether that balance holds for your deployment is a call for your DPO, on your retention numbers, and the numbers are below.
 
@@ -1668,13 +1673,16 @@ Storage limitation is configuration here, and this is the only place the default
 | Data                          | Knob                                             | Default         | Notes                                                                          |
 | ----------------------------- | ------------------------------------------------ | --------------- | ------------------------------------------------------------------------------ |
 | Server-side profile           | `PROFILE_TTL_SECONDS`                            | 90 days         | Refreshed on every write, so it expires after inactivity. `0` = keep forever   |
+| Chat session, identified user | `PROFILE_TTL_SECONDS`                            | 90 days         | Same clock as the profile, refreshed on every message; exported and erased with it |
+| Chat session, anonymous       | `CHAT_SESSION_TTL_SECONDS`                       | 30 min          | Refreshed on every message; no user, no index, it just expires                 |
 | Audit trail (file sink)       | `AUDIT_LOG_MAX_BYTES` · `AUDIT_LOG_BACKUP_COUNT` | 50 MB × 5 files | Size-bounded, not time-bounded: rotation drops the oldest file                 |
 | Audit trail (production sink) | your log pipeline                                | your policy     | The lines are emitted on the `genui.audit` logger and retained where they land |
 | Cached renders                | `ZONE_CACHE_STALE_TTL`                           | 24 h            | Per segment, never per person                                                  |
 | Event counters                | none                                             | kept            | Aggregate per zone and arm, no identifiers                                     |
 | IndexedDB profile and history | the visitor                                      | until cleared   | Only written with consent; `clearProfile()` / `clearHistory()` erase it        |
+| Chat session id in the browser | the visitor                                     | the tab         | `sessionStorage`, only with consent; dropped when the identity changes, on the page or at the next load |
 
-`PROFILE_TTL_SECONDS` applies to the Redis store. Without Redis the in-memory store is bounded by size and lost on restart; with Redis there is no in-memory copy.
+`PROFILE_TTL_SECONDS` and `CHAT_SESSION_TTL_SECONDS` apply to the Redis store. Without Redis the in-memory stores are bounded by size and lost on restart; with Redis there is no in-memory copy.
 
 ### The documents your legal team will ask for
 
@@ -2251,15 +2259,12 @@ Content-Type: application/json
 
 {
   "query": "What products do you recommend?",
+  "session_id": "Xb3k9-q2Lw7dVt0aPz1rYc8mN4sE6hUj",
   "user_profile": {
     "preferences": { "role": { "value": "investor", "confidence": 0.9 } },
     "interests": { "sustainability": { "value": true, "confidence": 0.8 } },
     "demographic": { "region": { "value": "europe", "confidence": 0.7 } }
   },
-  "conversation_history": [
-    { "role": "user", "content": "Hello" },
-    { "role": "assistant", "content": "Hi! How can I help?" }
-  ],
   "behavior_data": {
     "clickCount": 15,
     "maxScrollDepth": 85,
@@ -2273,6 +2278,7 @@ Content-Type: application/json
 
 ```json
 {
+  "session_id": "Xb3k9-q2Lw7dVt0aPz1rYc8mN4sE6hUj",
   "text": "Based on your interest in sustainability, I recommend...",
   "components": [
     {
@@ -2294,10 +2300,19 @@ Content-Type: application/json
     "confidence": 0.92,
     "interaction_type": "question",
     "topics": ["products", "recommendations"],
-    "sentiment": "positive"
+    "sentiment": "positive",
+    "session": { "resumed": true, "stored": true, "unsummarized": 0 }
   }
 }
 ```
+
+**The conversation is a session on the server.** Leave `session_id` out on the first message and the answer carries a new one: a random secret, scoped to the tenant of the key and, when the request has a verified `user_id`, to that user. Send it back with the next message. The backend puts the last `CHAT_WINDOW_MESSAGES` messages (6 by default) in the prompt, and folds the ones that leave the window into a running summary written by the profile model. That summary is one more generation, charged to the tenant's `LLM_BUDGET_PER_HOUR` before it runs. Without budget, or when the call fails, the window moves on anyway, the summary stays as it was, and `meta.session.unsummarized` counts the messages that were dropped.
+
+A session is read only by the identity that started it. A session with a user needs that user's `X-User-Token`, an anonymous one only its id, and an anonymous session does not carry over to a user who logs in halfway. An id from another tenant, from another user, expired or simply unknown is treated as absent. The answer then comes with a new id and `meta.session.resumed: false`. The server never adopts an id the client made up.
+
+`conversation_history` is still accepted from clients that send no `session_id`. It is cut to the same window, and ignored whenever `session_id` is present. If the session store does not answer, the chat still replies, without memory, with `meta.session.stored: false` and the same `session_id`, so the conversation picks up again once the store is back.
+
+How long it is kept: an anonymous session for `CHAT_SESSION_TTL_SECONDS` (30 minutes) after its last message, a session with a user as long as `PROFILE_TTL_SECONDS` allows. To forget one, call `DELETE /api/v1/query/sessions/{session_id}` (same identity rule, `{"deleted": true|false}`, `503` when the store is down). `useGenUI().clearHistory()` does it for you. A user's sessions are also in the profile export and go with the profile erasure.
 
 ### POST /api/v1/zone/render — Zone Rendering
 
@@ -2367,6 +2382,7 @@ Serving endpoints take a client key; control-plane endpoints take an admin key a
 | `POST /api/v1/zone/render/stream`                                                                                                     | client              | Same render, progressive (SSE)                      | [Streaming](#️-streaming--ssr-safety)                                     |
 | `POST /api/v1/zone/batch-render`                                                                                                      | client              | Several zones in one request (capped, counted as N) | [Cost Controls](#-cost-controls)                                         |
 | `POST /api/v1/query`                                                                                                                  | client              | Chat with optional UI components                    | above                                                                    |
+| `DELETE /api/v1/query/sessions/{session_id}`                                                                                          | client (+ user token for a user's session) | Forget one chat session         | above                                                                    |
 | `POST /api/v1/events`                                                                                                                 | client              | Impression / click ingestion                        | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
 | `GET /api/v1/events/stats`                                                                                                            | admin               | CTR per arm, uplift, z-test                         | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
 | `GET /api/v1/profile/{user_id}` · `DELETE` · `POST /profile/sync`                                                                     | client + user token | Server-side profile, GDPR erasure                   | [Auth & Profiles](#-auth-server-side-profiles--audit)                    |
@@ -2535,7 +2551,7 @@ genui-framework/
 8. **Guarantees**: per-component schema validation, URL whitelist, numeric grounding, per-tenant content policy, redundancy removal, component budget, pinned-content enforcement. The SSE path applies the same guards in the same order, per component, before each one crosses the wire.
 9. **Cache write, audit & metrics** — the render is cached for the whole segment, audit-logged (what was shown, to whom, why, and what the chain removed), and counted by the `/metrics` middleware.
 
-The **chat pipeline** (`/query`) is separate and isolated: Response/Profile/Behave agents run in parallel per request with no state shared across users or tenants; the model can invoke a tenant-scoped `search_documents` RAG tool; the same guarantee chain applies to its output.
+The **chat pipeline** (`/query`) is separate and isolated: Response/Profile/Behave agents run in parallel per request with no state shared across users or tenants. The conversation memory is a session the server keeps per tenant and verified user. The model can invoke a tenant-scoped `search_documents` RAG tool, and the same guarantee chain applies to its output.
 
 ## Agent Responsibilities
 
@@ -2567,7 +2583,7 @@ The same holds for **embeddings**: the RAG pipeline (chunker, vector store) talk
 
 Chat isolation guarantees:
 
-- **Stateless by construction**: no conversational state lives on the agents; everything the model sees (profile, history, retrieved context) belongs to the single request. Two sequential `/query` calls can never share context — across users or tenants.
+- **Stateless agents, scoped memory**: no conversational state lives on the agents. The history the model sees comes from the session of the request, which is keyed by tenant and readable only by the verified user who started it, or by the holder of an anonymous session's id. Two `/query` calls share context only when they carry the same session and the same identity, never across users or tenants.
 - **Tenant-scoped retrieval**: the model can invoke a `search_documents` tool; each invocation is an async call carrying the requesting tenant, and every URL it surfaces joins the same whitelist that strips invented links.
 
 ---

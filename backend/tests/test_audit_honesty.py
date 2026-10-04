@@ -79,7 +79,7 @@ class _FakeOrchestrator:
         planned_generations = AgentOrchestrator.planned_generations
 
     async def process(self, query, user_profile=None, conversation_history=None,
-                      behavior_data=None, tenant=None):
+                      behavior_data=None, tenant=None, conversation_summary=None):
         return _FakeResult()
 
 

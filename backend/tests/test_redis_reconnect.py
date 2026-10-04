@@ -18,10 +18,10 @@ controllable fake whose outages are simulated by flipping `server.up`.
 """
 
 import asyncio
-import itertools
 import sys
 import types
 import unittest
+import uuid
 from unittest import mock
 
 from metrics.store import MetricsStore
@@ -35,12 +35,9 @@ def run(coro):
     return asyncio.run(coro)
 
 
-_url_seq = itertools.count()
-
-
 def unique_url() -> str:
-    """Fresh URL per test: shared_redis() handles are cached per URL."""
-    return f"redis://fake-host-{next(_url_seq)}:6379/0"
+    """Fresh URL per test: shared_redis() handles are cached per URL, and this module can be loaded twice under two names."""
+    return f"redis://fake-host-{uuid.uuid4().hex}:6379/0"
 
 
 # Fake redis.asyncio
@@ -54,6 +51,7 @@ class FakeRedisServer:
         self.ping_delay = 0.0
         self.data = {}
         self.hashes = {}
+        self.ttls = {}
         self.connect_attempts = 0
         # Bumped on every write: what WATCH compares at EXEC
         self.versions = {}
@@ -89,6 +87,7 @@ class FakeRedisClient:
         if nx and key in self._server.data:
             return None
         self._server.data[key] = value
+        self._server.ttls[key] = ex
         self._server.versions[key] = self._server.versions.get(key, 0) + 1
         return True
 
@@ -159,7 +158,7 @@ class FakePipeline:
         self._queue = []
 
     def set(self, key, value, ex=None):
-        self._queue.append((self._client.set, key, value))
+        self._queue.append((self._client.set, key, value, ex))
         return self
 
     def delete(self, key):

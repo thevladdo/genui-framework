@@ -449,7 +449,7 @@ class _FakeOrchestrator:
         self.calls = []
 
     async def process(self, query, user_profile=None, conversation_history=None,
-                      behavior_data=None, tenant=None):
+                      behavior_data=None, tenant=None, conversation_summary=None):
         self.calls.append(query)
         return _FakeOrchestratorResult()
 

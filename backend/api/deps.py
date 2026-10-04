@@ -8,12 +8,13 @@ from fastapi import HTTPException
 
 from auth import AuthContext
 from config import settings
-from profiles import ProfileStore
+from profiles import ChatSessionStore, ProfileStore
 from utils.rate_limit import RateLimiter
 from utils.tenant_counter import TenantCounter
 from zones import ZoneConfigStore
 
 _profile_store: Optional[ProfileStore] = None
+_session_store: Optional[ChatSessionStore] = None
 _zone_config_store: Optional[ZoneConfigStore] = None
 _llm_budget: Optional[RateLimiter] = None
 _corpus_size: Optional[TenantCounter] = None
@@ -28,6 +29,17 @@ def get_profile_store() -> ProfileStore:
             ttl_seconds=settings.profile_ttl_seconds,
         )
     return _profile_store
+
+
+def get_session_store() -> ChatSessionStore:
+    global _session_store
+    if _session_store is None:
+        _session_store = ChatSessionStore(
+            redis_url=settings.redis_url,
+            anonymous_ttl_seconds=settings.chat_session_ttl_seconds,
+            user_ttl_seconds=settings.profile_ttl_seconds,
+        )
+    return _session_store
 
 
 def get_zone_config_store() -> ZoneConfigStore:

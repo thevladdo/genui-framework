@@ -12,11 +12,15 @@ def use_memory_stores() -> None:
         import api.deps as deps
         import utils.content_policy_store as policy_store
         import utils.theme_store as theme_store
-        from profiles import ProfileStore
+        from profiles import ChatSessionStore, ProfileStore
         from zones import ZoneConfigStore
-    except ImportError:
+    except ModuleNotFoundError as e:
+        # Without fastapi the route tests skip themselves and there is no store to replace; any other missing module is a broken import, and swallowing it would leave the tests on a real Redis.
+        if e.name != "fastapi":
+            raise
         return
     policy_store._STORE = policy_store.ContentPolicyStore()
     theme_store._STORE = theme_store.ThemeStore()
     deps._profile_store = ProfileStore()
+    deps._session_store = ChatSessionStore()
     deps._zone_config_store = ZoneConfigStore()

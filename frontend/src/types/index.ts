@@ -525,6 +525,17 @@ export interface ResponseMeta {
    * backend has the disclosure turned off.
    */
   disclosure?: GenUIDisclosure;
+  /** What the server-side conversation memory did for this answer */
+  session?: ChatSessionMeta;
+}
+
+export interface ChatSessionMeta {
+  /** The answer saw the earlier messages of this conversation */
+  resumed: boolean;
+  /** This exchange is remembered; false when the backend could not reach its session store */
+  stored: boolean;
+  /** Older messages that left the context without entering the summary */
+  unsummarized: number;
 }
 
 export interface GenUIResponse {
@@ -536,6 +547,8 @@ export interface GenUIResponse {
   suggestedActions: string[];
   profileUpdates: ProfileUpdateInstruction;
   meta: ResponseMeta;
+  /** Conversation this answer belongs to, as minted by the backend */
+  sessionId?: string;
 }
 
 // ============================================
@@ -620,10 +633,9 @@ export interface UseGenUIOptions {
    */
   privacy?: PrivacyLevel;
   /**
-   * Consent from your CMP. Only an explicit `true` lets the library
-   * touch the visitor's browser (IndexedDB profile and history),
-   * capture behavior, or send a userId. Unset or false, the chat still
-   * answers: without local memory and without naming anyone.
+   * Consent from your CMP.
+   * Only an explicit `true` lets the library touch the visitor's browser (IndexedDB profile and history, the chat session id in sessionStorage), capture behavior, or send a userId.
+   * Unset or false, the chat still answers: without local memory and without naming anyone.
    */
   consent?: boolean;
   /**
@@ -653,8 +665,11 @@ export interface UseGenUIReturn {
   clearProfile: () => void;
   /** Conversation history */
   history: Array<{ role: "user" | "assistant"; content: string }>;
-  /** Clear conversation history */
-  clearHistory: () => void;
+  /**
+   * Forget the conversation: the backend deletes the session first, then the local history goes.
+   * Rejects, keeping both, when the backend did not confirm the delete.
+   */
+  clearHistory: () => Promise<void>;
   /**
    * What the host needs to tell the person they are talking to an AI:
    * a notice available before the first message, plus the marking of

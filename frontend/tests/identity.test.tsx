@@ -27,6 +27,7 @@ const ZONE_RESPONSE = {
 };
 
 const chatResponse = (text: string) => ({
+  session_id: `session-of-${text.replace(/\W/g, '-')}`,
   text,
   components: [],
   profile_updates: {
@@ -159,7 +160,7 @@ test('(a) a new userId starts a clean session: no history, profile or late answe
   });
   const bobFirst = queryBodies().at(-1);
   expect(bobFirst.user_id).toBe('bob');
-  expect(bobFirst.conversation_history).toEqual([]);
+  expect(bobFirst.session_id).toBeUndefined();
   expect(bobFirst.user_profile.userId).toBe('bob');
   expect(bobFirst.user_profile.interests).toEqual({});
   expect(bobFirst.behavior_data.userId).toBe('bob');
@@ -176,7 +177,7 @@ test('(a) a new backend is a new identity too', async () => {
     await chat.query('to backend b');
   });
   const toB = queryBodies().at(-1);
-  expect(toB.conversation_history).toEqual([]);
+  expect(toB.session_id).toBeUndefined();
   expect(toB.user_profile.interests).toEqual({});
 });
 
@@ -200,7 +201,7 @@ test('(b) revoking consent mid-session: tracker stopped, nothing identifying in 
   expect(body.user_id).toBeUndefined();
   expect(body.user_profile).toBeNull();
   expect(body.behavior_data).toBeNull();
-  expect(body.conversation_history).toEqual([]);
+  expect(body.session_id).toBeUndefined();
   expect(JSON.stringify(body)).not.toContain('alice');
 });
 

@@ -308,6 +308,7 @@ security regulations. The implementation is handled by your technical team..."
         user_profile: Optional[UserProfile] = None,
         conversation_history: Optional[List[Dict]] = None,
         retrieved_context: Optional[str] = None,
+        conversation_summary: Optional[str] = None,
     ) -> str:
         """Build the full prompt for the agent."""
         parts = []
@@ -316,11 +317,14 @@ security regulations. The implementation is handled by your technical team..."
         if user_profile:
             parts.append(f"<user_profile>\n{user_profile.to_context()}\n</user_profile>")
         
-        # Conversation history
+        if conversation_summary:
+            parts.append(f"<conversation_summary>\n{conversation_summary}\n</conversation_summary>")
+
+        # Already cut to the window by the caller
         if conversation_history:
             history_text = "\n".join([
                 f"{msg['role']}: {msg['content']}" 
-                for msg in conversation_history[-5:]  # Last 5 messages
+                for msg in conversation_history
             ])
             parts.append(f"<conversation_history>\n{history_text}\n</conversation_history>")
         
@@ -357,6 +361,7 @@ security regulations. The implementation is handled by your technical team..."
         user_profile: Optional[Dict[str, Any]] = None,
         conversation_history: Optional[List[Dict]] = None,
         tenant: Optional[str] = None,
+        conversation_summary: Optional[str] = None,
     ) -> AgentResponse:
         """
         Process a user query and generate a structured response asynchronously.
@@ -366,6 +371,7 @@ security regulations. The implementation is handled by your technical team..."
             user_profile: User profile data from IndexedDB
             conversation_history: Recent conversation messages
             tenant: Tenant scope for knowledge-base retrieval
+            conversation_summary: Summary of the conversation before the history; not an input the guards whitelist from, since it is model output
 
         Returns:
             AgentResponse with structured components for GenUI
@@ -384,6 +390,7 @@ security regulations. The implementation is handled by your technical team..."
             user_profile=profile,
             conversation_history=conversation_history,
             retrieved_context=retrieved_context,
+            conversation_summary=conversation_summary,
         )
 
         # Model-invoked searches: tenant is captured from THIS request,

@@ -4,13 +4,14 @@ FastAPI application exposing the multi-agent system for GenUI frontend.
 """
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Form, Query, Request, Security, UploadFile
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Form, Path, Query, Request, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from api.deps import (
@@ -18,7 +19,9 @@ from api.deps import (
     budget_tenant,
     charge_llm_budget,
     get_corpus_size,
+    get_llm_budget,
     get_profile_store,
+    get_session_store,
 )
 from api.audit_router import router as audit_router
 from api.content_policy_router import router as content_policy_router
@@ -39,11 +42,13 @@ from auth.dependencies import (
 )
 from auth.identity import AuthError
 from llm.embeddings import EmbeddingConfigError
-from llm.factory import llm_configured
+from llm.factory import create_llm_client, llm_configured
 from config import settings
 from agents import get_orchestrator, OrchestratorResult
 from metrics.ops import get_ops_metrics
-from profiles import is_identified
+from auth.keys import fingerprint
+from profiles import is_identified, new_session_id
+from profiles.sessions import SESSION_ID_PATTERN
 from rag import create_chunker, get_vector_store
 from rag.chunker import cutting_embeddings
 from rag import extractors, ingest_status
@@ -86,9 +91,18 @@ class QueryRequest(BaseModel):
         description="Client-side profile (IndexedDB cache). Used to seed the "
                     "server profile; ignored when a server profile exists"
     )
+    session_id: Optional[str] = Field(
+        default=None,
+        pattern=SESSION_ID_PATTERN,
+        description="Conversation to continue, as returned by a previous answer. "
+                    "The server keeps its recent messages and a summary of the "
+                    "older ones; absent, unknown or not readable by this caller, "
+                    "a new session starts"
+    )
     conversation_history: Optional[List[ChatMessage]] = Field(
         default=None,
-        description="Recent conversation messages for context"
+        description="For clients that do not send session_id: recent messages, "
+                    "cut to CHAT_WINDOW_MESSAGES. Ignored when session_id is sent"
     )
     behavior_data: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -136,6 +150,15 @@ class MetaInfo(BaseModel):
                     "provenance, generated_at, system. Absent when the "
                     "operator set GENUI_DISCLOSURE_OFF"
     )
+    session: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="What the conversation memory did: resumed (the answer "
+                    "saw this session's earlier messages), stored (this "
+                    "exchange is remembered; false when the session store "
+                    "did not answer), unsummarized (messages that left the "
+                    "window without entering the summary, for lack of budget "
+                    "or a failed summary call)"
+    )
 
 
 class QueryResponse(BaseModel):
@@ -146,6 +169,7 @@ class QueryResponse(BaseModel):
                     "older frontend bundles use it to detect newer contracts "
                     "and silently skip unknown component types."
     )
+    session_id: str = Field(..., description="Session to send with the next message of this conversation")
     text: str = Field(..., description="Main text response")
     components: List[ComponentData] = Field(
         default_factory=list,
@@ -443,6 +467,11 @@ async def process_query(
         cost=orchestrator.planned_generations(request.behavior_data),
     )
 
+    sessions = get_session_store()
+    session_id, session, reachable = await _open_session(
+        sessions, auth.tenant, request.session_id, request.user_id
+    )
+
     try:
         profile_store = get_profile_store()
 
@@ -459,10 +488,16 @@ async def process_query(
             except Exception as e:
                 logger.warning(f"Profile resolution failed for {request.user_id}: {e}")
 
-        # Convert conversation history to dict format
+        summary = None
         history = None
-        if request.conversation_history:
-            history = [{"role": m.role, "content": m.content} for m in request.conversation_history]
+        if session is not None:
+            history = session["messages"]
+            summary = session.get("summary") or None
+        elif request.session_id is None and request.conversation_history:
+            history = [
+                {"role": m.role, "content": m.content}
+                for m in request.conversation_history[-settings.chat_window_messages:]
+            ]
 
         # Process through orchestrator with async. 
         # The span ties the genui.llm.* client spans to this query,
@@ -477,6 +512,7 @@ async def process_query(
                     conversation_history=history,
                     behavior_data=request.behavior_data,
                     tenant=auth.tenant,
+                    conversation_summary=summary,
                 )
         except Exception:
             ops.observe_generation(auth.tenant, "query", outcome="error")
@@ -496,6 +532,17 @@ async def process_query(
             except Exception as e:
                 logger.warning(f"Profile update persistence failed: {e}")
 
+        session_meta = {"resumed": session is not None, "stored": False, "unsummarized": 0}
+        if reachable:
+            try:
+                session_meta["unsummarized"] = await _remember_exchange(
+                    sessions, auth, session_id, session, request.user_id,
+                    request.query, frontend_response["text"],
+                )
+                session_meta["stored"] = True
+            except StoreUnavailable as e:
+                logger.warning(f"Chat session not saved: {e}")
+
         # The question is free text a visitor may fill with anything, special categories included: the line records what was answered, never what was asked.
         get_audit_logger().log(
             "query",
@@ -505,6 +552,9 @@ async def process_query(
             confidence=frontend_response["meta"].get("confidence"),
             component_count=len(frontend_response["components"]),
             profile_updates_applied=len(profile_updates.get("updates", [])),
+            session=fingerprint(session_id),
+            context_messages=len(history or []),
+            summary_used=summary is not None,
         )
         
         # Build meta info with optional behavior data
@@ -521,6 +571,7 @@ async def process_query(
         )
         
         return QueryResponse(
+            session_id=session_id,
             text=frontend_response["text"],
             components=[ComponentData(**c) for c in frontend_response["components"]],
             sources=frontend_response["sources"],
@@ -534,12 +585,111 @@ async def process_query(
                 behavior=behavior_meta,
                 sanitization=meta_data.get("sanitization"),
                 disclosure=meta_data.get("disclosure"),
+                session=session_meta,
             ),
         )
         
     except Exception as e:
         logger.error(f"Query processing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _open_session(store, tenant: str, requested: Optional[str], user_id: Optional[str]):
+    """
+    (session_id, record, reachable) for this request.
+
+    A stored session is used only when it exists in this tenant and belongs to the same verified user, None for an anonymous one.
+    Anything else (another tenant, another user, expired, an anonymous session presented after login) is a session this caller cannot read: a new id is minted, never the one the client sent.
+    With the store unreachable the requested id is kept, so the conversation resumes when the store is back.
+    """
+    try:
+        record = await store.get(tenant, requested) if requested else None
+    except StoreUnavailable as e:
+        logger.warning(f"Chat session store unreachable, answering without memory: {e}")
+        return requested or new_session_id(), None, False
+    if record is not None and record.get("user_id") == user_id:
+        return requested, record, True
+    return new_session_id(), None, True
+
+
+_SUMMARY_SYSTEM = (
+    "You keep the running summary of a conversation between a user and an assistant. "
+    "Rewrite the summary so that it also covers the new messages: what the user said about themselves, "
+    "what they asked, what was answered, what is still open. "
+    "At most 120 words, third person, no greetings. "
+    'Respond with JSON: {"summary": "..."}'
+)
+_SUMMARY_MAX_CHARS = 2000
+
+
+async def _remember_exchange(store, auth: AuthContext, session_id: str, record, user_id, question: str, answer: str) -> int:
+    """
+    Append the exchange to the session, keep the last CHAT_WINDOW_MESSAGES and fold the older ones into the summary.
+    The fold is one generation, charged to the tenant budget before it is spent.
+    Without budget, or when the call fails, the window slides anyway and the summary stays as it was: the dropped messages are counted instead.
+    Two messages in flight on one session keep only the exchange saved last; a chat sends one at a time.
+    Returns the messages left out of the summary so far.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    record = dict(record or {"user_id": user_id, "summary": "", "unsummarized": 0, "created_at": now})
+    messages = record.get("messages", []) + [
+        {"role": "user", "content": question},
+        {"role": "assistant", "content": answer},
+    ]
+    window = settings.chat_window_messages
+    overflow, record["messages"] = messages[:-window], messages[-window:]
+
+    if overflow:
+        tenant = budget_tenant(auth)
+        folded = None
+        if tenant is None or await get_llm_budget().allow(tenant, cost=1):
+            folded = await _fold_summary(record.get("summary", ""), overflow, auth.tenant)
+        if folded:
+            record["summary"] = folded
+        else:
+            record["unsummarized"] = record.get("unsummarized", 0) + len(overflow)
+
+    record["updated_at"] = now
+    await store.save(auth.tenant, session_id, record)
+    return record.get("unsummarized", 0)
+
+
+async def _fold_summary(summary: str, messages: List[Dict[str, str]], tenant: str) -> Optional[str]:
+    transcript = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+    ops = get_ops_metrics()
+    started = time.perf_counter()
+    try:
+        raw = await create_llm_client(settings.profile_model).complete_json(
+            _SUMMARY_SYSTEM,
+            f"<summary>\n{summary}\n</summary>\n\n<new_messages>\n{transcript}\n</new_messages>",
+        )
+        folded = str(json.loads(raw).get("summary", "")).strip()
+    except Exception as e:
+        ops.observe_generation(tenant, "chat_summary", outcome="error")
+        logger.warning(f"Chat summary failed, the window slides without it: {e}")
+        return None
+    ops.observe_generation(tenant, "chat_summary", time.perf_counter() - started)
+    return folded[:_SUMMARY_MAX_CHARS] or None
+
+
+@app.delete("/api/v1/query/sessions/{session_id}")
+async def delete_chat_session(
+    session_id: str = Path(..., pattern=SESSION_ID_PATTERN),
+    auth: AuthContext = Depends(require_client),
+    user_token: Optional[str] = Security(USER_TOKEN_HEADER),
+):
+    """
+    Forget a conversation: its recent messages and its summary.
+
+    A session with a user is deleted only with that user's identity, as every per-user route; an anonymous one by whoever holds its id.
+    With the store unreachable it is a 503 and nothing was deleted.
+    """
+    store = get_session_store()
+    record = await store.get(auth.tenant, session_id)
+    if record is None:
+        return {"deleted": False}
+    check_user_access(auth, record.get("user_id"), user_token)
+    return {"deleted": await store.delete(auth.tenant, session_id)}
 
 
 # Chunks enriched and written down together
@@ -1364,24 +1514,22 @@ async def export_user_data(
     """
     Everything this deployment holds about one person (GDPR Art. 15).
 
-    Two things, because there are only two: the stored profile, and the
-    audit entries that name this user (renders served, queries asked,
-    impressions and clicks, profile changes and erasures). The rest of
-    the state is aggregate or tenant-level: cached renders belong to a
-    segment, event counters to a zone and an arm, themes and zone
-    configs to the operator, and none of them is keyed by a person.
+    Three things, because there are only three: the stored profile, the chat sessions started while identified (recent messages and summary), and the audit entries that name this user (renders served, chat answers without the question, impressions and clicks, profile changes and erasures).
+    The rest of the state is aggregate or tenant-level: cached renders belong to a segment, event counters to a zone, an experiment and an arm, themes and zone configs to the operator, and none of them is keyed by a person.
+    Anonymous chat sessions name no one and are not here: they expire.
 
-    Same identity guard as the other per-user routes: a badly guarded
-    export route is a data breach wearing a compliance label. The audit
-    side reuses the read path of the trail, so filtering and tenant
-    scoping cannot drift from the one the audit viewer uses; when the
-    trail lives in the host's log pipeline it says so (queryable=false)
-    rather than reporting an empty history.
+    Same identity guard as the other per-user routes: a badly guarded export route is a data breach wearing a compliance label.
+    The audit side reuses the read path of the trail, so filtering and tenant scoping cannot drift from the one the audit viewer uses; when the trail lives in the host's log pipeline it says so (queryable=false) rather than reporting an empty history.
     """
     check_user_access(auth, user_id, user_token)
 
     store = get_profile_store()
     profile = await store.get(auth.tenant, user_id)
+    # ref is the fingerprint the audit trail records for each query of the session; the id itself is a credential and stays out
+    chat_sessions = [
+        {"ref": fingerprint(session_id), **record}
+        for session_id, record in await get_session_store().sessions_of(auth.tenant, user_id)
+    ]
 
     reader = get_audit_reader()
     # Blocking file reads: off the event loop, like the audit viewer route
@@ -1395,6 +1543,7 @@ async def export_user_data(
         user_id=user_id,
         key=auth.key_fingerprint,
         profile_found=profile is not None,
+        chat_sessions=len(chat_sessions),
         audit_entries=len(audit["entries"]),
     )
 
@@ -1403,6 +1552,7 @@ async def export_user_data(
         "tenant": auth.tenant,
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "profile": profile,
+        "chat_sessions": chat_sessions,
         "audit": {
             "source": reader.source,
             "queryable": reader.queryable,
@@ -1421,7 +1571,7 @@ async def delete_profile(
     """
     Erase a user profile (GDPR right-to-erasure).
 
-    What goes: the profile, which is the whole of the personalization data held about this person.
+    What goes: the profile and the chat sessions started while identified, which are the whole of the personalization and conversation data held about this person.
     Nothing else is keyed by a user.
 
     What stays: the audit trail.
@@ -1430,11 +1580,12 @@ async def delete_profile(
     So it is bounded instead of edited, by rotation on the file sink and by the pipeline's retention policy otherwise, and the erasure itself is recorded in it, so a later export shows when the right was exercised.
 
     The response says which of the two happened, rather than reporting a clean "deleted" that would overstate it.
-    It answers only after the store confirmed the delete: with the store unreachable it is a 503 saying the profile was NOT erased, and the attempt is on the trail.
+    It answers only after the stores confirmed the delete: with a store unreachable it is a 503 saying the data was NOT erased, and the attempt is on the trail.
     """
     check_user_access(auth, user_id, user_token)
     store = get_profile_store()
     try:
+        sessions_erased = await get_session_store().delete_user(auth.tenant, user_id)
         existed = await store.delete(auth.tenant, user_id)
     except StoreUnavailable as e:
         get_audit_logger().log(
@@ -1446,7 +1597,7 @@ async def delete_profile(
         )
         raise HTTPException(
             status_code=503,
-            detail=f"The profile was NOT erased. {e}",
+            detail=f"The profile and its chat sessions were NOT erased. {e}",
             headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
         )
 
@@ -1457,6 +1608,7 @@ async def delete_profile(
         key=auth.key_fingerprint,
         outcome="erased",
         existed=existed,
+        chat_sessions_erased=sessions_erased,
     )
 
     return {
@@ -1464,13 +1616,14 @@ async def delete_profile(
         "user_id": user_id,
         "existed": existed,
         "profile_erased": True,
+        "chat_sessions_erased": sessions_erased,
         "audit_retained": settings.audit_log_enabled,
         "note": (
-            "The profile is erased. Audit entries naming this user are kept: "
+            "The profile and chat sessions are erased. Audit entries naming this user are kept: "
             "the trail is append-only accountability evidence, bounded by the "
             "configured retention instead of edited."
             if settings.audit_log_enabled
-            else "The profile is erased. Auditing is disabled on this deployment."
+            else "The profile and chat sessions are erased. Auditing is disabled on this deployment."
         ),
     }
 

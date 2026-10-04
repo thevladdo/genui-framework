@@ -318,6 +318,20 @@ class Settings(BaseSettings):
                     "bounded by size and lost on restart"
     )
 
+    # Chat sessions
+    chat_window_messages: int = Field(
+        default=6, ge=2,
+        description="Messages of a conversation the server sends to the model "
+                    "with each new question (6 = the last three exchanges). "
+                    "Older ones are folded into a running summary"
+    )
+    chat_session_ttl_seconds: int = Field(
+        default=1800, ge=60,
+        description="Lifetime of a chat session without an identified user, "
+                    "refreshed on every message. A session with a user follows "
+                    "PROFILE_TTL_SECONDS"
+    )
+
     # Experimentation (personalization uplift measurement)
     holdout_percent: float = Field(
         default=0.0, ge=0.0, le=100.0,
