@@ -144,20 +144,53 @@ note_in() { printf '  IN    %s\n' "$1"; }
 
 provider="$(val LLM_PROVIDER)"
 base_url="$(val OPENAI_BASE_URL)"
-case "${provider:-openai}" in
-  openai)
-    if [ -n "$base_url" ] && is_local_url "$base_url"; then
-      note_in "Generation prompts -> $base_url (inside your network)"
-    elif [ -n "$base_url" ]; then
-      note_out "Generation prompts -> $base_url (OpenAI-compatible endpoint outside your network)"
-    else
-      note_out "Generation prompts -> OpenAI API"
-    fi
-    ;;
-  anthropic) note_out "Generation prompts -> Anthropic API" ;;
-  gemini) note_out "Generation prompts -> Google Gemini API" ;;
-  *) note_out "Generation prompts -> LLM_PROVIDER='$provider' (unrecognised here; the backend fails loudly at startup on an unknown provider)" ;;
-esac
+
+# Provider of a role setting, read the way the backend reads it: "provider:model"
+# names the provider, a bare model runs on LLM_PROVIDER.
+spec_provider() {
+  case "$1" in
+    *:*) printf '%s' "${1%%:*}" | tr '[:upper:]' '[:lower:]' ;;
+    *) printf '%s' "${provider:-openai}" | tr '[:upper:]' '[:lower:]' ;;
+  esac
+}
+
+roles_openai=""
+roles_anthropic=""
+roles_gemini=""
+roles_unknown=""
+for role in zone chat profile behavior context summary; do
+  var="LLM_$(printf '%s' "$role" | tr '[:lower:]' '[:upper:]')"
+  for suffix in "" _FALLBACK; do
+    spec="$(val "$var$suffix")"
+    [ -n "$suffix" ] && [ -z "$spec" ] && continue
+    label="$role${suffix:+ fallback}"
+    case "$(spec_provider "$spec")" in
+      openai) roles_openai="${roles_openai:+$roles_openai, }$label" ;;
+      anthropic) roles_anthropic="${roles_anthropic:+$roles_anthropic, }$label" ;;
+      gemini | google) roles_gemini="${roles_gemini:+$roles_gemini, }$label" ;;
+      *)
+        source_var="LLM_PROVIDER"
+        [ -n "$spec" ] && source_var="$var$suffix"
+        roles_unknown="${roles_unknown:+$roles_unknown, }$label ($source_var)"
+        ;;
+    esac
+  done
+done
+
+[ -n "$roles_unknown" ] \
+  && fail "Unknown LLM provider for: $roles_unknown. The backend reports these roles on /ready and never calls them."
+
+if [ -n "$roles_openai" ]; then
+  if [ -n "$base_url" ] && is_local_url "$base_url"; then
+    note_in "Generation prompts ($roles_openai) -> $base_url (inside your network)"
+  elif [ -n "$base_url" ]; then
+    note_out "Generation prompts ($roles_openai) -> $base_url (OpenAI-compatible endpoint outside your network)"
+  else
+    note_out "Generation prompts ($roles_openai) -> OpenAI API"
+  fi
+fi
+[ -n "$roles_anthropic" ] && note_out "Generation prompts ($roles_anthropic) -> Anthropic API"
+[ -n "$roles_gemini" ] && note_out "Generation prompts ($roles_gemini) -> Google Gemini API"
 echo "        Cached zone renders carry the segment archetype, not the visitor's profile."
 echo "        Live renders carry the individual profile; /query carries the question text,"
 echo "        recent history, the profile and the retrieved chunks. No user id, no API key."

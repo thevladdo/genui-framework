@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import json
 
 from config import settings
-from llm import create_llm_client
+from llm import Role, answered_model, create_llm_client
 from rag import get_vector_store, build_context_from_results
 from schemas import builtin_catalog, component_to_dict, validate_components
 from utils.content_policy_store import effective_policy
@@ -286,7 +286,6 @@ security regulations. The implementation is handled by your technical team..."
 
     def __init__(
         self,
-        model: str = None,
         vector_store=None,
         llm_client=None,
     ):
@@ -294,13 +293,11 @@ security regulations. The implementation is handled by your technical team..."
         Initialize the Response Agent.
 
         Args:
-            model: LLM model identifier
             vector_store: QdrantVectorStore instance (created if not provided)
             llm_client: LLMChatClient instance (created if not provided)
         """
-        self.model = model or settings.response_model
         self.vector_store = vector_store or get_vector_store()
-        self.llm = llm_client or create_llm_client(self.model)
+        self.llm = llm_client or create_llm_client(Role.CHAT)
 
     def _build_query_prompt(
         self,
@@ -521,7 +518,7 @@ security regulations. The implementation is handled by your technical team..."
                         component_dicts + [{"data": {"content": text_response}}],
                         corpus,
                     ),
-                    model=self.model,
+                    model=answered_model(self.llm),
                     enabled=not settings.genui_disclosure_off,
                     expose_model=settings.disclosure_expose_model,
                 ),

@@ -57,7 +57,7 @@ from memory_stores import use_memory_stores
 try:  # app-level deps: available in the backend venv, not in the shell python
     from agents.zone_agent import ZoneAgent, ZoneRenderRequest
     from config import settings
-    from llm import create_llm_client
+    from llm import Role, create_llm_client
     HAVE_APP_DEPS = True
 except ImportError:
     HAVE_APP_DEPS = False
@@ -356,7 +356,6 @@ def _run_pipeline(fixture, llm_client):
         archetype=req.get("archetype") or None,
     )
     agent = ZoneAgent(
-        model="golden-harness",
         vector_store=_FakeStore(fixture.get("retrieved") or []),
         llm_client=llm_client,
     )
@@ -401,7 +400,7 @@ class TestGoldenZonesLive(_GoldenBase):
     def test_live_engine_holds_invariants(self):
         for path, fixture in _load_fixtures():
             with self.subTest(fixture=path.stem):
-                recorder = _RecordingLLM(create_llm_client(settings.response_model))
+                recorder = _RecordingLLM(create_llm_client(Role.ZONE))
                 result = _run_pipeline(fixture, recorder)
                 self._assert_golden(path.stem, fixture, result)
                 if RECORD and recorder.last_text:

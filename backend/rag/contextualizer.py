@@ -12,7 +12,7 @@ import logging
 from typing import Awaitable, Callable, List, Optional
 
 from config import settings
-from llm import create_llm_client
+from llm import Role, create_llm_client
 
 from .chunker import CHARS_PER_TOKEN, SemanticChunk
 
@@ -67,7 +67,7 @@ def prompt_cache_mode() -> str:
     which of the two they are about to buy.
     """
     try:
-        return create_llm_client(settings.context_model).prompt_cache
+        return create_llm_client(Role.CONTEXT).prompt_cache
     except Exception as e:
         logger.warning("Could not resolve the prompt cache mode: %s", e)
         return "unknown"
@@ -123,7 +123,7 @@ async def contextualize(
     if not chunks:
         return 0
 
-    client = create_llm_client(settings.context_model)
+    client = create_llm_client(Role.CONTEXT)
     gate = asyncio.Semaphore(_CONCURRENCY)
     state = {"consecutive_failures": 0, "abandoned": False}
 

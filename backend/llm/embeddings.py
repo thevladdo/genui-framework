@@ -23,7 +23,7 @@ from typing import List, Optional
 
 from utils.tracing import span
 
-from .factory import GEMINI_OPENAI_BASE_URL
+from .routing import GEMINI_OPENAI_BASE_URL
 
 logger = logging.getLogger(__name__)
 

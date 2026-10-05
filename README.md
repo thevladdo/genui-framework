@@ -249,6 +249,21 @@ ZONE_MAX_COMPONENTS=2
 # LLM_PROVIDER=gemini    + GOOGLE_API_KEY=...      (no extra package)
 ```
 
+**A model per role.** Every model call belongs to one of 6 roles: `zone` (zone renders), `chat` (`/query` answers), `profile` and `behavior` (profile facts from a message or from browsing), `summary` (the chat session summary) and `context` (chunk context at indexing time). With nothing else set, `zone` and `chat` use `RESPONSE_MODEL`, `context` uses `CONTEXT_MODEL`, the rest use `PROFILE_MODEL`, all on `LLM_PROVIDER`. To move one role, write `LLM_<ROLE>`:
+
+```env
+LLM_ZONE=anthropic:claude-sonnet-5     # provider:model
+LLM_PROFILE=openai:qwen3:8b            # "openai" here means OPENAI_BASE_URL, e.g. a local vLLM
+LLM_SUMMARY=gpt-4o-mini                # a bare model runs on LLM_PROVIDER
+LLM_ZONE_FALLBACK=openai:gpt-4o-mini   # optional, see below
+```
+
+Keys and endpoints belong to the provider, not the role: `OPENAI_API_KEY` and `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`. One role on Anthropic or Gemini and the rest on a local `OPENAI_BASE_URL` works. One role on OpenAI's API and another on a local endpoint doesn't, in the same deployment. A model name with a colon (Ollama tags) needs its provider in front, `openai:qwen3:8b`, because only a known provider counts as a prefix. Anything else before the colon is an error, not a model name.
+
+A role that cannot be called fails `/ready` (503). The body lists the role and the variable, `"llm_unconfigured": ["zone (LLM_ZONE)"]`, and the startup log says what is missing. That includes an unknown provider. A model never changes at runtime unless you wrote `LLM_<ROLE>_FALLBACK`. Then a provider error on that role is answered by the fallback, counted in `genui_llm_fallbacks_total{role, from_model, to_model}`, and the disclosure, when it names the model, names the fallback. Without it, a provider error is an error.
+
+The default model is `gpt-4o-mini` in the code and in both example env files. Change it, or any role's model, after running the [golden harness](#golden-harness--regression-signal-for-promptmodelengine-changes) in live mode against the candidate, not because a newer model came out.
+
 ### Step 4 — Start and verify the backend
 
 ```bash
@@ -1325,10 +1340,10 @@ Three properties worth knowing:
 
 By default, zone renders are **not** generated per user per request. Users are collapsed into a small number of deterministic **segments** (role, top interests, browsing style, engagement), and each `(zone config, segment)` pair is rendered once and cached with **stale-while-revalidate** semantics:
 
-| Cache state                              | Behavior                                                                                                                                                                                                     |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **fresh** (age ≤ `ZONE_CACHE_FRESH_TTL`) | Served from cache, no LLM call                                                                                                                                                                               |
-| **stale** (age ≤ `ZONE_CACHE_STALE_TTL`) | Served instantly from cache, re-rendered in background (single-flight)                                                                                                                                       |
+| Cache state                              | Behavior                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **fresh** (age ≤ `ZONE_CACHE_FRESH_TTL`) | Served from cache, no LLM call                                                                                                                                                                                                                                                                                      |
+| **stale** (age ≤ `ZONE_CACHE_STALE_TTL`) | Served instantly from cache, re-rendered in background (single-flight)                                                                                                                                                                                                                                              |
 | **miss**                                 | Rendered live (cold start), then cached for the whole segment. Single-flight too: concurrent requests for the same key coalesce on one generation (`status: "coalesced"`) instead of each paying an LLM call. A request still waiting after 15 seconds gets a 503 with `Retry-After`, never a generation of its own |
 
 Anonymous users with no profile signals share a single `anon` segment, typically the most-hit cache entry. Changing any zone configuration (prompts, pinned content, constraints) automatically invalidates its cache entries.
@@ -1613,13 +1628,13 @@ So the whole library runs off one switch:
 <GenUIZone apiUrl={API} zoneId="home" userId={user.id} consent={cmpConsent} />
 ```
 
-| Without `consent={true}`                               | With `consent={true}`                         |
-| ------------------------------------------------------ | --------------------------------------------- |
+| Without `consent={true}`                                    | With `consent={true}`                                                           |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | Nothing written to or read from IndexedDB or sessionStorage | Profile and chat history cached on the device, chat session id kept for the tab |
-| No `userId` in the render, chat or event requests      | `userId` sent, server-side profile applies    |
-| Behavior tracker never starts, no behavior in the body | Tracker runs at the `privacy` level you chose |
-| Content served from the anonymous segment              | Content served from the visitor's own segment |
-| The zone renders                                       | The zone renders                              |
+| No `userId` in the render, chat or event requests           | `userId` sent, server-side profile applies                                      |
+| Behavior tracker never starts, no behavior in the body      | Tracker runs at the `privacy` level you chose                                   |
+| Content served from the anonymous segment                   | Content served from the visitor's own segment                                   |
+| The zone renders                                            | The zone renders                                                                |
 
 **The degraded mode is a product level, not a failure.** Anonymous requests take the path the framework already runs for every visitor nobody logged in and for the control arm of a holdout: the segment key collapses to `anon`, and the render is generated from the segment archetype rather than from an individual. The result is personalization that stores nothing on the device, uses no persistent identifier, and computes its segment from the request in front of it. That is a page that can be personalized before anyone clicks a banner. The step up from it, once your CMP has an answer, is one prop.
 
@@ -1670,17 +1685,17 @@ A record of what was shown to whom is worth nothing if the party who showed it c
 
 Storage limitation is configuration here, and this is the only place the defaults are written down:
 
-| Data                          | Knob                                             | Default         | Notes                                                                          |
-| ----------------------------- | ------------------------------------------------ | --------------- | ------------------------------------------------------------------------------ |
-| Server-side profile           | `PROFILE_TTL_SECONDS`                            | 90 days         | Refreshed on every write, so it expires after inactivity. `0` = keep forever   |
-| Chat session, identified user | `PROFILE_TTL_SECONDS`                            | 90 days         | Same clock as the profile, refreshed on every message; exported and erased with it |
-| Chat session, anonymous       | `CHAT_SESSION_TTL_SECONDS`                       | 30 min          | Refreshed on every message; no user, no index, it just expires                 |
-| Audit trail (file sink)       | `AUDIT_LOG_MAX_BYTES` · `AUDIT_LOG_BACKUP_COUNT` | 50 MB × 5 files | Size-bounded, not time-bounded: rotation drops the oldest file                 |
-| Audit trail (production sink) | your log pipeline                                | your policy     | The lines are emitted on the `genui.audit` logger and retained where they land |
-| Cached renders                | `ZONE_CACHE_STALE_TTL`                           | 24 h            | Per segment, never per person                                                  |
-| Event counters                | none                                             | kept            | Aggregate per zone and arm, no identifiers                                     |
-| IndexedDB profile and history | the visitor                                      | until cleared   | Only written with consent; `clearProfile()` / `clearHistory()` erase it        |
-| Chat session id in the browser | the visitor                                     | the tab         | `sessionStorage`, only with consent; dropped when the identity changes, on the page or at the next load |
+| Data                           | Knob                                             | Default         | Notes                                                                                                   |
+| ------------------------------ | ------------------------------------------------ | --------------- | ------------------------------------------------------------------------------------------------------- |
+| Server-side profile            | `PROFILE_TTL_SECONDS`                            | 90 days         | Refreshed on every write, so it expires after inactivity. `0` = keep forever                            |
+| Chat session, identified user  | `PROFILE_TTL_SECONDS`                            | 90 days         | Same clock as the profile, refreshed on every message; exported and erased with it                      |
+| Chat session, anonymous        | `CHAT_SESSION_TTL_SECONDS`                       | 30 min          | Refreshed on every message; no user, no index, it just expires                                          |
+| Audit trail (file sink)        | `AUDIT_LOG_MAX_BYTES` · `AUDIT_LOG_BACKUP_COUNT` | 50 MB × 5 files | Size-bounded, not time-bounded: rotation drops the oldest file                                          |
+| Audit trail (production sink)  | your log pipeline                                | your policy     | The lines are emitted on the `genui.audit` logger and retained where they land                          |
+| Cached renders                 | `ZONE_CACHE_STALE_TTL`                           | 24 h            | Per segment, never per person                                                                           |
+| Event counters                 | none                                             | kept            | Aggregate per zone and arm, no identifiers                                                              |
+| IndexedDB profile and history  | the visitor                                      | until cleared   | Only written with consent; `clearProfile()` / `clearHistory()` erase it                                 |
+| Chat session id in the browser | the visitor                                      | the tab         | `sessionStorage`, only with consent; dropped when the identity changes, on the page or at the next load |
 
 `PROFILE_TTL_SECONDS` and `CHAT_SESSION_TTL_SECONDS` apply to the Redis store. Without Redis the in-memory stores are bounded by size and lost on restart; with Redis there is no in-memory copy.
 
@@ -1867,8 +1882,18 @@ GET /api/v1/events/stats?zone_id=homepage-for-you   (admin key)
   "experiment": "genui-exp-1",
   "unit": "event",
   "arms": {
-    "personalized": { "impression": 5400, "click": 540, "ctr": 0.1, "verified": { "impression": 4100, "click": 420 } },
-    "control": { "impression": 600, "click": 30, "ctr": 0.05, "verified": { "impression": 450, "click": 22 } }
+    "personalized": {
+      "impression": 5400,
+      "click": 540,
+      "ctr": 0.1,
+      "verified": { "impression": 4100, "click": 420 }
+    },
+    "control": {
+      "impression": 600,
+      "click": 30,
+      "ctr": 0.05,
+      "verified": { "impression": 450, "click": 22 }
+    }
   },
   "uplift_percent": 100.0,
   "significance": {
@@ -1929,14 +1954,17 @@ scrape_configs:
     static_configs: [{ targets: ["genui-backend:8000"] }]
 ```
 
-| Metric                                          | Labels                 | Meaning                                                                                                                  |
-| ----------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `genui_http_requests_total`                     | `method, path, status` | Requests per route template (unmatched paths collapse into `path="unmatched"`)                                           |
-| `genui_http_request_seconds_sum/_count`         | `method, path`         | Request latency (average via `rate(sum)/rate(count)`)                                                                    |
-| `genui_zone_renders_total`                      | `tenant, cache`        | Served renders per cache outcome: `fresh`, `stale`, `miss`, `coalesced`, `bypass`                                        |
-| `genui_llm_generations_total`                   | `tenant, op, outcome`  | LLM generations (`op`: `zone` or `query`; `outcome`: `ok` or `error`). This is the spend meter for the tenant's BYOK key |
-| `genui_llm_generation_seconds_sum/_count`       | `tenant, op`           | Generation latency                                                                                                       |
-| `genui_redis_connected`, `genui_llm_configured` |                        | Dependency gauges computed at scrape time                                                                                |
+| Metric                                          | Labels                           | Meaning                                                                                                                                                                               |
+| ----------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `genui_http_requests_total`                     | `method, path, status`           | Requests per route template (unmatched paths collapse into `path="unmatched"`)                                                                                                        |
+| `genui_http_request_seconds_sum/_count`         | `method, path`                   | Request latency (average via `rate(sum)/rate(count)`)                                                                                                                                 |
+| `genui_zone_renders_total`                      | `tenant, cache`                  | Served renders per cache outcome: `fresh`, `stale`, `miss`, `coalesced`, `bypass`                                                                                                     |
+| `genui_llm_generations_total`                   | `tenant, op, outcome`            | LLM generations (`op`: `zone` or `query`; `outcome`: `ok` or `error`). This is the spend meter for the tenant's BYOK key                                                              |
+| `genui_llm_generation_seconds_sum/_count`       | `tenant, op`                     | Generation latency                                                                                                                                                                    |
+| `genui_llm_model_calls_total`                   | `role, provider, model, outcome` | Every call to a model, labelled with the role that made it and the model that served it. A zone render that failed and fell back to pinned content counts `ok` above and `error` here |
+| `genui_llm_model_call_seconds_sum/_count`       | `role, model`                    | Latency per role and model                                                                                                                                                            |
+| `genui_llm_fallbacks_total`                     | `role, from_model, to_model`     | Calls answered by a declared `LLM_<ROLE>_FALLBACK`                                                                                                                                    |
+| `genui_redis_connected`, `genui_llm_configured` |                                  | Dependency gauges computed at scrape time                                                                                                                                             |
 
 The counters live in Redis (same shared handle as the stores), so every worker increments the same values and any worker serves a truthful scrape; during a Redis blip counts fall back to process memory and merge into the next scrape. The queries an SRE actually runs:
 
@@ -2068,17 +2096,17 @@ function navigateTo(path: string) {
 
 The knowledge base feeds the AI real content to curate (and its URLs feed the whitelist). **Every operation is scoped to the tenant of the API key**: tenant A can never retrieve, list, or delete tenant B's documents. Documents indexed before tenant isolation belong to the `default` tenant. All endpoints require an **admin key**.
 
-| Endpoint                                    | What it does                                                                                                                                                                                    |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Endpoint                                    | What it does                                                                                                                                                                                                                                    |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /api/v1/documents/upload`             | Upload a **file** (PDF, DOCX, HTML, TXT, MD, up to `MAX_UPLOAD_MB`, 50 by default, multipart; past that, 413): text extracted server-side off the event loop, chunked, indexed. Images (PNG/JPG/WEBP/TIFF) too with a capable extractor backend |
-| `POST /api/v1/documents`                    | Upload raw text (JSON: `content` + `metadata`)                                                                                                                                                  |
-| `GET /api/v1/documents`                     | List the tenant's documents with chunk counts                                                                                                                                                   |
-| `POST /api/v1/documents/search`             | Preview what the AI would retrieve for a query (passages + similarity scores), for content debugging                                                                                            |
-| `DELETE /api/v1/documents/{source_name}`    | Delete a document (tenant-scoped, audit-logged). Its tokens leave the corpus total with it                                                                                                      |
-| `GET /api/v1/documents/stats`               | Collection stats incl. the tenant's chunk count                                                                                                                                                 |
-| `POST /api/v1/documents/backfill`           | Index the chunks stored without their context behind it now. `dry_run` prices the run first; it goes through the per-tenant cap and picks up where a previous run stopped                       |
-| `GET /api/v1/documents/ingest/{id}`         | How far a running upload has got: phase, chunks written, total. The id is the one sent with the upload                                                                                          |
-| `POST /api/v1/documents/ingest/{id}/cancel` | Ask a running upload or backfill to stop. It stops between batches and keeps what it wrote. The id stays stopped: a call that carries that run on answers `cancelled` and does nothing |
+| `POST /api/v1/documents`                    | Upload raw text (JSON: `content` + `metadata`)                                                                                                                                                                                                  |
+| `GET /api/v1/documents`                     | List the tenant's documents with chunk counts                                                                                                                                                                                                   |
+| `POST /api/v1/documents/search`             | Preview what the AI would retrieve for a query (passages + similarity scores), for content debugging                                                                                                                                            |
+| `DELETE /api/v1/documents/{source_name}`    | Delete a document (tenant-scoped, audit-logged). Its tokens leave the corpus total with it                                                                                                                                                      |
+| `GET /api/v1/documents/stats`               | Collection stats incl. the tenant's chunk count                                                                                                                                                                                                 |
+| `POST /api/v1/documents/backfill`           | Index the chunks stored without their context behind it now. `dry_run` prices the run first; it goes through the per-tenant cap and picks up where a previous run stopped                                                                       |
+| `GET /api/v1/documents/ingest/{id}`         | How far a running upload has got: phase, chunks written, total. The id is the one sent with the upload                                                                                                                                          |
+| `POST /api/v1/documents/ingest/{id}/cancel` | Ask a running upload or backfill to stop. It stops between batches and keeps what it wrote. The id stays stopped: a call that carries that run on answers `cancelled` and does nothing                                                          |
 
 ```bash
 # Upload a PDF (url becomes linkable by the AI via the whitelist)
@@ -2376,25 +2404,25 @@ Content-Type: application/json
 
 Serving endpoints take a client key; control-plane endpoints take an admin key and are always scoped to the tenant that key resolves to.
 
-| Endpoint                                                                                                                              | Key                 | What it is                                          | Section                                                                  |
-| ------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------------------------------- | ------------------------------------------------------------------------ |
-| `POST /api/v1/zone/render`                                                                                                            | client              | Render a zone                                       | above                                                                    |
-| `POST /api/v1/zone/render/stream`                                                                                                     | client              | Same render, progressive (SSE)                      | [Streaming](#️-streaming--ssr-safety)                                     |
-| `POST /api/v1/zone/batch-render`                                                                                                      | client              | Several zones in one request (capped, counted as N) | [Cost Controls](#-cost-controls)                                         |
-| `POST /api/v1/query`                                                                                                                  | client              | Chat with optional UI components                    | above                                                                    |
-| `DELETE /api/v1/query/sessions/{session_id}`                                                                                          | client (+ user token for a user's session) | Forget one chat session         | above                                                                    |
-| `POST /api/v1/events`                                                                                                                 | client              | Impression / click ingestion                        | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
-| `GET /api/v1/events/stats`                                                                                                            | admin               | CTR per arm, uplift, z-test                         | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
-| `GET /api/v1/profile/{user_id}` · `DELETE` · `POST /profile/sync`                                                                     | client + user token | Server-side profile, GDPR erasure                   | [Auth & Profiles](#-auth-server-side-profiles--audit)                    |
-| `GET /api/v1/profile/{user_id}/export`                                                                                                | client + user token | Everything held about one person (GDPR access)      | [Access and erasure](#access-and-erasure)                                |
-| `POST /api/v1/documents` · `/upload` · `/search` · `/backfill` · `/ingest/{id}` · `/ingest/{id}/cancel` · `GET` · `DELETE` · `/stats` | admin               | RAG knowledge base                                  | [Knowledge Base](#knowledge-base-rag--tenant-isolated)                   |
-| `GET/PUT/POST/DELETE /api/v1/zone/config[...]`                                                                                        | admin               | Zone config as data: draft, approve, discard        | [Zone Registry](#%EF%B8%8F-zone-config-registry--config-as-data)         |
-| `GET /api/v1/audit`                                                                                                                   | admin               | What was shown to whom                              | [Querying the audit](#querying-the-audit)                                |
-| `GET/PUT /api/v1/content-policy`                                                                                                      | admin               | Per-tenant banned terms                             | [Output Guarantees](#%EF%B8%8F-output-guarantees) point 5                |
-| `GET /api/v1/theme` (client) · `PUT` (admin)                                                                                          | both                | Per-tenant theme                                    | [Per-tenant theme](#per-tenant-theme-the-theme-as-stored-config)         |
-| `POST /api/v1/zone/warmup` · `GET /api/v1/zone/cache/stats`                                                                           | admin               | Pre-warm segments, inspect the cache                | [Segment Cache](#-segment-cache--llm-as-an-offline-ranker)               |
-| `GET /api/v1/whoami`                                                                                                                  | admin               | Which tenant this key resolves to                   | [Tenants in the console](#-tenants-in-the-console-and-where-auth-begins) |
-| `GET /health` · `/ready` · `/live` · `/metrics`                                                                                       | open / admin        | Health, probes, Prometheus metrics                  | [Observability](#observability)                                          |
+| Endpoint                                                                                                                              | Key                                        | What it is                                          | Section                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | --------------------------------------------------- | ------------------------------------------------------------------------ |
+| `POST /api/v1/zone/render`                                                                                                            | client                                     | Render a zone                                       | above                                                                    |
+| `POST /api/v1/zone/render/stream`                                                                                                     | client                                     | Same render, progressive (SSE)                      | [Streaming](#️-streaming--ssr-safety)                                     |
+| `POST /api/v1/zone/batch-render`                                                                                                      | client                                     | Several zones in one request (capped, counted as N) | [Cost Controls](#-cost-controls)                                         |
+| `POST /api/v1/query`                                                                                                                  | client                                     | Chat with optional UI components                    | above                                                                    |
+| `DELETE /api/v1/query/sessions/{session_id}`                                                                                          | client (+ user token for a user's session) | Forget one chat session                             | above                                                                    |
+| `POST /api/v1/events`                                                                                                                 | client                                     | Impression / click ingestion                        | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
+| `GET /api/v1/events/stats`                                                                                                            | admin                                      | CTR per arm, uplift, z-test                         | [Uplift](#-measuring-uplift--impressions-clicks--holdout)                |
+| `GET /api/v1/profile/{user_id}` · `DELETE` · `POST /profile/sync`                                                                     | client + user token                        | Server-side profile, GDPR erasure                   | [Auth & Profiles](#-auth-server-side-profiles--audit)                    |
+| `GET /api/v1/profile/{user_id}/export`                                                                                                | client + user token                        | Everything held about one person (GDPR access)      | [Access and erasure](#access-and-erasure)                                |
+| `POST /api/v1/documents` · `/upload` · `/search` · `/backfill` · `/ingest/{id}` · `/ingest/{id}/cancel` · `GET` · `DELETE` · `/stats` | admin                                      | RAG knowledge base                                  | [Knowledge Base](#knowledge-base-rag--tenant-isolated)                   |
+| `GET/PUT/POST/DELETE /api/v1/zone/config[...]`                                                                                        | admin                                      | Zone config as data: draft, approve, discard        | [Zone Registry](#%EF%B8%8F-zone-config-registry--config-as-data)         |
+| `GET /api/v1/audit`                                                                                                                   | admin                                      | What was shown to whom                              | [Querying the audit](#querying-the-audit)                                |
+| `GET/PUT /api/v1/content-policy`                                                                                                      | admin                                      | Per-tenant banned terms                             | [Output Guarantees](#%EF%B8%8F-output-guarantees) point 5                |
+| `GET /api/v1/theme` (client) · `PUT` (admin)                                                                                          | both                                       | Per-tenant theme                                    | [Per-tenant theme](#per-tenant-theme-the-theme-as-stored-config)         |
+| `POST /api/v1/zone/warmup` · `GET /api/v1/zone/cache/stats`                                                                           | admin                                      | Pre-warm segments, inspect the cache                | [Segment Cache](#-segment-cache--llm-as-an-offline-ranker)               |
+| `GET /api/v1/whoami`                                                                                                                  | admin                                      | Which tenant this key resolves to                   | [Tenants in the console](#-tenants-in-the-console-and-where-auth-begins) |
+| `GET /health` · `/ready` · `/live` · `/metrics`                                                                                       | open / admin                               | Health, probes, Prometheus metrics                  | [Observability](#observability)                                          |
 
 ---
 
@@ -2577,7 +2605,7 @@ The **chat pipeline** (`/query`) is separate and isolated: Response/Profile/Beha
 
 ## 🔌 One provider abstraction for every agent
 
-All agents — ZoneAgent and the chat pipeline (ResponseAgent, ProfileAgent, BehaveAgent) — talk to the internal provider abstraction (`backend/llm/`), never to a vendor SDK directly. `LLM_PROVIDER` selects OpenAI, Anthropic, or any OpenAI-compatible endpoint (Gemini, Azure, vLLM, RunPod, local) — bring your own key and engine.
+All agents, the ZoneAgent and the chat pipeline (ResponseAgent, ProfileAgent, BehaveAgent), talk to the internal provider abstraction (`backend/llm/`), never to a vendor SDK directly. `LLM_PROVIDER` selects OpenAI, Anthropic, or any OpenAI-compatible endpoint (Gemini, Azure, vLLM, RunPod, local): bring your own key and engine. Each call names its role, and `LLM_<ROLE>` can send that role to another provider or model (see [Configure](#step-3--configure)). Roles on the same provider and model share one client. OpenAI's own endpoint is called through the Responses API, with `store: false`. An endpoint behind `OPENAI_BASE_URL` gets chat completions, the API OpenAI-compatible servers speak.
 
 The same holds for **embeddings**: the RAG pipeline (chunker, vector store) talks to an `EmbeddingClient` selected by `EMBEDDING_PROVIDER` / `EMBEDDING_BASE_URL` (see [Bring your own embedding](#bring-your-own-embedding--your-documents-embed-where-you-choose)). Generation and embedding are both plugs, not wiring: an operator who says "everything runs in my infrastructure" gets exactly that.
 

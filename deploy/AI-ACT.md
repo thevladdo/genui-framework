@@ -6,7 +6,7 @@
 
 **Scope**: one GenUI deployment serving generated UI (`/zone/render`, `/zone/render/stream`, `/zone/batch-render`, warmup, background refreshes) and chat answers (`/query`), with the React library rendering them.
 
-**As of**: 2026-07-27. References name the file and the symbol, never a line number: a line number is wrong as soon as anything above it moves, and a reader who follows a stale one lands on unrelated code. Re-verify any row with `grep -n "<symbol>" <file>`. `backend/tests/test_deploy_docs.py` fails when a named file or symbol disappears, and when a line number reappears.
+**As of**: 2026-10-05. References name the file and the symbol, never a line number: a line number is wrong as soon as anything above it moves, and a reader who follows a stale one lands on unrelated code. Re-verify any row with `grep -n "<symbol>" <file>`. `backend/tests/test_deploy_docs.py` fails when a named file or symbol disappears, and when a line number reappears.
 
 ## Who answers for what
 
@@ -32,7 +32,7 @@
 | **Art. 50(5)** the information must be clear and distinguishable at the latest at the first interaction or exposure, and conform to accessibility requirements | Provider and deployer (customer) | A visible line of text, on by default whenever the content is generated, rendered as text and never as a CSS value, styled with the `--genui-*` tokens so it carries a value in both colour modes, with no information conveyed by colour alone. Wording and position are host-configurable because the formulation is the customer's legal choice. Size and opacity are clamped at both ends in the library and in the store that persists them: the notice can be made discreet, never unreadable. It is available as a standalone component for hosts that render components themselves. | `GenUIDisclosureNotice` (`frontend/src/components/DisclosureNotice.tsx`); `noticeComesFirst` (`frontend/src/utils/disclosure.ts`); theme persistence in `backend/utils/theme_store.py` | `frontend/tests/disclosure.test.tsx`, `backend/tests/test_theme_store.py` |
 | **Default posture** | Provider (customer) | Disclosure is on unless it is explicitly turned off. `GENUI_DISCLOSURE_OFF=1` removes the block from every payload and, with it, the library's markup and notice; setting it is a declaration that the transparency information is provided elsewhere in the product. It is logged as a warning at every startup, so an operator who inherits a deployment reads the posture off the logs. | `genui_disclosure_off` (`backend/config/settings.py`); startup warning in `lifespan` (`backend/api/main.py`) | `backend/tests/test_disclosure.py` |
 
-The model name is **not** in the marking by default (`DISCLOSURE_EXPOSE_MODEL=false`). What the obligation asks is that the reader knows the content is artificially generated, not which model wrote it; naming it publishes an attack target and the operator's vendor choice at the same time. Turning it on is one env var.
+The model name is **not** in the marking by default (`DISCLOSURE_EXPOSE_MODEL=false`). What the obligation asks is that the reader knows the content is artificially generated, not which model wrote it; naming it publishes an attack target and the operator's vendor choice at the same time. Turning it on is one env var. When it is on, the name is the model that wrote the content: the role's declared fallback when that is what answered, never just the configured one.
 
 ## The Art. 50(2) exemption: what the system gives you, and what it does not
 

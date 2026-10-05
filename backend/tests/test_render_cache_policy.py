@@ -129,7 +129,7 @@ class _RouterCase(unittest.TestCase):
 
     def use_llm(self, llm):
         self.llm = llm
-        agent = ZoneAgent(model="test", vector_store=_EmptyStore(), llm_client=llm)
+        agent = ZoneAgent(vector_store=_EmptyStore(), llm_client=llm)
         zone_router.get_zone_agent = lambda: agent
 
     def ban(self):

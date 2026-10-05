@@ -7,7 +7,7 @@ Runnable with pytest or `python3 -m unittest discover -s tests` from backend/.
 import asyncio
 import unittest
 
-from llm.factory import GEMINI_OPENAI_BASE_URL, resolve_provider_config
+from llm.factory import GEMINI_OPENAI_BASE_URL, LLMConfigError, resolve_provider_config
 from metrics import MetricsStore
 from metrics.significance import two_proportion_significance
 from utils.tracing import span
@@ -99,9 +99,9 @@ class TestResolveProviderConfig(unittest.TestCase):
             self.assertEqual(config.api_key, "g-key")
             self.assertEqual(config.base_url, GEMINI_OPENAI_BASE_URL)
 
-    def test_unknown_provider_falls_back_to_openai(self):
-        config = resolve_provider_config("hal9000", openai_api_key="sk-1")
-        self.assertEqual(config.provider, "openai")
+    def test_unknown_provider_is_an_error_not_openai(self):
+        with self.assertRaises(LLMConfigError):
+            resolve_provider_config("hal9000", openai_api_key="sk-1")
 
     def test_empty_provider_defaults_to_openai(self):
         self.assertEqual(resolve_provider_config("").provider, "openai")

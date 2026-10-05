@@ -75,18 +75,29 @@ What the boundary guarantees, with the code that enforces it: **[TENANT-ISOLATIO
 
 ## Engine BYOK matrix
 
-Selected entirely in `customer.env`. Misconfiguration fails loudly at startup or on `/ready`, never a silent fallback to another provider.
+Selected entirely in `customer.env`, per role. A role that cannot be called (unknown provider, missing key, also on its fallback) is logged at startup and fails `/ready` with the role and the variable. No call moves to another provider or model unless `LLM_<ROLE>_FALLBACK` says so, and every such move is counted in `genui_llm_fallbacks_total`.
 
 ### LLM engine
 
 | Engine                                                        | Config                                                                      | Notes                                                                                                                              |
 | ------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| OpenAI                                                        | `LLM_PROVIDER=openai` + `OPENAI_API_KEY`                                    | default                                                                                                                            |
-| Azure OpenAI / vLLM / Ollama / RunPod / any OpenAI-compatible | `LLM_PROVIDER=openai` + `OPENAI_BASE_URL` (+ key if the endpoint wants one) | fully local engines stay local                                                                                                     |
+| OpenAI                                                        | `LLM_PROVIDER=openai` + `OPENAI_API_KEY`                                    | default; Responses API with `store: false`                                                                                         |
+| Azure OpenAI / vLLM / Ollama / RunPod / any OpenAI-compatible | `LLM_PROVIDER=openai` + `OPENAI_BASE_URL` (+ key if the endpoint wants one) | chat completions; fully local engines stay local                                                                                   |
 | Anthropic                                                     | `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`                              | add `anthropic` to the image (see `backend/Dockerfile`); `/query`'s RAG tool degrades to pre-fetched context (documented fallback) |
 | Google Gemini                                                 | `LLM_PROVIDER=gemini` + `GOOGLE_API_KEY`                                    | via Gemini's OpenAI-compatible API, no extra package                                                                               |
 
-Models: `RESPONSE_MODEL`, `PROFILE_MODEL`.
+The engine table above sets the default provider of every role. Models: `RESPONSE_MODEL` (zone renders, chat answers), `PROFILE_MODEL` (profile, behavior, chat summary), `CONTEXT_MODEL` (chunk context).
+
+| Role       | Variable       | Default                          |
+| ---------- | -------------- | -------------------------------- |
+| `zone`     | `LLM_ZONE`     | `LLM_PROVIDER` + `RESPONSE_MODEL` |
+| `chat`     | `LLM_CHAT`     | `LLM_PROVIDER` + `RESPONSE_MODEL` |
+| `profile`  | `LLM_PROFILE`  | `LLM_PROVIDER` + `PROFILE_MODEL`  |
+| `behavior` | `LLM_BEHAVIOR` | `LLM_PROVIDER` + `PROFILE_MODEL`  |
+| `summary`  | `LLM_SUMMARY`  | `LLM_PROVIDER` + `PROFILE_MODEL`  |
+| `context`  | `LLM_CONTEXT`  | `LLM_PROVIDER` + `CONTEXT_MODEL`  |
+
+Each variable takes `provider:model`, or a bare model on `LLM_PROVIDER`. Keys and endpoints stay per provider, so a deployment can put the zone render on Anthropic or Gemini and the short classifications on a local `OPENAI_BASE_URL`, but not one role on OpenAI's API and another on a local endpoint. Every provider a role names is a recipient of prompts: `./posture.sh` lists the roles per destination.
 
 ### Embeddings (independent of the LLM choice)
 

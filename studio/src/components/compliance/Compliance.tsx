@@ -49,7 +49,7 @@ const MECHANISMS: Mechanism[] = [
     points: [
       {
         term: 'In the payload',
-        body: 'Every served response carries a disclosure block: whether a model wrote it, what the provenance is, and when the generation actually happened. Sync, streamed, batch, warmup and every cache hit.',
+        body: 'Every served response carries a disclosure block: whether a model wrote it, what the provenance is, and when the generation actually happened. Sync, streamed, batch, warmup and every cache hit. When the operator chooses to name the model, it is the one that actually wrote the content, a declared fallback included.',
       },
       {
         term: 'In the markup',
@@ -73,11 +73,15 @@ const MECHANISMS: Mechanism[] = [
     points: [
       {
         term: 'Consent is a literal yes',
-        body: 'The profile cache and the chat history live in the browser, and nothing is read or written unless consent is explicitly true. An integrator who has not wired a consent flow yet gets the anonymous mode, not a quiet write to a visitor device.',
+        body: 'The profile cache, the chat history shown on screen and the id of the conversation live in the browser, and nothing is read or written unless consent is explicitly true. An integrator who has not wired a consent flow yet gets the anonymous mode, not a quiet write to a visitor device.',
       },
       {
         term: 'No identifier, no tracker',
         body: 'Without consent no user id leaves the page, no server side profile is read or created, and the behaviour tracker is never constructed rather than constructed and then filtered.',
+      },
+      {
+        term: 'A new identity starts from nothing',
+        body: 'When the user id or the consent changes on the page, the history, the profile and the requests still in flight of the previous identity are dropped, and the first request of the new one carries nothing from it. A conversation id stored for another visitor is removed at the next page load.',
       },
       {
         term: 'The page is still personalised',
@@ -97,7 +101,7 @@ const MECHANISMS: Mechanism[] = [
     points: [
       {
         term: 'Your key, your provider',
-        body: 'The model and the embedding endpoint are chosen by the operator and billed to them. Swapping the vendor is configuration, not a fork.',
+        body: 'Each kind of model call, from the zone render to the chat answer, the profile, the conversation summary and the chunk context, has a provider and a model chosen by the operator and billed to them. The embedding endpoint is chosen the same way. Swapping a vendor is configuration, not a fork, and on OpenAI every request asks for the response not to be stored.',
       },
       {
         term: 'Shared renders carry an archetype',
@@ -109,18 +113,18 @@ const MECHANISMS: Mechanism[] = [
       },
       {
         term: 'The uncomfortable rows are written down too',
-        body: 'Cloud document extraction sends whole uploaded files out, and it is the largest egress in the matrix. It is opt in, it is named, and a script prints the egress map for the configuration you actually have running.',
+        body: 'Cloud document extraction sends whole uploaded files out, and it is the largest egress in the matrix. It is opt in, it is named, and a script prints the egress map for the configuration you actually have running, one line per destination and kind of call.',
       },
     ],
   },
   {
     label: 'GDPR ART. 15 TO 21',
     title: 'Data subject rights are endpoints, not intentions',
-    lead: 'Two things in this system are keyed to a person: the profile, and the audit lines that name a user. The rights below act on exactly those.',
+    lead: 'Three things in this system are keyed to a person: the profile, the conversations of an identified user, and the audit lines that name a user. The rights below act on exactly those.',
     points: [
       {
         term: 'Access and portability',
-        body: 'One call returns the stored profile plus the audit entries naming that person, as structured JSON, behind the same identity guard as every other per user route. An export endpoint with a weak guard is a breach wearing a compliance label.',
+        body: 'One call returns the stored profile, the conversations and the audit entries naming that person, as structured JSON, behind the same identity guard as every other per user route. An export endpoint with a weak guard is a breach wearing a compliance label.',
       },
       {
         term: 'Rectification',
@@ -128,15 +132,19 @@ const MECHANISMS: Mechanism[] = [
       },
       {
         term: 'Erasure, and what survives it',
-        body: 'The profile goes, and it is the whole of the personalisation data held about that person. The audit trail stays, because a record of what was shown to whom is worth nothing if the party who showed it can rewrite it afterwards. The response says so instead of reporting a clean deletion.',
+        body: 'The profile and the conversations go, and they are the whole of the personalisation and conversation data held about that person. The answer comes only once the store has confirmed the delete: when it cannot, it says that nothing was erased. The audit trail stays, because a record of what was shown to whom is worth nothing if the party who showed it can rewrite it afterwards. The response says so instead of reporting a clean deletion.',
+      },
+      {
+        term: 'The record holds what was shown, not what was asked',
+        body: 'An audit line of a chat answer keeps how many components were shown and how confident the answer was, never the question. A click or an impression names a user only when a signed token proves who it is, and every field the browser asserted without proof is marked as declared.',
       },
       {
         term: 'Withdrawal',
-        body: 'One property. The tracker stops, device storage stops, the identifier stops being sent, and the visitor keeps a personalised page served from the anonymous segment.',
+        body: 'One property. The tracker stops, device storage stops and the stored conversation id is removed, the identifier stops being sent, and the visitor keeps a personalised page served from the anonymous segment.',
       },
       {
         term: 'Retention is a setting',
-        body: 'Profiles expire after a window of inactivity, cached renders belong to a segment rather than a person and are short lived. The numbers a deployment can defend are the operator to choose.',
+        body: 'Profiles expire after a window of inactivity, and the conversations of an identified user follow the same window. An anonymous conversation is linked to no one and lasts 30 minutes after its last message. Cached renders belong to a segment rather than a person and are short lived. The numbers a deployment can defend are the operator\'s to choose.',
       },
     ],
   },
@@ -247,7 +255,7 @@ export const Compliance = () => {
           This page says what exists in the code today, and what does not.
         </p>
         <p className={styles.heroMeta}>
-          Article 50 of the AI Act applies from 2 August 2026.
+          Article 50 of the AI Act has applied since 2 August 2026.
         </p>
 
         <aside className={styles.disclaimer} aria-labelledby="disclaimer-title">

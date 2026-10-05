@@ -152,6 +152,8 @@ class TestDisclosureBlock(unittest.TestCase):
 class _FakeLLM:
     """Replays a recorded envelope on every completion style."""
 
+    model = "test-model"
+
     def __init__(self, envelope):
         self._text = json.dumps(envelope)
 
@@ -246,7 +248,7 @@ class TestAgentDisclosure(unittest.TestCase):
             setattr(settings, name, value)
 
     def _agent(self, envelope):
-        return ZoneAgent(model="test-model", vector_store=_EmptyStore(),
+        return ZoneAgent(vector_store=_EmptyStore(),
                          llm_client=_FakeLLM(envelope))
 
     def test_sync_render_is_marked_generated(self):
@@ -283,7 +285,7 @@ class TestAgentDisclosure(unittest.TestCase):
 
     def test_fallback_render_says_it_is_not_generated(self):
         """No model ran: the cards are the operator's pinned content."""
-        agent = ZoneAgent(model="test-model", vector_store=_EmptyStore(),
+        agent = ZoneAgent(vector_store=_EmptyStore(),
                           llm_client=_BrokenLLM())
         result = asyncio.run(agent.render_zone_async(_agent_request()))
         self.assertFalse(result.disclosure["ai_generated"])
@@ -291,7 +293,7 @@ class TestAgentDisclosure(unittest.TestCase):
 
     def test_stream_fallback_says_it_is_not_generated(self):
         async def collect():
-            agent = ZoneAgent(model="test-model", vector_store=_EmptyStore(),
+            agent = ZoneAgent(vector_store=_EmptyStore(),
                               llm_client=_BrokenLLM())
             return [e async for e in agent.render_zone_stream_async(_agent_request())]
 
@@ -328,7 +330,7 @@ class TestChatDisclosure(unittest.TestCase):
         settings.genui_disclosure_off = False
 
     def _answer(self, llm):
-        agent = ResponseAgent(model="test-model", vector_store=_EmptyStore(),
+        agent = ResponseAgent(vector_store=_EmptyStore(),
                               llm_client=llm)
         return asyncio.run(agent.process_query_async("what does the report say?"))
 
@@ -377,7 +379,7 @@ class TestServingPathsDisclosure(unittest.TestCase):
         # The real payload builder, fed by a stubbed agent: the marking
         # must survive the trip through the cache, not just the agent.
         self._orig_agent = zone_router.get_zone_agent
-        agent = ZoneAgent(model="test-model", vector_store=_EmptyStore(),
+        agent = ZoneAgent(vector_store=_EmptyStore(),
                           llm_client=_FakeLLM(_PROSE_ENVELOPE))
         zone_router.get_zone_agent = lambda: agent
 

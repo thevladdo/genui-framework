@@ -34,7 +34,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
 
 from config import settings
-from llm import create_llm_client
+from llm import Role, answered_model, create_llm_client
 from llm.embeddings import EmbeddingConfigError
 from rag import get_vector_store, build_context_from_results
 from schemas import (
@@ -105,6 +105,7 @@ class ZoneRenderResult:
     # generation timestamp are known, and carried into the cache with
     # the payload. None when the operator turned the disclosure off.
     disclosure: Optional[Dict[str, Any]] = None
+    model: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -412,11 +413,10 @@ CRITICAL RULES:
      same content.
 """
 
-    def __init__(self, model: str = None, vector_store=None, llm_client=None):
+    def __init__(self, vector_store=None, llm_client=None):
         """Initialize the Zone Agent."""
-        self.model = model or settings.response_model
         self.vector_store = vector_store or get_vector_store()
-        self.llm = llm_client or create_llm_client(self.model)
+        self.llm = llm_client or create_llm_client(Role.ZONE)
     
     
     # Public API
@@ -555,6 +555,7 @@ CRITICAL RULES:
             policy_violations=chain.policy_violations,
             policy_terms=list(chain.policy.banned_terms),
             disclosure=self._disclosure_for(request, retrieved, components),
+            model=answered_model(self.llm),
         )
 
     def _build_url_guard(
@@ -638,7 +639,7 @@ CRITICAL RULES:
             provenance=content_provenance(
                 components, self._input_corpus(request, retrieved)
             ),
-            model=self.model,
+            model=answered_model(self.llm),
             enabled=not settings.genui_disclosure_off,
             expose_model=settings.disclosure_expose_model,
         )

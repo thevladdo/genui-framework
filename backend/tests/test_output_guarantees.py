@@ -371,7 +371,7 @@ class TestZoneChain(unittest.TestCase):
             setattr(settings, name, value)
 
     def _agent(self):
-        return ZoneAgent(model="test", vector_store=_EmptyStore(),
+        return ZoneAgent(vector_store=_EmptyStore(),
                          llm_client=_FakeLLM(_ZONE_ENVELOPE))
 
     def test_sync_path_enforces_grounding_and_policy(self):
@@ -412,7 +412,7 @@ class TestZoneChain(unittest.TestCase):
         a budget that stopped being applied would put a page where a
         sidebar slot was and report nothing.
         """
-        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+        agent = ZoneAgent(vector_store=_EmptyStore(),
                           llm_client=_FakeLLM(_OVER_BUDGET_ENVELOPE))
         request = _zone_request()
         request.max_components = 2
@@ -435,7 +435,7 @@ class TestZoneChain(unittest.TestCase):
         Each ring removes exactly one thing from this envelope, so a ring that stops running changes the outcome.
         Both paths must land on the same components and the same report.
         """
-        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+        agent = ZoneAgent(vector_store=_EmptyStore(),
                           llm_client=_FakeLLM(_EVERY_RING_ENVELOPE))
         request = _redundant_request()
         request.base_prompt += " We serve 120 countries with 99.9% uptime."
@@ -475,7 +475,7 @@ class TestZoneChain(unittest.TestCase):
         self.assertEqual(result.policy_violations, [])
 
     def test_sync_path_removes_a_zone_that_says_the_same_thing_twice(self):
-        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+        agent = ZoneAgent(vector_store=_EmptyStore(),
                           llm_client=_FakeLLM(_REDUNDANT_ENVELOPE))
         result = asyncio.run(agent.render_zone_async(_redundant_request()))
 
@@ -487,7 +487,7 @@ class TestZoneChain(unittest.TestCase):
         self.assertEqual(len(result.dropped_components), 2)
 
     def test_sse_path_removes_the_same_redundancy(self):
-        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+        agent = ZoneAgent(vector_store=_EmptyStore(),
                           llm_client=_FakeLLM(_REDUNDANT_ENVELOPE))
 
         async def collect():
@@ -499,7 +499,7 @@ class TestZoneChain(unittest.TestCase):
         self.assertNotIn("secondary_cta", streamed[0]["data"])
 
     def test_pinned_used_as_a_hero_cta_is_not_appended_again(self):
-        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+        agent = ZoneAgent(vector_store=_EmptyStore(),
                           llm_client=_FakeLLM(_HERO_CTA_ENVELOPE))
         request = _redundant_request()
         request.pinned_content = [
@@ -511,7 +511,7 @@ class TestZoneChain(unittest.TestCase):
         self.assertEqual(result.pinned_content_included, ["https://example.com/pricing"])
 
     def test_pinned_still_appended_when_the_output_ignores_it(self):
-        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+        agent = ZoneAgent(vector_store=_EmptyStore(),
                           llm_client=_FakeLLM(_HERO_CTA_ENVELOPE))
         request = _redundant_request()
         request.pinned_content = [
@@ -529,7 +529,7 @@ class TestZoneChain(unittest.TestCase):
         photo means "you may use this". Appending the unused ones would put
         a card linking to a raw JPEG on the page.
         """
-        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+        agent = ZoneAgent(vector_store=_EmptyStore(),
                           llm_client=_FakeLLM(_HERO_CTA_ENVELOPE))
         request = _redundant_request()
         request.pinned_content = [
@@ -548,7 +548,7 @@ class TestZoneChain(unittest.TestCase):
         self.assertNotIn("https://cdn.example/p.jpg", result.pinned_content_included)
 
     def test_pinned_image_the_model_did_use_still_counts_as_included(self):
-        agent = ZoneAgent(model="test", vector_store=_EmptyStore(),
+        agent = ZoneAgent(vector_store=_EmptyStore(),
                           llm_client=_FakeLLM(_HERO_IMAGE_ENVELOPE))
         request = _redundant_request()
         request.base_prompt += " Hero art: https://cdn.example/hero.jpg"
@@ -561,7 +561,7 @@ class TestZoneChain(unittest.TestCase):
         self.assertEqual(result.pinned_content_included, ["https://cdn.example/hero.jpg"])
 
     def test_fallback_render_shows_content_not_material(self):
-        agent = ZoneAgent(model="test", vector_store=_EmptyStore(), llm_client=_FakeLLM({}))
+        agent = ZoneAgent(vector_store=_EmptyStore(), llm_client=_FakeLLM({}))
         request = _redundant_request()
         request.pinned_content = [
             {"type": "image", "title": "Portrait, neutral background",
@@ -614,7 +614,7 @@ class TestQueryChain(unittest.TestCase):
             setattr(settings, name, value)
 
     def _response(self, tenant="acme"):
-        agent = ResponseAgent(model="test", vector_store=_EmptyStore(),
+        agent = ResponseAgent(vector_store=_EmptyStore(),
                               llm_client=_FakeLLM(_QUERY_ENVELOPE))
         return asyncio.run(agent.process_query_async(
             "Is https://ok.example/docs right about the 99.9 uptime?",

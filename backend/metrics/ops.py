@@ -92,6 +92,27 @@ class OpsMetrics:
                 "genui_llm_generation_seconds_count", {"tenant": tenant, "op": op}
             )
 
+    def observe_model_call(
+        self,
+        role: str,
+        provider: str,
+        model: str,
+        seconds: float,
+        outcome: str = "ok",
+    ) -> None:
+        self.observe(
+            "genui_llm_model_calls_total",
+            {"role": role, "provider": provider, "model": model, "outcome": outcome},
+        )
+        self.observe("genui_llm_model_call_seconds_sum", {"role": role, "model": model}, seconds)
+        self.observe("genui_llm_model_call_seconds_count", {"role": role, "model": model})
+
+    def observe_fallback(self, role: str, from_model: str, to_model: str) -> None:
+        self.observe(
+            "genui_llm_fallbacks_total",
+            {"role": role, "from_model": from_model, "to_model": to_model},
+        )
+
     def pending_tasks(self) -> Iterable[asyncio.Task]:
         """In-flight fire-and-forget writes (tests await these)."""
         return list(self._tasks)

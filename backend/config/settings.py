@@ -32,6 +32,19 @@ class Settings(BaseSettings):
     profile_model: str = Field(default="gpt-4o-mini", description="Model for profile analysis")
     context_model: str = Field(default="gpt-4o-mini", description="Model that situates a chunk in its document at indexing time. One call per chunk, so a cheap model is the point")
 
+    llm_zone: Optional[str] = Field(default=None, description="Zone renders (default RESPONSE_MODEL)")
+    llm_chat: Optional[str] = Field(default=None, description="/query answers (default RESPONSE_MODEL)")
+    llm_profile: Optional[str] = Field(default=None, description="Profile facts from chat messages (default PROFILE_MODEL)")
+    llm_behavior: Optional[str] = Field(default=None, description="Profile facts from browsing behavior (default PROFILE_MODEL)")
+    llm_context: Optional[str] = Field(default=None, description="Chunk context at indexing time (default CONTEXT_MODEL)")
+    llm_summary: Optional[str] = Field(default=None, description="Chat session summary (default PROFILE_MODEL)")
+    llm_zone_fallback: Optional[str] = None
+    llm_chat_fallback: Optional[str] = None
+    llm_profile_fallback: Optional[str] = None
+    llm_behavior_fallback: Optional[str] = None
+    llm_context_fallback: Optional[str] = None
+    llm_summary_fallback: Optional[str] = None
+
     # Embeddings (BYOK, like the LLM: documents embed where YOU choose)
     embedding_model: str = Field(default="text-embedding-3-small", description="Model for embeddings")
     embedding_provider: str = Field(

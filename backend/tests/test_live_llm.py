@@ -27,7 +27,7 @@ LIVE = os.environ.get("GENUI_LIVE_LLM") == "1"
 
 if LIVE:
     from config import settings
-    from llm import create_llm_client
+    from llm import Role, create_llm_client
     from agents.response_agent import ResponseAgent
 
 KB_URL = "https://kb.acme.example/plans"
@@ -65,7 +65,7 @@ class LiveToolLoopTest(unittest.TestCase):
     def test_tool_loop_against_real_api(self):
         """Forced tool call: verifies tools + json_object and the
         round-trip threading against the real endpoint."""
-        client = create_llm_client(settings.response_model)
+        client = create_llm_client(Role.CHAT)
         invocations = []
 
         async def handler(name, arguments):

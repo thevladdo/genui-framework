@@ -10,8 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 
-from config import settings
-from llm import create_llm_client
+from llm import Role, create_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -120,16 +119,14 @@ User: "Can you explain this more simply? The technical jargon is confusing."
 ]
 """
     
-    def __init__(self, model: str = None, llm_client=None):
+    def __init__(self, llm_client=None):
         """
         Initialize the Profile Agent.
 
         Args:
-            model: LLM model identifier (uses a smaller/faster model by default)
             llm_client: LLMChatClient instance (created if not provided)
         """
-        self.model = model or settings.profile_model
-        self.llm = llm_client or create_llm_client(self.model)
+        self.llm = llm_client or create_llm_client(Role.PROFILE)
     
     def analyze_message(
         self,

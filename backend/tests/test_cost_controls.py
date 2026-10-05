@@ -168,9 +168,11 @@ class TestFactoryTimeout(unittest.TestCase):
         settings.llm_timeout_seconds = 33.0
         try:
             with _FakeModule("openai", AsyncOpenAI=FakeAsyncOpenAI):
-                from llm.factory import create_llm_client
+                from llm import factory
 
-                create_llm_client("gpt-test")
+                factory._clients.clear()
+                self.addCleanup(factory._clients.clear)
+                factory.create_llm_client(factory.Role.ZONE)
                 self.assertEqual(FakeAsyncOpenAI.last.get("timeout"), 33.0)
         finally:
             settings.llm_timeout_seconds = old

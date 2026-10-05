@@ -466,6 +466,7 @@ def _payload_from_result(result) -> Dict[str, Any]:
         "meta": meta,
         "rendered_at": _utc_now(),
         "policy_terms": getattr(result, "policy_terms", []),
+        "model": getattr(result, "model", None),
     }
 
 
@@ -715,6 +716,7 @@ def _audit_render(
         ),
         declared=["page"] if request.current_page else [],
         render_id=payload.get("render_id"),
+        model=payload.get("model"),
         arm=arm,
         cache=cache_meta,
         personalization_applied=payload.get("personalization_applied", False),

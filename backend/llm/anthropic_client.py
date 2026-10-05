@@ -37,7 +37,7 @@ class AnthropicChatClient(LLMChatClient):
             from anthropic import AsyncAnthropic
         except ImportError as e:
             raise ImportError(
-                "LLM_PROVIDER=anthropic requires the 'anthropic' package: "
+                "A role routed to anthropic needs the 'anthropic' package: "
                 "pip install anthropic"
             ) from e
 

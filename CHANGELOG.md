@@ -8,6 +8,26 @@ The entire history lives below, newest first.
 
 ## [Unreleased]
 
+### A model per role
+
+There were 3 model settings and 1 provider. The zone render, which decides what a segment sees for hours, ran on the same provider as the short profile classifications, so the render could not go to one provider and the classifications to a local endpoint. An unknown `LLM_PROVIDER` fell back to OpenAI with a warning, which the deploy guide promised could not happen. The disclosure named the model the agent was built with, not the one that answered, and neither the metrics nor the audit named a model at all.
+
+- **Every model call has a role**: `zone`, `chat`, `profile`, `behavior`, `summary`, `context`. `LLM_<ROLE>=provider:model` (or a bare model on `LLM_PROVIDER`) moves one role. Unset, every role keeps `LLM_PROVIDER` and the model it used before, so an existing deployment changes nothing.
+- **Roles on the same provider and model share one client.** Keys and endpoints stay per provider.
+- **Configuration errors are loud.** An unknown provider, a misspelt prefix (`antropic:`), a missing key or a missing `anthropic` package, for a role or its fallback, is logged at startup and fails `/ready` with `llm_unconfigured: ["zone (LLM_ZONE)"]`. The body names roles and variables only. Provider and key are in the log.
+- **A fallback exists only when written.** With `LLM_<ROLE>_FALLBACK`, a provider error on that role is answered by the fallback (in a stream, only before the first delta) and counted in `genui_llm_fallbacks_total{role, from_model, to_model}`. Without it, an error is an error.
+- **The model that answered is the one reported.** Every call is counted in `genui_llm_model_calls_total{role, provider, model, outcome}`, with latency per role and model. The `zone_render` audit line carries `model`, which is kept in the cached payload and never served. With `DISCLOSURE_EXPOSE_MODEL` on, the disclosure names the fallback when the fallback wrote the content.
+- **OpenAI's own endpoint is called through the Responses API.** Chat completions refuse function tools on a reasoning model, so a chat running on one never answered: every question came back as "I couldn't process your request right now". Every request sets `store: false`, and the tool loop sends back its own items, reasoning included. Endpoints behind `OPENAI_BASE_URL` keep chat completions, the API OpenAI-compatible servers speak.
+- **A failed call is not repeated without the schema.** Only a 400 to a structured-output request counts as the endpoint refusing the schema. Before, any error did, so a missing model cost two failed calls.
+- **`./posture.sh` lists generation per role and destination**, and fails on a role whose provider the backend does not know.
+- **The LLM budget still counts one per model call, whatever the role.** The cap is a limit on calls a public key can trigger, and the 429 says how many. A per-role weight would turn it into a cost estimate that matches neither the provider's bill nor the calls made.
+
+**Migration**
+
+- `LLM_PROVIDER` set to an unknown name now makes `/ready` return 503 instead of running on OpenAI.
+- The agents no longer take a `model` argument. `create_llm_client` takes a `Role` (`from llm import Role`) instead of a model name.
+- `openai>=1.66.0`, the first release with the Responses API. The lock already pins 2.41.1.
+
 ### The chat remembers on the server
 
 The client used to send its last 10 messages with every question, and the server took them as given: a client could send 100, or someone else's. Nothing on the server knew that two messages belonged to one conversation, so there was no memory past that window and no way to link an answer to its conversation. The README promised that the history comes back after a reload. It didn't: the hook made a new local key on every mount and never read the old one.

@@ -42,7 +42,7 @@ from auth.dependencies import (
 )
 from auth.identity import AuthError
 from llm.embeddings import EmbeddingConfigError
-from llm.factory import create_llm_client, llm_configured
+from llm.factory import Role, create_llm_client, llm_config_problems, llm_configured
 from config import settings
 from agents import get_orchestrator, OrchestratorResult
 from metrics.ops import get_ops_metrics
@@ -212,9 +212,9 @@ class HealthResponse(BaseModel):
     # (configured but unreachable, in-memory fallback active) | "disabled"
     # (not configured — single-process dev only).
     redis: Optional[str] = None
-    # "configured" | "unconfigured": key/endpoint presence for the selected
-    # provider. Reachability shows up as error counters in /metrics.
+    # "configured" | "unconfigured"
     llm: str = "unconfigured"
+    llm_unconfigured: List[str] = Field(default_factory=list)
 
 
 # Lifespan management
@@ -239,6 +239,10 @@ async def lifespan(app: FastAPI):
             "that the transparency information for AI-generated content is "
             "provided elsewhere in your product."
         )
+
+    # The reason names provider and key: log only, /ready is unauthenticated
+    for where, why in llm_config_problems():
+        logger.error(f"LLM role not callable: {where}: {why}")
 
     # Initialize orchestrator (warms up connections)
     try:
@@ -371,7 +375,8 @@ async def _dependency_health() -> HealthResponse:
         redis_status == "disabled" and settings.genui_dev_open
     )
 
-    llm_ok = llm_configured()
+    llm_problems = [where for where, _ in llm_config_problems()]
+    llm_ok = not llm_problems
 
     return HealthResponse(
         status="healthy" if (qdrant_connected and redis_ok and llm_ok) else "degraded",
@@ -379,6 +384,7 @@ async def _dependency_health() -> HealthResponse:
         qdrant_connected=qdrant_connected,
         redis=redis_status,
         llm="configured" if llm_ok else "unconfigured",
+        llm_unconfigured=llm_problems,
     )
 
 
@@ -659,7 +665,7 @@ async def _fold_summary(summary: str, messages: List[Dict[str, str]], tenant: st
     ops = get_ops_metrics()
     started = time.perf_counter()
     try:
-        raw = await create_llm_client(settings.profile_model).complete_json(
+        raw = await create_llm_client(Role.SUMMARY).complete_json(
             _SUMMARY_SYSTEM,
             f"<summary>\n{summary}\n</summary>\n\n<new_messages>\n{transcript}\n</new_messages>",
         )
