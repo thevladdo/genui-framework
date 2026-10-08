@@ -2,6 +2,18 @@ name: Deploy Studio to Pages
 on:
   push:
     branches: [main]
+    paths:
+      - "studio/**"
+      - "!studio/tests/**"
+      - "!studio/**/*.md"
+      - "!studio/screenshots/**"
+      - "frontend/src/**"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "frontend/rollup.config.js"
+      - "frontend/tsconfig.json"
+      - ".nvmrc"
+      - ".github/workflows/deploy-studio.yml"
   workflow_dispatch:
 permissions:
   contents: read
