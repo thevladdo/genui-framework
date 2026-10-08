@@ -199,6 +199,29 @@ test("an error that lands after a tenant switch is dropped, not raised", async (
   assert.equal(listSessions().length, 2);
 });
 
+test("a server error carries its request id, so the operator can find it in the logs", async () => {
+  reset();
+  saveSession(ACME);
+  const held = heldFetch();
+
+  const failing = listDocuments(ACME);
+  held[0].resolve(reply(500, { detail: "Internal server error", request_id: "req-42" }));
+  await assert.rejects(failing, /Internal server error \(request id req-42\)/);
+});
+
+test("a 503 names the request id from its header", async () => {
+  reset();
+  saveSession(ACME);
+  const held = heldFetch();
+
+  const failing = listDocuments(ACME);
+  held[0].resolve({
+    ...reply(503, { detail: "The knowledge base did not answer" }),
+    headers: { get: (name) => (name.toLowerCase() === "x-request-id" ? "req-503" : null) },
+  });
+  await assert.rejects(failing, (error) => /did not answer \(request id req-503\)/.test(error.message) && error.status === 503);
+});
+
 test("a reply for the tenant still active is delivered, errors included", async () => {
   reset();
   saveSession(ACME);

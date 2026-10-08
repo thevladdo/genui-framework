@@ -16,6 +16,7 @@ import json
 
 from config import settings
 from llm import Role, answered_model, create_llm_client
+from llm.embeddings import EmbeddingConfigError
 from rag import get_vector_store, build_context_from_results
 from schemas import builtin_catalog, component_to_dict, validate_components
 from utils.content_policy_store import effective_policy
@@ -144,6 +145,8 @@ class AgentResponse:
     # Marking of this answer: whether a model wrote it, when, and with
     # which provenance. None when the operator turned disclosure off.
     disclosure: Optional[Dict[str, Any]] = None
+    retrieval: str = "ok"
+    degraded: bool = False
 
     def __post_init__(self):
         if self.sanitization is None:
@@ -293,10 +296,10 @@ security regulations. The implementation is handled by your technical team..."
         Initialize the Response Agent.
 
         Args:
-            vector_store: QdrantVectorStore instance (created if not provided)
+            vector_store: QdrantVectorStore instance (the process-wide one, built on first search, if not provided)
             llm_client: LLMChatClient instance (created if not provided)
         """
-        self.vector_store = vector_store or get_vector_store()
+        self.vector_store = vector_store
         self.llm = llm_client or create_llm_client(Role.CHAT)
 
     def _build_query_prompt(
@@ -378,7 +381,11 @@ security regulations. The implementation is handled by your technical team..."
 
         # Retrieve relevant documents asynchronously with caching
         logger.info(f"Retrieving context for query: {query[:100]}...")
-        search_results = await self.vector_store.search_async(query=query, tenant=tenant)
+        retrieval = "ok"
+        search_results = await self._search(query=query, tenant=tenant)
+        if search_results is None:
+            retrieval = "unavailable"
+            search_results = []
         retrieved_context = build_context_from_results(search_results)
 
         # Build the full prompt
@@ -396,11 +403,15 @@ security regulations. The implementation is handled by your technical team..."
         tool_contexts: List[str] = []
 
         async def _run_search_tool(name: str, arguments: Dict[str, Any]) -> str:
-            results = await self.vector_store.search_async(
+            nonlocal retrieval
+            results = await self._search(
                 query=str(arguments.get("query", "")),
                 top_k=max(1, min(int(arguments.get("top_k") or 5), 20)),
                 tenant=tenant,
             )
+            if results is None:
+                retrieval = "unavailable"
+                return "The knowledge base is unavailable."
             context = build_context_from_results(results, include_metadata=True)
             tool_contexts.append(context)
             return context
@@ -522,10 +533,11 @@ security regulations. The implementation is handled by your technical team..."
                     enabled=not settings.genui_disclosure_off,
                     expose_model=settings.disclosure_expose_model,
                 ),
+                retrieval=retrieval,
             )
 
-        except Exception as e:
-            logger.error(f"Agent processing failed: {e}")
+        except Exception:
+            logger.error("Agent processing failed", exc_info=True)
             # Return a fallback response (the error stays in the logs).
             # No model output reaches the user here: these two strings
             # are written in this file, and the marking says so.
@@ -542,8 +554,21 @@ security regulations. The implementation is handled by your technical team..."
                     provenance=PROVENANCE_NONE,
                     enabled=not settings.genui_disclosure_off,
                 ),
+                retrieval=retrieval,
+                degraded=True,
             )
     
+    async def _search(self, **kwargs) -> Optional[List[Any]]:
+        """Knowledge-base search; None when the store did not answer. A misconfigured embedding still raises."""
+        try:
+            store = self.vector_store or get_vector_store()
+            return await store.search_async(**kwargs)
+        except EmbeddingConfigError:
+            raise
+        except Exception:
+            logger.warning("Knowledge base unavailable, answering without documents", exc_info=True)
+            return None
+
     def _parse_response(self, response_text: str) -> Dict[str, Any]:
         """Parse the JSON response from the agent."""
         try:

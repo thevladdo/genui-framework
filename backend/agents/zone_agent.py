@@ -106,6 +106,7 @@ class ZoneRenderResult:
     # the payload. None when the operator turned the disclosure off.
     disclosure: Optional[Dict[str, Any]] = None
     model: Optional[str] = None
+    degraded: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -415,7 +416,8 @@ CRITICAL RULES:
 
     def __init__(self, vector_store=None, llm_client=None):
         """Initialize the Zone Agent."""
-        self.vector_store = vector_store or get_vector_store()
+        # Built on first search, inside the retrieval fallback: Qdrant down at boot costs RAG, not the render
+        self.vector_store = vector_store
         self.llm = llm_client or create_llm_client(Role.ZONE)
     
     
@@ -443,8 +445,8 @@ CRITICAL RULES:
                 chain.feed(raw_component)
             return self._result(request, retrieved, parsed, chain, chain.components)
 
-        except Exception as e:
-            logger.error(f"Zone rendering failed: {e}")
+        except Exception:
+            logger.error("Zone rendering failed", exc_info=True)
             return self._fallback_render(request)
 
     def render_zone(self, request: ZoneRenderRequest) -> ZoneRenderResult:
@@ -491,8 +493,8 @@ CRITICAL RULES:
                 ),
             }
 
-        except Exception as e:
-            logger.error(f"Zone stream rendering failed: {e}")
+        except Exception:
+            logger.error("Zone stream rendering failed", exc_info=True)
             yield {"type": "complete", "result": self._fallback_render(request)}
 
 
@@ -671,15 +673,15 @@ CRITICAL RULES:
         if not search_query:
             return []
         try:
-            return await self.vector_store.search_async(
+            return await (self.vector_store or get_vector_store()).search_async(
                 query=search_query,
                 top_k=settings.top_k_retrieval,
                 tenant=request.tenant,
             )
         except EmbeddingConfigError:
             raise
-        except Exception as e:
-            logger.warning(f"Zone retrieval failed, continuing without RAG: {e}")
+        except Exception:
+            logger.warning("Zone retrieval failed, continuing without RAG", exc_info=True)
             return []
 
     def _build_zone_prompt(
@@ -957,6 +959,7 @@ CRITICAL RULES:
                 provenance=PROVENANCE_NONE,
                 enabled=not settings.genui_disclosure_off,
             ),
+            degraded=True,
         )
 
 

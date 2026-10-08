@@ -89,7 +89,9 @@ const IngestProgress = ({
       ? 'Writing the context of each chunk, one model call each'
       : status?.phase === 'cancelled'
         ? 'Stopped. Everything written so far is kept'
-        : 'Indexing';
+        : status?.phase === 'failed'
+          ? 'Stopped by an error. Everything written so far is kept'
+          : 'Indexing';
 
   return (
     <div className={styles.progressPanel} role="status" aria-live="polite">
@@ -612,18 +614,25 @@ const StudioWorkbench = ({
   const [backfillRemaining, setBackfillRemaining] = useState<number | null>(null);
   const [backfillRun, setBackfillRun] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setDocuments([]);
+    setListError(null);
     try {
       const base = await listDocuments(session);
       setDocuments(base.documents);
       setCorpus(base.corpus);
-    } catch {
-      // A dead session (expired key, backend down) falls back to the gate, or to another connected tenant when there is one.
+    } catch (e) {
+      // Only a refused key ends the session; anything else is shown, and the next refresh may succeed.
       // clearSession drops the active session, so an error for a tenant already left must not reach it.
-      if (isActive(session)) onSession(clearSession());
+      const status = (e as { status?: number }).status;
+      if (status === 401 || status === 403) {
+        if (isActive(session)) onSession(clearSession());
+      } else {
+        setListError(`The documents could not be loaded: ${e instanceof Error ? e.message : String(e)}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -700,6 +709,7 @@ const StudioWorkbench = ({
         onCrossed={setDecision}
       />
       {deleteError && <p className={styles.error} role="alert">{deleteError}</p>}
+      {listError && <p className={styles.error} role="alert">{listError}</p>}
       <DocumentsTable
         documents={documents}
         corpus={corpus}

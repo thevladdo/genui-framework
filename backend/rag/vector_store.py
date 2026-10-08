@@ -536,29 +536,25 @@ class QdrantVectorStore:
                     ))
         qdrant_filter = qmodels.Filter(must=conditions)
 
-        # Perform search using async client
-        try:
-            if self.hybrid:
-                results = await self.async_client.query_points(
-                    collection_name=self.collection_name,
-                    prefetch=self._fusion_branches(
-                        query, query_embedding, qdrant_filter, score_threshold, top_k
-                    ),
-                    query=qmodels.FusionQuery(fusion=qmodels.Fusion.RRF),
-                    limit=top_k,
-                )
-            else:
-                results = await self.async_client.query_points(
-                    collection_name=self.collection_name,
-                    query=query_embedding,
-                    limit=top_k,
-                    score_threshold=score_threshold,
-                    query_filter=qdrant_filter,
-                )
-            points = results.points
-        except Exception as e:
-            logger.error(f"Search failed: {e}")
-            return []
+        # A Qdrant failure raises: "no passage matched" and "the store did not answer" are different answers
+        if self.hybrid:
+            results = await self.async_client.query_points(
+                collection_name=self.collection_name,
+                prefetch=self._fusion_branches(
+                    query, query_embedding, qdrant_filter, score_threshold, top_k
+                ),
+                query=qmodels.FusionQuery(fusion=qmodels.Fusion.RRF),
+                limit=top_k,
+            )
+        else:
+            results = await self.async_client.query_points(
+                collection_name=self.collection_name,
+                query=query_embedding,
+                limit=top_k,
+                score_threshold=score_threshold,
+                query_filter=qdrant_filter,
+            )
+        points = results.points
         
         # Convert to RetrievalResult objects
         retrieval_results = []
@@ -623,30 +619,25 @@ class QdrantVectorStore:
         corpus total. Without that the total only ever grows, and a corpus
         that has shrunk below the threshold goes on paying to index with
         context because a number nobody maintains says it is still large.
-        Negative means the deletion failed.
         """
         removed_tokens = self._source_tokens(source_document, tenant)
-        try:
-            self.client.delete(
-                collection_name=self.collection_name,
-                points_selector=qmodels.FilterSelector(
-                    filter=qmodels.Filter(
-                        must=[
-                            qmodels.FieldCondition(
-                                key="source_document",
-                                match=qmodels.MatchValue(value=source_document),
-                            ),
-                            self._tenant_condition(tenant),
-                        ]
-                    )
-                ),
-            )
-            logger.info(f"Deleted chunks from source: {source_document} (tenant: {tenant or DEFAULT_TENANT})")
-            return removed_tokens
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=qmodels.FilterSelector(
+                filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="source_document",
+                            match=qmodels.MatchValue(value=source_document),
+                        ),
+                        self._tenant_condition(tenant),
+                    ]
+                )
+            ),
+        )
+        logger.info(f"Deleted chunks from source: {source_document} (tenant: {tenant or DEFAULT_TENANT})")
+        return removed_tokens
 
-        except Exception as e:
-            logger.error(f"Deletion failed for {source_document}: {e}")
-            return -1
 
     def _source_tokens(self, source_document: str, tenant: Optional[str]) -> int:
         """
@@ -657,31 +648,27 @@ class QdrantVectorStore:
         """
         total = 0
         offset = None
-        try:
-            while True:
-                points, offset = self.client.scroll(
-                    collection_name=self.collection_name,
-                    scroll_filter=qmodels.Filter(must=[
-                        qmodels.FieldCondition(
-                            key="source_document",
-                            match=qmodels.MatchValue(value=source_document),
-                        ),
-                        self._tenant_condition(tenant),
-                    ]),
-                    limit=_LIST_SCROLL_PAGE,
-                    offset=offset,
-                    with_payload=["content"],
-                    with_vectors=False,
-                )
-                total += sum(
-                    estimate_tokens((point.payload or {}).get("content", ""))
-                    for point in points
-                )
-                if offset is None:
-                    break
-        except Exception as e:
-            logger.warning(f"Could not size {source_document} before deleting: {e}")
-            return 0
+        while True:
+            points, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=qmodels.Filter(must=[
+                    qmodels.FieldCondition(
+                        key="source_document",
+                        match=qmodels.MatchValue(value=source_document),
+                    ),
+                    self._tenant_condition(tenant),
+                ]),
+                limit=_LIST_SCROLL_PAGE,
+                offset=offset,
+                with_payload=["content"],
+                with_vectors=False,
+            )
+            total += sum(
+                estimate_tokens((point.payload or {}).get("content", ""))
+                for point in points
+            )
+            if offset is None:
+                break
 
         return total
 
@@ -697,42 +684,39 @@ class QdrantVectorStore:
         scanned = 0
         offset = None
 
-        try:
-            while scanned < _LIST_MAX_POINTS:
-                points, offset = self.client.scroll(
-                    collection_name=self.collection_name,
-                    scroll_filter=qmodels.Filter(must=[self._tenant_condition(tenant)]),
-                    limit=_LIST_SCROLL_PAGE,
-                    offset=offset,
-                    with_payload=["source_document", "title", "url", "file_type", "indexed_at"],
-                    with_vectors=False,
-                )
+        while scanned < _LIST_MAX_POINTS:
+            points, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=qmodels.Filter(must=[self._tenant_condition(tenant)]),
+                limit=_LIST_SCROLL_PAGE,
+                offset=offset,
+                with_payload=["source_document", "title", "url", "file_type", "indexed_at"],
+                with_vectors=False,
+            )
 
-                for point in points:
-                    payload = point.payload or {}
-                    source = payload.get("source_document", "unknown")
-                    entry = documents.setdefault(source, {
-                        "source_document": source,
-                        "chunks": 0,
-                        "title": payload.get("title"),
-                        "url": payload.get("url"),
-                        "file_type": payload.get("file_type"),
-                        "indexed_at": payload.get("indexed_at"),
-                    })
-                    entry["chunks"] += 1
+            for point in points:
+                payload = point.payload or {}
+                source = payload.get("source_document", "unknown")
+                entry = documents.setdefault(source, {
+                    "source_document": source,
+                    "chunks": 0,
+                    "title": payload.get("title"),
+                    "url": payload.get("url"),
+                    "file_type": payload.get("file_type"),
+                    "indexed_at": payload.get("indexed_at"),
+                })
+                entry["chunks"] += 1
 
-                scanned += len(points)
-                if offset is None:
-                    break
+            scanned += len(points)
+            if offset is None:
+                break
 
-            if scanned >= _LIST_MAX_POINTS:
-                logger.warning(
-                    "list_documents truncated at %d points for tenant %s",
-                    _LIST_MAX_POINTS, tenant or DEFAULT_TENANT,
-                )
+        if scanned >= _LIST_MAX_POINTS:
+            logger.warning(
+                "list_documents truncated at %d points for tenant %s",
+                _LIST_MAX_POINTS, tenant or DEFAULT_TENANT,
+            )
 
-        except Exception as e:
-            logger.error(f"Document listing failed: {e}")
 
         return sorted(documents.values(), key=lambda d: d["source_document"])
 
@@ -816,28 +800,25 @@ class QdrantVectorStore:
         """
         found: Dict[str, Dict[str, Any]] = {}
         offset = None
-        try:
-            while True:
-                points, offset = self.client.scroll(
-                    collection_name=self.collection_name,
-                    scroll_filter=qmodels.Filter(must=[
-                        qmodels.FieldCondition(
-                            key="source_document",
-                            match=qmodels.MatchValue(value=source_document),
-                        ),
-                        self._tenant_condition(tenant),
-                    ]),
-                    limit=_LIST_SCROLL_PAGE,
-                    offset=offset,
-                    with_payload=qmodels.PayloadSelectorExclude(exclude=["content"]),
-                    with_vectors=False,
-                )
-                for point in points:
-                    found[str(point.id)] = point.payload or {}
-                if offset is None:
-                    break
-        except Exception as e:
-            logger.warning(f"Could not read what is indexed for {source_document}: {e}")
+        while True:
+            points, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=qmodels.Filter(must=[
+                    qmodels.FieldCondition(
+                        key="source_document",
+                        match=qmodels.MatchValue(value=source_document),
+                    ),
+                    self._tenant_condition(tenant),
+                ]),
+                limit=_LIST_SCROLL_PAGE,
+                offset=offset,
+                with_payload=qmodels.PayloadSelectorExclude(exclude=["content"]),
+                with_vectors=False,
+            )
+            for point in points:
+                found[str(point.id)] = point.payload or {}
+            if offset is None:
+                break
 
         return found
 
@@ -851,27 +832,24 @@ class QdrantVectorStore:
         they are, so the split is worth one cheap pair of counts.
         """
         counts = {"chunks_total": 0, "chunks_contextualized": 0, "chunks_plain": 0}
-        try:
-            tenant_filter = qmodels.Filter(must=[self._tenant_condition(tenant)])
-            counts["chunks_total"] = self.client.count(
-                collection_name=self.collection_name,
-                count_filter=tenant_filter,
-                exact=True,
-            ).count
-            counts["chunks_contextualized"] = self.client.count(
-                collection_name=self.collection_name,
-                count_filter=qmodels.Filter(must=[
-                    self._tenant_condition(tenant),
-                    qmodels.FieldCondition(
-                        key="contextualized",
-                        match=qmodels.MatchValue(value=True),
-                    ),
-                ]),
-                exact=True,
-            ).count
-            counts["chunks_plain"] = counts["chunks_total"] - counts["chunks_contextualized"]
-        except Exception as e:
-            logger.warning(f"Chunk counts failed: {e}")
+        tenant_filter = qmodels.Filter(must=[self._tenant_condition(tenant)])
+        counts["chunks_total"] = self.client.count(
+            collection_name=self.collection_name,
+            count_filter=tenant_filter,
+            exact=True,
+        ).count
+        counts["chunks_contextualized"] = self.client.count(
+            collection_name=self.collection_name,
+            count_filter=qmodels.Filter(must=[
+                self._tenant_condition(tenant),
+                qmodels.FieldCondition(
+                    key="contextualized",
+                    match=qmodels.MatchValue(value=True),
+                ),
+            ]),
+            exact=True,
+        ).count
+        counts["chunks_plain"] = counts["chunks_total"] - counts["chunks_contextualized"]
         return counts
 
     def _plain_condition(self, tenant: Optional[str]) -> qmodels.Filter:
@@ -900,28 +878,25 @@ class QdrantVectorStore:
         """
         found: List[Dict[str, Any]] = []
         offset = None
-        try:
-            while len(found) < max_points:
-                points, offset = self.client.scroll(
-                    collection_name=self.collection_name,
-                    scroll_filter=self._plain_condition(tenant),
-                    limit=_LIST_SCROLL_PAGE,
-                    offset=offset,
-                    with_payload=["content", "chunk_id", "source_document"],
-                    with_vectors=False,
-                )
-                for point in points:
-                    payload = point.payload or {}
-                    found.append({
-                        "id": point.id,
-                        "chunk_id": payload.get("chunk_id", ""),
-                        "source_document": payload.get("source_document", ""),
-                        "content": payload.get("content", ""),
-                    })
-                if offset is None:
-                    break
-        except Exception as e:
-            logger.error(f"Could not list the points without context: {e}")
+        while len(found) < max_points:
+            points, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=self._plain_condition(tenant),
+                limit=_LIST_SCROLL_PAGE,
+                offset=offset,
+                with_payload=["content", "chunk_id", "source_document"],
+                with_vectors=False,
+            )
+            for point in points:
+                payload = point.payload or {}
+                found.append({
+                    "id": point.id,
+                    "chunk_id": payload.get("chunk_id", ""),
+                    "source_document": payload.get("source_document", ""),
+                    "content": payload.get("content", ""),
+                })
+            if offset is None:
+                break
 
         return found[:max_points]
 
@@ -947,31 +922,27 @@ class QdrantVectorStore:
         if embeddings:
             self._check_dimension(embeddings[0])
 
-        try:
-            self.client.update_vectors(
-                collection_name=self.collection_name,
-                points=[
-                    qmodels.PointVectors(
-                        id=point_id,
-                        vector=(
-                            {
-                                DENSE_VECTOR: embedding,
-                                LEXICAL_VECTOR: lexical_vector(text),
-                            }
-                            if self.has_lexical else embedding
-                        ),
-                    )
-                    for (point_id, _), embedding, text in zip(pending, embeddings, texts)
-                ],
-            )
-            self.client.set_payload(
-                collection_name=self.collection_name,
-                payload={"contextualized": True},
-                points=[point_id for point_id, _ in pending],
-            )
-        except Exception as e:
-            logger.error(f"Backfill update failed: {e}")
-            return 0
+        self.client.update_vectors(
+            collection_name=self.collection_name,
+            points=[
+                qmodels.PointVectors(
+                    id=point_id,
+                    vector=(
+                        {
+                            DENSE_VECTOR: embedding,
+                            LEXICAL_VECTOR: lexical_vector(text),
+                        }
+                        if self.has_lexical else embedding
+                    ),
+                )
+                for (point_id, _), embedding, text in zip(pending, embeddings, texts)
+            ],
+        )
+        self.client.set_payload(
+            collection_name=self.collection_name,
+            payload={"contextualized": True},
+            points=[point_id for point_id, _ in pending],
+        )
 
         return len(pending)
 
@@ -988,54 +959,44 @@ class QdrantVectorStore:
         total = 0
         scanned = 0
         offset = None
-        try:
-            while scanned < _LIST_MAX_POINTS:
-                points, offset = self.client.scroll(
-                    collection_name=self.collection_name,
-                    scroll_filter=qmodels.Filter(must=[self._tenant_condition(tenant)]),
-                    limit=_LIST_SCROLL_PAGE,
-                    offset=offset,
-                    with_payload=["content"],
-                    with_vectors=False,
-                )
-                total += sum(
-                    estimate_tokens((point.payload or {}).get("content", ""))
-                    for point in points
-                )
-                scanned += len(points)
-                if offset is None:
-                    break
-        except Exception as e:
-            logger.warning(f"Could not rebuild the corpus size: {e}")
+        while scanned < _LIST_MAX_POINTS:
+            points, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=qmodels.Filter(must=[self._tenant_condition(tenant)]),
+                limit=_LIST_SCROLL_PAGE,
+                offset=offset,
+                with_payload=["content"],
+                with_vectors=False,
+            )
+            total += sum(
+                estimate_tokens((point.payload or {}).get("content", ""))
+                for point in points
+            )
+            scanned += len(points)
+            if offset is None:
+                break
 
         return total
 
     def get_collection_stats(self, tenant: Optional[str] = None) -> Dict[str, Any]:
         """Collection statistics; includes the tenant's point count when given."""
-        try:
-            info = self.client.get_collection(self.collection_name)
-            stats = {
-                "points_count": info.points_count,
-                "vectors_count": getattr(info, "vectors_count", None),
-                "indexed_vectors_count": getattr(info, "indexed_vectors_count", None),
-                "status": info.status,
-                "retrieval_mode": "hybrid" if self.hybrid else "dense",
-            }
-            if tenant is not None:
-                try:
-                    counted = self.client.count(
-                        collection_name=self.collection_name,
-                        count_filter=qmodels.Filter(must=[self._tenant_condition(tenant)]),
-                        exact=True,
-                    )
-                    stats["tenant_points_count"] = counted.count
-                except Exception as e:
-                    logger.warning(f"Tenant count failed: {e}")
-            return stats
-        except Exception as e:
-            logger.error(f"Failed to get collection stats: {e}")
-            return {}
-    
+        info = self.client.get_collection(self.collection_name)
+        stats = {
+            "points_count": info.points_count,
+            "vectors_count": getattr(info, "vectors_count", None),
+            "indexed_vectors_count": getattr(info, "indexed_vectors_count", None),
+            "status": info.status,
+            "retrieval_mode": "hybrid" if self.hybrid else "dense",
+        }
+        if tenant is not None:
+            counted = self.client.count(
+                collection_name=self.collection_name,
+                count_filter=qmodels.Filter(must=[self._tenant_condition(tenant)]),
+                exact=True,
+            )
+            stats["tenant_points_count"] = counted.count
+        return stats
+
     def clear_collection(self) -> bool:
         """Delete and recreate the collection (use with caution)."""
         try:
@@ -1044,7 +1005,7 @@ class QdrantVectorStore:
             self._ensure_collection()
             return True
         except Exception as e:
-            logger.error(f"Failed to clear collection: {e}")
+            logger.error(f"Failed to clear collection: {e}", exc_info=True)
             return False
 
 

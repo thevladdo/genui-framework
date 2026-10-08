@@ -73,6 +73,7 @@ export interface IngestStatus {
     | "indexing"
     | "done"
     | "cancelled"
+    | "failed"
     | "unknown"
     | string;
   source?: string;
@@ -108,13 +109,16 @@ const call = async (
 
   if (!response.ok) {
     let detail = `Request failed (${response.status})`;
+    let requestId: string | null = null;
     try {
       const body = await response.json();
       if (typeof body?.detail === "string") detail = body.detail;
+      if (typeof body?.request_id === "string") requestId = body.request_id;
     } catch {
       // Non-JSON error body
     }
-    throw new Error(detail);
+    requestId ??= response.status >= 500 ? response.headers?.get?.("X-Request-ID") ?? null : null;
+    throw Object.assign(new Error(requestId ? `${detail} (request id ${requestId})` : detail), { status: response.status });
   }
 
   return response;

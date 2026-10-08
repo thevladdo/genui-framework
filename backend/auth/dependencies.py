@@ -27,6 +27,7 @@ from fastapi.security import APIKeyHeader
 from config import settings
 from utils.audit import AuditLogger, AuditReader, FileAuditReader
 from utils.rate_limit import RateLimiter
+from utils.request_context import set_tenant
 
 from .identity import UserTokenVerifier, authorize_user_access, open_mode_context
 from .keys import AuthContext, KeyRegistry
@@ -115,6 +116,7 @@ async def require_client(
                 "OPEN. Never use this in production."
             )
             _warned_open = True
+        set_tenant(context.tenant)
         return context
 
     context = registry.authenticate(_extract_key(api_key, authorization))
@@ -126,6 +128,7 @@ async def require_client(
         if not await limiter.allow(context.key_fingerprint):
             raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
+    set_tenant(context.tenant)
     return context
 
 

@@ -260,7 +260,7 @@ LLM_ZONE_FALLBACK=openai:gpt-4o-mini   # optional, see below
 
 Keys and endpoints belong to the provider, not the role: `OPENAI_API_KEY` and `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`. One role on Anthropic or Gemini and the rest on a local `OPENAI_BASE_URL` works. One role on OpenAI's API and another on a local endpoint doesn't, in the same deployment. A model name with a colon (Ollama tags) needs its provider in front, `openai:qwen3:8b`, because only a known provider counts as a prefix. Anything else before the colon is an error, not a model name.
 
-A role that cannot be called fails `/ready` (503). The body lists the role and the variable, `"llm_unconfigured": ["zone (LLM_ZONE)"]`, and the startup log says what is missing. That includes an unknown provider. A model never changes at runtime unless you wrote `LLM_<ROLE>_FALLBACK`. Then a provider error on that role is answered by the fallback, counted in `genui_llm_fallbacks_total{role, from_model, to_model}`, and the disclosure, when it names the model, names the fallback. Without it, a provider error is an error.
+A role that cannot be called fails `/ready` (503). The body lists the role and the variable, `"llm_unconfigured": ["zone (LLM_ZONE)"]`, and the startup log says what is missing. That includes an unknown provider. A key that only looks right is caught too: at startup and then every 5 minutes, each provider is asked for the metadata of the model it serves, which spends no tokens. A rejected key, or a model the provider's own endpoint does not know, fails `/ready` with `"llm": "rejected"`. An endpoint that does not answer gives no verdict, since that is an outage and the error counters show it. A model never changes at runtime unless you wrote `LLM_<ROLE>_FALLBACK`. Then a provider error on that role is answered by the fallback, counted in `genui_llm_fallbacks_total{role, from_model, to_model}`, and the disclosure, when it names the model, names the fallback. Without it, a provider error is an error.
 
 The default model is `gpt-4o-mini` in the code and in both example env files. Change it, or any role's model, after running the [golden harness](#golden-harness--regression-signal-for-promptmodelengine-changes) in live mode against the candidate, not because a newer model came out.
 
@@ -1925,7 +1925,7 @@ Everything a regulated operator must observe (service health, traffic, LLM spend
 | Endpoint      | Auth | Purpose                                                                                                                                                                                                                                                 |
 | ------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /health` | none | Aggregate dependency health for dashboards and uptime monitors. Always `200`; the body says `healthy` or `degraded`.                                                                                                                                    |
-| `GET /ready`  | none | Readiness for load balancers. `503` only when the process cannot serve at all (LLM provider unconfigured). A degraded dependency keeps `200`: pulling every replica out of rotation for a shared dependency blip would turn degradation into an outage. |
+| `GET /ready`  | none | Readiness for load balancers. `503` only when the process cannot serve at all (a generation role unconfigured, or its key rejected). A degraded dependency keeps `200`: pulling every replica out of rotation for a shared dependency blip would turn degradation into an outage. |
 | `GET /live`   | none | Process liveness: `200` while the event loop answers. Restart the process if this stops responding.                                                                                                                                                     |
 
 ```json
@@ -1934,11 +1934,13 @@ Everything a regulated operator must observe (service health, traffic, LLM spend
   "version": "1.0.0",
   "qdrant_connected": true,
   "redis": "reconnecting",
-  "llm": "configured"
+  "llm": "configured",
+  "llm_unconfigured": [],
+  "embeddings": "configured"
 }
 ```
 
-The checks are real: `redis` is probed on the same connection handle the stores use (`connected` | `reconnecting` | `disabled`, see [Production run](#-production-run--multiple-workers--redis)), `qdrant_connected` requires the collection to actually answer, and `llm` verifies that the configured provider has a key or a usable endpoint (config check, no network call: provider reachability shows up as error counters in `/metrics`). Health responses carry statuses only. Collection internals (point counts, index state) moved behind the admin key: `GET /api/v1/documents/stats`.
+The checks are real: `redis` is probed on the same connection handle the stores use (`connected` | `reconnecting` | `disabled`, see [Production run](#-production-run--multiple-workers--redis)), `qdrant_connected` requires the collection to actually answer, and `llm` says whether every generation role has a key or a usable endpoint and whether the provider accepted that key when last asked (`configured` | `unconfigured` | `rejected`). `embeddings` is `rejected` when the embedding key or model was refused: retrieval stops, zones and chat still answer, so it degrades `status` without failing `/ready`. Provider reachability shows up as error counters in `/metrics`). Health responses carry statuses only. Collection internals (point counts, index state) moved behind the admin key: `GET /api/v1/documents/stats`.
 
 Alert on `status: "degraded"` (scrape `/health` with the blackbox exporter or your uptime monitor); route traffic on `/ready`; restart on `/live`.
 
@@ -1959,9 +1961,9 @@ scrape_configs:
 | `genui_http_requests_total`                     | `method, path, status`           | Requests per route template (unmatched paths collapse into `path="unmatched"`)                                                                                                        |
 | `genui_http_request_seconds_sum/_count`         | `method, path`                   | Request latency (average via `rate(sum)/rate(count)`)                                                                                                                                 |
 | `genui_zone_renders_total`                      | `tenant, cache`                  | Served renders per cache outcome: `fresh`, `stale`, `miss`, `coalesced`, `bypass`                                                                                                     |
-| `genui_llm_generations_total`                   | `tenant, op, outcome`            | LLM generations (`op`: `zone` or `query`; `outcome`: `ok` or `error`). This is the spend meter for the tenant's BYOK key                                                              |
+| `genui_llm_generations_total`                   | `tenant, op, outcome`            | LLM generations (`op`: `zone` or `query`; `outcome`: `ok`, `degraded` or `error`). `degraded`: the model failed and the user got the pinned-only zone or the chat's fixed apology. This is the spend meter for the tenant's BYOK key |
 | `genui_llm_generation_seconds_sum/_count`       | `tenant, op`                     | Generation latency                                                                                                                                                                    |
-| `genui_llm_model_calls_total`                   | `role, provider, model, outcome` | Every call to a model, labelled with the role that made it and the model that served it. A zone render that failed and fell back to pinned content counts `ok` above and `error` here |
+| `genui_llm_model_calls_total`                   | `role, provider, model, outcome` | Every call to a model, labelled with the role that made it and the model that served it. A zone render that failed and fell back to pinned content counts `degraded` above and `error` here |
 | `genui_llm_model_call_seconds_sum/_count`       | `role, model`                    | Latency per role and model                                                                                                                                                            |
 | `genui_llm_fallbacks_total`                     | `role, from_model, to_model`     | Calls answered by a declared `LLM_<ROLE>_FALLBACK`                                                                                                                                    |
 | `genui_redis_connected`, `genui_llm_configured` |                                  | Dependency gauges computed at scrape time                                                                                                                                             |
@@ -1973,14 +1975,28 @@ The counters live in Redis (same shared handle as the stores), so every worker i
 sum(rate(genui_zone_renders_total{cache=~"fresh|stale"}[5m]))
   / sum(rate(genui_zone_renders_total[5m]))
 
-# LLM error rate per tenant
-sum by (tenant) (rate(genui_llm_generations_total{outcome="error"}[5m]))
+# LLM failure rate per tenant: degraded answers are failures the user saw
+sum by (tenant) (rate(genui_llm_generations_total{outcome=~"error|degraded"}[5m]))
   / sum by (tenant) (rate(genui_llm_generations_total[5m]))
 
 # HTTP 5xx ratio
 sum(rate(genui_http_requests_total{status=~"5.."}[5m]))
   / sum(rate(genui_http_requests_total[5m]))
 ```
+
+#### Request id and logs
+
+Every response carries an `X-Request-ID` header. If the proxy in front sends one (letters, digits, `.`, `_`, `:`, `-`, at most 128 characters), the backend keeps it. Otherwise it creates one. The same id is on every log line written while serving that request, on the `request_id` field of its audit lines and on the `genui.request_id` attribute of its spans. When a user reports an error, ask for that id and search for it.
+
+A `500` never contains the exception. The body is always this:
+
+```json
+{ "detail": "Internal server error", "request_id": "3f2a9c..." }
+```
+
+The exception goes to the log at `ERROR` level, with its stack, the route, the tenant and the request id. The same rule covers the stream: its `error` event carries `detail`, `request_id` and `status: 500`. A failed zone in `batch-render` gets `error` and `request_id`. `4xx` responses and `503`s with `Retry-After` keep the `detail` written for the client.
+
+`LOG_FORMAT` sets the log format. `json` writes one object per line with `ts` (UTC), `level`, `logger`, `message`, `request_id`, plus `tenant` once the key is known and `exc` when there is a stack. Audit lines are already JSON and are written as they are. `text` is the single-line format for a terminal. Left empty, the format is `text` with `GENUI_DEV_OPEN` and `json` otherwise. In `json` mode the uvicorn server and access lines take the same format, so one parser handles all of them.
 
 #### Audit in production
 
@@ -2100,8 +2116,8 @@ The knowledge base feeds the AI real content to curate (and its URLs feed the wh
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /api/v1/documents/upload`             | Upload a **file** (PDF, DOCX, HTML, TXT, MD, up to `MAX_UPLOAD_MB`, 50 by default, multipart; past that, 413): text extracted server-side off the event loop, chunked, indexed. Images (PNG/JPG/WEBP/TIFF) too with a capable extractor backend |
 | `POST /api/v1/documents`                    | Upload raw text (JSON: `content` + `metadata`)                                                                                                                                                                                                  |
-| `GET /api/v1/documents`                     | List the tenant's documents with chunk counts                                                                                                                                                                                                   |
-| `POST /api/v1/documents/search`             | Preview what the AI would retrieve for a query (passages + similarity scores), for content debugging                                                                                                                                            |
+| `GET /api/v1/documents`                     | List the tenant's documents with chunk counts; `503` with `Retry-After` while Qdrant does not answer                                                                                                                                                                                                   |
+| `POST /api/v1/documents/search`             | Preview what the AI would retrieve for a query (passages + similarity scores), for content debugging; `503` while Qdrant does not answer                                                                                                                                            |
 | `DELETE /api/v1/documents/{source_name}`    | Delete a document (tenant-scoped, audit-logged). Its tokens leave the corpus total with it                                                                                                                                                      |
 | `GET /api/v1/documents/stats`               | Collection stats incl. the tenant's chunk count                                                                                                                                                                                                 |
 | `POST /api/v1/documents/backfill`           | Index the chunks stored without their context behind it now. `dry_run` prices the run first; it goes through the per-tenant cap and picks up where a previous run stopped                                                                       |
@@ -2329,7 +2345,8 @@ Content-Type: application/json
     "interaction_type": "question",
     "topics": ["products", "recommendations"],
     "sentiment": "positive",
-    "session": { "resumed": true, "stored": true, "unsummarized": 0 }
+    "session": { "resumed": true, "stored": true, "unsummarized": 0 },
+    "retrieval": "ok"
   }
 }
 ```
@@ -2338,7 +2355,7 @@ Content-Type: application/json
 
 A session is read only by the identity that started it. A session with a user needs that user's `X-User-Token`, an anonymous one only its id, and an anonymous session does not carry over to a user who logs in halfway. An id from another tenant, from another user, expired or simply unknown is treated as absent. The answer then comes with a new id and `meta.session.resumed: false`. The server never adopts an id the client made up.
 
-`conversation_history` is still accepted from clients that send no `session_id`. It is cut to the same window, and ignored whenever `session_id` is present. If the session store does not answer, the chat still replies, without memory, with `meta.session.stored: false` and the same `session_id`, so the conversation picks up again once the store is back.
+`conversation_history` is still accepted from clients that send no `session_id`. It is cut to the same window, and ignored whenever `session_id` is present. If the session store does not answer, the chat still replies, without memory, with `meta.session.stored: false` and the same `session_id`, so the conversation picks up again once the store is back. If the knowledge-base search fails (Qdrant down, embedding call refused), the chat replies without documents and says so with `meta.retrieval: "unavailable"`.
 
 How long it is kept: an anonymous session for `CHAT_SESSION_TTL_SECONDS` (30 minutes) after its last message, a session with a user as long as `PROFILE_TTL_SECONDS` allows. To forget one, call `DELETE /api/v1/query/sessions/{session_id}` (same identity rule, `{"deleted": true|false}`, `503` when the store is down). `useGenUI().clearHistory()` does it for you. A user's sessions are also in the profile export and go with the profile erasure.
 

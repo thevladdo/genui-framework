@@ -325,7 +325,7 @@ class SemanticChunker:
                 chunks = self.chunk_document(file_path)
                 all_chunks.extend(chunks)
             except Exception as e:
-                logger.error(f"Failed to process {file_path}: {e}")
+                logger.error(f"Failed to process {file_path}: {e}", exc_info=True)
                 continue
         
         return all_chunks

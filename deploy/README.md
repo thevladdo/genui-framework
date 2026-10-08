@@ -75,7 +75,7 @@ What the boundary guarantees, with the code that enforces it: **[TENANT-ISOLATIO
 
 ## Engine BYOK matrix
 
-Selected entirely in `customer.env`, per role. A role that cannot be called (unknown provider, missing key, also on its fallback) is logged at startup and fails `/ready` with the role and the variable. No call moves to another provider or model unless `LLM_<ROLE>_FALLBACK` says so, and every such move is counted in `genui_llm_fallbacks_total`.
+Selected entirely in `customer.env`, per role. A role that cannot be called (unknown provider, missing key, also on its fallback) is logged at startup and fails `/ready` with the role and the variable. So does a key the provider rejects, checked at startup and every 5 minutes with a model metadata call that spends no tokens. No call moves to another provider or model unless `LLM_<ROLE>_FALLBACK` says so, and every such move is counted in `genui_llm_fallbacks_total`.
 
 ### LLM engine
 
@@ -123,6 +123,8 @@ Vector size follows the model (`EMBEDDING_DIMENSIONS` to override, e.g. unknown 
 - **Sizing.** `WORKERS=4` handles ~10^5 users/day comfortably in front of the segment cache (most requests are cache hits; LLM generations are per-segment, not per-user). Scale `WORKERS` with CPU count; Redis and Qdrant sizes are driven by profiles and KB size, not by traffic.
 - **Warmup is recommended ops** after deploy or zone-config changes: `POST /api/v1/zone/warmup` with the tenant's admin key pre-generates popular segments so first visitors hit the cache.
 - **Health**: `GET /health` (public, degraded/healthy + redis/llm status), `/live`, `/ready`. **Metrics**: `GET /metrics` (Prometheus text, admin key; see main README §Observability for the scrape config and PromQL).
+- **Logs** are JSON, one object per line, because `customer.env` does not set `GENUI_DEV_OPEN` (`LOG_FORMAT=text` for a terminal). Audit lines are in the same stream and are JSON already. Ship `docker compose logs backend` to the pipeline and index `request_id`, `level` and `tenant`.
+- **Request id**: have the TLS proxy set `X-Request-ID` (nginx: `proxy_set_header X-Request-ID $request_id;`) and the backend keeps it, so a proxy log line and a backend line share the id. Without the header the backend creates one. Either way it is returned to the client, and it is the only thing a `500` contains besides a generic message: the cause is in the log, under that id.
 - **Audit** goes to the `genui.audit` logger by default → `docker compose logs` → ship with the log pipeline the VM already has. Per-tenant, append-only, "what was shown to whom".
 - **Backup** = the two volumes (`redis_data`, `qdrant_storage`) plus `customer.env`. The backend container is disposable.
 - **Upgrade** = `git pull && docker compose up -d --build` (config and data live outside the image). Roll back by checking out the previous tag and rebuilding. **Exception, the Qdrant image**: its storage format only supports stepping ONE minor version at a time on an existing volume (v1.12 → v1.18 directly = crash loop at boot). Step through minors, or re-index the KB into a fresh volume.

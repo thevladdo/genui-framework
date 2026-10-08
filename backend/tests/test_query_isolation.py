@@ -326,7 +326,8 @@ class OpenAIToolLoopTest(unittest.TestCase):
         self.assertEqual(result, '{"done": true}')
         tool_msg = client._client.requests[1]["messages"][-1]
         self.assertIn("tool error", tool_msg["content"])
-        self.assertIn("qdrant down", tool_msg["content"])
+        self.assertIn("search_documents failed", tool_msg["content"])
+        self.assertNotIn("qdrant down", tool_msg["content"])
 
     def test_tool_budget_forces_final_answer(self):
         client = _client_with([

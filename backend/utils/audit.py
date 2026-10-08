@@ -27,6 +27,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
+from utils.request_context import request_id
 from utils.url_guard import iter_shown
 
 logger = logging.getLogger("genui.audit")
@@ -83,13 +84,14 @@ class AuditLogger:
             "event": event,
             "tenant": tenant,
             "user_id": user_id,
+            "request_id": request_id(),
         }
         record.update(payload)
 
         try:
             line = json.dumps(record, default=str, ensure_ascii=False)
         except Exception as e:
-            logger.error("Audit serialization failed: %s", e)
+            logger.error("Audit serialization failed: %s", e, exc_info=True)
             return
 
         if self._file_logger is not None:

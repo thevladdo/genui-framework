@@ -8,6 +8,28 @@ The entire history lives below, newest first.
 
 ## [Unreleased]
 
+### Errors and logs
+
+Nine endpoints answered a failure with `detail: str(e)`. Two of them, the zone render and the chat, take the client key that sits in every page, so anyone could trigger a failure and read the provider URL, the Qdrant host or a function name. The stream's `error` event and `batch-render` did the same. Nothing tied the response a user got to the log line, the span or the audit line that explained it. Logs were text, and most `except` blocks logged the message without the stack. `genui_llm_generations_total` counted `ok` for a zone that fell back to pinned content and for a chat that answered "I couldn't process your request right now", so an alert built on it stayed quiet while the chat failed on every question.
+
+- **A `500` says only that it failed, and under which id.** The body is `{"detail": "Internal server error", "request_id": "..."}`. The exception is logged with its stack, route and tenant. One middleware handles every unhandled exception and the endpoints stopped catching and rethrowing. So `EmbeddingConfigError` and an unreachable store now reach their `503` handlers. The stream's `error` event and `batch-render` follow the same rule. `4xx` responses are unchanged.
+- **Every request has an id.** `X-Request-ID` is taken from the proxy when well formed, created otherwise, and returned on every response (also exposed to cross-origin pages). It is on every log line, on the `request_id` field of audit lines and on the `genui.request_id` span attribute.
+- **`LOG_FORMAT=json|text`.** JSON writes `ts`, `level`, `logger`, `message`, `request_id`, `tenant` and `exc`, with the standard library only. Unset, it is `text` with `GENUI_DEV_OPEN` and `json` otherwise. Audit lines are written as they are, and in `json` mode the uvicorn lines switch format too. Errors logged in `except` blocks carry their stack.
+- **`outcome="degraded"`.** A zone served from the pinned-only fallback and a chat that answered with the fixed apology now count as `degraded`. The agents flag it with a `degraded` field on their result, and the caller reads the field instead of comparing response text.
+- **The chat answers without Qdrant.** The agents build the vector store on first search, inside the retrieval fallback. A Qdrant that is down at boot no longer makes every `/query` and every cold zone render a `500`. The chat answers without documents and sets `meta.retrieval: "unavailable"` (`"ok"` otherwise). The search tool tells the model the knowledge base is unavailable instead of failing the answer.
+- **A failed search raises.** It used to return no results, so "nothing matched" and "Qdrant did not answer" looked the same. The zone and the chat fall back as above. With Qdrant unreachable, `POST /documents/search` and `GET /documents` answer `503` with `Retry-After` and a detail that says nothing was searched or listed.
+- **An unreachable Qdrant is never an empty knowledge base.** The vector store reads (document list, chunk counts, what is already indexed, the backfill's remaining points, stats, the corpus size) swallowed the error and returned empty. A read that failed during an upload made every chunk look new and paid to embed and contextualize them all again, and a failed corpus recount was stored as zero, so the contextual-indexing threshold was never reached. They now raise, and any route answers `503` with `Retry-After` and the request id while Qdrant does not answer. A backfill stopped by an error ends with `phase: "failed"`.
+- **An upload report and a tool call carry no exception text.** The upload `error` field says which step failed and the request id, and the exception is in the log. A failed tool call tells the model that the tool failed, not what the exception said.
+- **A key that only looks valid fails `/ready`.** At startup and then every 5 minutes each provider is asked for the model's metadata, which spends no tokens. A rejected key, or a model unknown to the provider's own endpoint, makes `llm` `rejected` and `/ready` answer `503`, naming roles and variable, with the reason in the log. A rejected embedding key sets `embeddings: "rejected"` and degrades `/health` without failing `/ready`: zones and chat still answer without retrieval.
+- **The console keeps the operator connected through a server error.** Only a refused key (`401`, `403`) ends the session. Any other failure is shown where it happened, with the request id from the body or the `X-Request-ID` header, so it can be found in the logs. Before, a Qdrant outage sent the Content Studio back to the connect screen without a word.
+
+**Migration**
+
+- A client that showed the `detail` of a `500` now shows "Internal server error". Show the `request_id` with it.
+- Logs default to JSON when `GENUI_DEV_OPEN` is not set. Set `LOG_FORMAT=text` to keep the old format.
+- `genui_llm_generations_total` has a third outcome. A failure-rate alert on `outcome="error"` should match `outcome=~"error|degraded"`.
+- A deployment whose key the provider rejects no longer becomes ready. In a rolling update the new instances stay out of rotation and the old ones keep serving.
+
 ### A model per role
 
 There were 3 model settings and 1 provider. The zone render, which decides what a segment sees for hours, ran on the same provider as the short profile classifications, so the render could not go to one provider and the classifications to a local endpoint. An unknown `LLM_PROVIDER` fell back to OpenAI with a warning, which the deploy guide promised could not happen. The disclosure named the model the agent was built with, not the one that answered, and neither the metrics nor the audit named a model at all.

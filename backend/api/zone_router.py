@@ -81,6 +81,7 @@ from utils.audit import summarize_shown_components
 from utils.content_policy import ContentPolicy
 from utils.content_policy_store import effective_policy
 from utils.redis_conn import RETRY_AFTER_SECONDS, StoreUnavailable
+from utils.request_context import server_error
 from utils.tracing import span
 from utils.zone_cache import (
     CacheLookup,
@@ -487,8 +488,14 @@ async def _render_live(
     except Exception:
         get_ops_metrics().observe_generation(tenant, "zone", outcome="error")
         raise
-    get_ops_metrics().observe_generation(tenant, "zone", time.perf_counter() - started)
+    get_ops_metrics().observe_generation(
+        tenant, "zone", time.perf_counter() - started, outcome=_outcome(result)
+    )
     return _payload_from_result(result)
+
+
+def _outcome(result) -> str:
+    return "degraded" if getattr(result, "degraded", False) else "ok"
 
 
 def _resolve_strategy(request: ZoneRenderRequest, auth: AuthContext) -> Tuple[str, bool]:
@@ -741,7 +748,7 @@ async def _refresh_in_background(
         await cache.set(cache_key, payload)
         logger.info("Zone cache refreshed: %s", cache_key)
     except Exception as e:
-        logger.error("Zone cache background refresh failed for %s: %s", cache_key, e)
+        logger.error("Zone cache background refresh failed for %s: %s", cache_key, e, exc_info=True)
     finally:
         await cache.release_refresh_lock(cache_key)
 
@@ -846,13 +853,7 @@ async def render_zone(
     Renders are served from the segment cache when possible; the LLM only
     runs on cold starts, background refreshes, or cache_strategy="live".
     """
-    try:
-        return await _handle_render(request, auth, user_token)
-    except (AuthError, HTTPException, StoreUnavailable):
-        raise
-    except Exception as e:
-        logger.error(f"Zone rendering failed for {request.zone_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return await _handle_render(request, auth, user_token)
 
 
 def _sse(event: str, data: Dict[str, Any]) -> str:
@@ -961,7 +962,8 @@ async def render_zone_stream(
                 # complete
                 generation_done = True
                 get_ops_metrics().observe_generation(
-                    auth.tenant, "zone", time.perf_counter() - generation_started
+                    auth.tenant, "zone", time.perf_counter() - generation_started,
+                    outcome=_outcome(event["result"]),
                 )
                 payload = _payload_from_result(event["result"])
                 payload, _ = await _enforce_current_policy(request, auth.tenant, payload)
@@ -994,13 +996,13 @@ async def render_zone_stream(
                 "retry_after": str(RETRY_AFTER_SECONDS),
                 "zone_id": request.zone_id,
             })
-        except Exception as e:
+        except Exception:
             if generation_started is not None and not generation_done:
                 get_ops_metrics().observe_generation(
                     auth.tenant, "zone", outcome="error"
                 )
-            logger.error(f"Zone stream failed for {request.zone_id}: {e}")
-            yield _sse("error", {"detail": str(e), "zone_id": request.zone_id})
+            body = server_error(f"zone stream {request.zone_id}")
+            yield _sse("error", {**body, "status": 500, "zone_id": request.zone_id})
         finally:
             if locked:
                 await cache.release_refresh_lock(cache_key)
@@ -1054,11 +1056,19 @@ async def batch_render_zones(
                 "success": True,
                 "data": result.model_dump(),
             }
-        except Exception as e:
+        except (AuthError, HTTPException, StoreUnavailable) as e:
             return {
                 "zone_id": request.zone_id,
                 "success": False,
                 "error": str(e),
+            }
+        except Exception:
+            body = server_error(f"batch render {request.zone_id}")
+            return {
+                "zone_id": request.zone_id,
+                "success": False,
+                "error": body["detail"],
+                "request_id": body["request_id"],
             }
 
     results = await asyncio.gather(*[_safe_render(r) for r in requests])
@@ -1101,7 +1111,7 @@ async def warmup_zones(
                 "success": True,
             }
         except Exception as e:
-            logger.error("Zone warmup failed for %s: %s", zone_request.zone_id, e)
+            logger.error("Zone warmup failed for %s: %s", zone_request.zone_id, e, exc_info=True)
             return {
                 "zone_id": zone_request.zone_id,
                 "segment": segment.key,

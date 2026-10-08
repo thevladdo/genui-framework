@@ -15,6 +15,8 @@ import logging
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
+from utils.request_context import request_id
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -37,6 +39,7 @@ def span(name: str, **attributes: Any) -> Iterator[Optional[Any]]:
 
     tracer = _trace.get_tracer("genui")
     with tracer.start_as_current_span(name) as current_span:
+        attributes.setdefault("genui.request_id", request_id())
         for key, value in attributes.items():
             if value is not None:
                 try:
@@ -103,5 +106,5 @@ def setup_tracing(app=None) -> bool:
         return True
 
     except Exception as e:
-        logger.error("Tracing setup failed: %s", e)
+        logger.error("Tracing setup failed: %s", e, exc_info=True)
         return False

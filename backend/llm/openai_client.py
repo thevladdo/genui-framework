@@ -149,9 +149,9 @@ class OpenAIChatClient(LLMChatClient):
                         arguments = {}
                     try:
                         result = await tool_handler(tc.function.name, arguments)
-                    except Exception as e:
-                        logger.warning("Tool %s failed: %s", tc.function.name, e)
-                        result = f"tool error: {e}"
+                    except Exception:
+                        logger.warning("Tool %s failed", tc.function.name, exc_info=True)
+                        result = f"tool error: {tc.function.name} failed"
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -274,9 +274,9 @@ class OpenAIResponsesClient(OpenAIChatClient):
                         arguments = {}
                     try:
                         result = await tool_handler(call.name, arguments)
-                    except Exception as e:
-                        logger.warning("Tool %s failed: %s", call.name, e)
-                        result = f"tool error: {e}"
+                    except Exception:
+                        logger.warning("Tool %s failed", call.name, exc_info=True)
+                        result = f"tool error: {call.name} failed"
                     items.append({"type": "function_call_output", "call_id": call.call_id, "output": result})
 
             response = await self._create(

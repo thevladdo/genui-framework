@@ -145,6 +145,40 @@ class TestReadyPerRole(AppTestCase):
         self.assertEqual(response.json()["llm_unconfigured"], [])
 
 
+class TestReadyAfterTheKeyCheck(AppTestCase):
+    def test_a_rejected_key_fails_ready_without_saying_why(self):
+        from llm import credentials
+
+        self.addCleanup(setattr, credentials, "_problems", credentials._problems)
+        credentials._problems = [("zone, chat (OPENAI_API_KEY)", "openai rejected the key")]
+        with mock.patch.object(settings, "llm_provider", "openai"), \
+             mock.patch.object(settings, "openai_api_key", "sk-looks-fine"), \
+             mock.patch.object(settings, "openai_base_url", None):
+            response = TestClient(main.app).get("/ready")
+        self.assertEqual(response.status_code, 503)
+        body = response.json()
+        self.assertEqual(body["llm"], "rejected")
+        self.assertEqual(body["llm_unconfigured"], ["zone, chat (OPENAI_API_KEY)"])
+        self.assertNotIn("rejected the key", response.text)
+
+
+class TestEmbeddingKeyIsDegradationNotOutage(AppTestCase):
+    def test_a_rejected_embedding_key_degrades_health_and_keeps_ready(self):
+        from llm import credentials
+
+        self.addCleanup(setattr, credentials, "_problems", credentials._problems)
+        credentials._problems = [("embeddings (EMBEDDING_API_KEY)", "openai rejected the key")]
+        with mock.patch.object(settings, "llm_provider", "openai"), \
+             mock.patch.object(settings, "openai_api_key", "sk-good"), \
+             mock.patch.object(settings, "openai_base_url", None):
+            client = TestClient(main.app)
+            ready, health = client.get("/ready"), client.get("/health").json()
+        self.assertEqual(ready.status_code, 200)
+        self.assertEqual(ready.json()["llm"], "configured")
+        self.assertEqual(health["embeddings"], "rejected")
+        self.assertEqual(health["status"], "degraded")
+
+
 class TestAnsweredModelReachesTheMarking(AppTestCase):
     def test_zone_render_from_the_fallback_names_the_fallback(self):
         agent = ZoneAgent(vector_store=_EmptyStore(), llm_client=_routed(Role.ZONE, _ENVELOPE))

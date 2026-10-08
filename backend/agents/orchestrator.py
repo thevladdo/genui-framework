@@ -23,6 +23,10 @@ class OrchestratorResult:
     behavior_analysis: Optional[BehaviorAnalysisResult]
     updated_profile: Optional[Dict[str, Any]]
     
+    @property
+    def degraded(self) -> bool:
+        return self.response.degraded
+
     def to_dict(self) -> Dict[str, Any]:
         result = {
             "response": self.response.to_dict(),
@@ -75,6 +79,7 @@ class OrchestratorResult:
                 "sentiment": self.profile_analysis.sentiment,
                 "sanitization": self.response.sanitization,
                 "disclosure": self.response.disclosure,
+                "retrieval": self.response.retrieval,
             }
         }
         

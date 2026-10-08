@@ -180,7 +180,8 @@ class ReplacementTest(unittest.TestCase):
         self.assertEqual(report["chunks_pruned"], 0)
         self.assertEqual(report["chunks_failed"], 1)
         self.assertTrue(report["previous_version_served"])
-        self.assertIn("embedding provider unavailable", report["error"])
+        self.assertIn("indexing failed after 0 of 1 chunks", report["error"])
+        self.assertNotIn("embedding provider unavailable", report["error"])
         self.assertIn(
             "Cap is 4 percent.", [content for content, _ in self.stored()],
             "the old passage answers until its replacement is stored",
@@ -204,7 +205,8 @@ class ReplacementTest(unittest.TestCase):
         self.assertEqual(report["status"], "partial")
         self.assertEqual(report["chunks_pruned"], 0)
         self.assertTrue(report["previous_version_served"])
-        self.assertIn("vector database unavailable", report["error"])
+        self.assertIn("removing the previous version failed", report["error"])
+        self.assertNotIn("vector database unavailable", report["error"])
         self.assertIn(
             "Cap is 4 percent.", [content for content, _ in self.stored()],
             "the withdrawn passage is still in the index, and the report has to say so",

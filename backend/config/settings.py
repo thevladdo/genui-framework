@@ -5,7 +5,7 @@ Centralized settings management using pydantic-settings
 
 from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 from functools import lru_cache
 
 
@@ -361,6 +361,13 @@ class Settings(BaseSettings):
     tracing_enabled: bool = Field(
         default=False,
         description="Enable OpenTelemetry tracing (FastAPI + zone renders + LLM calls)"
+    )
+
+    # Logs
+    log_format: Optional[Literal["json", "text"]] = Field(
+        default=None,
+        description="json (one object per line, for a log pipeline) or text; "
+                    "empty = text with GENUI_DEV_OPEN, json otherwise"
     )
     otlp_endpoint: Optional[str] = Field(
         default=None,

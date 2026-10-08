@@ -196,7 +196,7 @@ Guidelines:
             )
             
         except Exception as e:
-            logger.error(f"Behavior analysis failed: {e}")
+            logger.error(f"Behavior analysis failed: {e}", exc_info=True)
             return self._empty_result()
     
     def _build_analysis_prompt(

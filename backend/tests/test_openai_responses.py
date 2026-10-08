@@ -129,7 +129,9 @@ class TestToolLoop(unittest.TestCase):
             raise RuntimeError("qdrant down")
 
         asyncio.run(client.complete_json_with_tools("sys", "user", SEARCH, handler))
-        self.assertIn("qdrant down", client._client.requests[1]["input"][-1]["output"])
+        output = client._client.requests[1]["input"][-1]["output"]
+        self.assertIn("search_documents failed", output)
+        self.assertNotIn("qdrant down", output)
 
     def test_exhausted_rounds_force_an_answer_without_tools(self):
         loop = _response(output=[_call("c1", "search_documents", "{}")])

@@ -244,11 +244,13 @@ class DeleteAccountingTest(unittest.TestCase):
     """A document that left has to take its tokens with it, or the total
     only grows and a corpus that shrank keeps paying to index with context."""
 
-    def _delete(self, removed_tokens):
-        counter = _Counter(50_000)
+    def _delete(self, removed_tokens, counter=None):
+        counter = counter or _Counter(50_000)
 
         class _Store:
             def delete_by_source(self, source, tenant):
+                if isinstance(removed_tokens, Exception):
+                    raise removed_tokens
                 return removed_tokens
 
         auth = SimpleNamespace(tenant="acme", is_admin=True, key_fingerprint="k")
@@ -271,10 +273,10 @@ class DeleteAccountingTest(unittest.TestCase):
         self.assertEqual(counter.additions, [])
 
     def test_a_failed_deletion_is_an_error_and_changes_no_total(self):
-        from fastapi import HTTPException
-
-        with self.assertRaises(HTTPException):
-            self._delete(removed_tokens=-1)
+        counter = _Counter(50_000)
+        with self.assertRaises(ConnectionError):
+            self._delete(ConnectionError("qdrant down"), counter)
+        self.assertEqual(counter.additions, [])
 
     def test_the_total_never_goes_below_empty(self):
         from utils.tenant_counter import TenantCounter

@@ -41,6 +41,7 @@ from auth.dependencies import (
     require_client,
 )
 from auth.identity import AuthError
+from llm import credentials
 from llm.embeddings import EmbeddingConfigError
 from llm.factory import Role, create_llm_client, llm_config_problems, llm_configured
 from config import settings
@@ -62,11 +63,19 @@ from rag.contextualizer import (
 )
 from schemas.components import GENUI_CONTRACT_VERSION
 from utils.redis_conn import RETRY_AFTER_SECONDS, StoreUnavailable, shared_redis
+from utils.request_context import (
+    REQUEST_ID_HEADER,
+    begin_request,
+    configure_logging,
+    request_id,
+    server_error,
+)
 from utils.tracing import span
+from qdrant_client.http.exceptions import ResponseHandlingException
 
-logging.basicConfig(
-    level=logging.DEBUG if settings.debug else logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+configure_logging(
+    settings.log_format or ("text" if settings.genui_dev_open else "json"),
+    logging.DEBUG if settings.debug else logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
@@ -159,6 +168,11 @@ class MetaInfo(BaseModel):
                     "window without entering the summary, for lack of budget "
                     "or a failed summary call)"
     )
+    retrieval: Optional[str] = Field(
+        default=None,
+        description="ok, or unavailable: the knowledge base did not answer "
+                    "and this answer was written without documents"
+    )
 
 
 class QueryResponse(BaseModel):
@@ -212,9 +226,11 @@ class HealthResponse(BaseModel):
     # (configured but unreachable, in-memory fallback active) | "disabled"
     # (not configured — single-process dev only).
     redis: Optional[str] = None
-    # "configured" | "unconfigured"
+    # "configured" | "unconfigured" | "rejected"
     llm: str = "unconfigured"
     llm_unconfigured: List[str] = Field(default_factory=list)
+    # "configured" | "rejected": a rejected embedding key costs retrieval, not the process, so it degrades without failing /ready
+    embeddings: str = "configured"
 
 
 # Lifespan management
@@ -249,11 +265,17 @@ async def lifespan(app: FastAPI):
         get_orchestrator()
         logger.info("Orchestrator initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize orchestrator: {e}")
+        logger.error(f"Failed to initialize orchestrator: {e}", exc_info=True)
+
+    try:
+        await asyncio.wait_for(credentials.check(), timeout=15)
+    except Exception:
+        logger.warning("LLM key check did not finish at startup; it runs again in the background", exc_info=True)
+    key_watch = asyncio.create_task(credentials.watch())
 
     yield
-    
-    # Shutdown
+
+    key_watch.cancel()
     logger.info("Shutting down GenUI Backend...")
 
 
@@ -263,17 +285,6 @@ app = FastAPI(
     description="Multi-agent backend for Generative User Interface system",
     version="1.0.0",
     lifespan=lifespan,
-)
-
-# Configure CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    # Not a CORS-safelisted header: a page on another origin cannot read it unless listed
-    expose_headers=["Retry-After"],
 )
 
 app.include_router(zone_config_router)
@@ -315,14 +326,15 @@ async def store_unavailable_handler(
     )
 
 
-# Observability: HTTP metrics middleware + health/readiness/liveness + /metrics
+# Observability: HTTP middleware + health/readiness/liveness + /metrics
 @app.middleware("http")
 async def http_metrics_middleware(request: Request, call_next):
     """
-    Request count and latency per route template (bounded label set: an
-    unmatched path is labeled "unmatched", never echoed — random 404
-    probing must not explode metric cardinality).
+    Request id, the single handler for unhandled exceptions, and request count and latency per route template.
+
+    The route label is bounded: an unmatched path is labeled "unmatched", never echoed, so random 404 probing cannot explode metric cardinality.
     """
+    request_id = begin_request(request.headers.get(REQUEST_ID_HEADER))
     ops = get_ops_metrics()
     start = time.perf_counter()
     try:
@@ -334,7 +346,12 @@ async def http_metrics_middleware(request: Request, call_next):
             "genui_http_requests_total",
             {"method": request.method, "path": path, "status": "500"},
         )
-        raise
+        response = JSONResponse(
+            status_code=500, content=server_error(f"{request.method} {path}")
+        )
+        response.headers[REQUEST_ID_HEADER] = request_id
+        return response
+    response.headers[REQUEST_ID_HEADER] = request_id
     route = request.scope.get("route")
     path = getattr(route, "path", None) or "unmatched"
     labels = {"method": request.method, "path": path}
@@ -346,6 +363,18 @@ async def http_metrics_middleware(request: Request, call_next):
     )
     ops.observe("genui_http_request_seconds_count", labels)
     return response
+
+
+# Added last, so it wraps the middleware above: a 500 built there still carries the CORS headers.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    # Not CORS-safelisted headers: a page on another origin cannot read them unless listed
+    expose_headers=["Retry-After", REQUEST_ID_HEADER],
+)
 
 
 def _qdrant_reachable() -> bool:
@@ -376,15 +405,19 @@ async def _dependency_health() -> HealthResponse:
     )
 
     llm_problems = [where for where, _ in llm_config_problems()]
-    llm_ok = not llm_problems
+    checked = [where for where, _ in credentials.problems()]
+    rejected = [where for where in checked if not where.startswith("embeddings ")]
+    embeddings_ok = len(rejected) == len(checked)
+    llm_ok = not llm_problems and not rejected
 
     return HealthResponse(
-        status="healthy" if (qdrant_connected and redis_ok and llm_ok) else "degraded",
+        status="healthy" if (qdrant_connected and redis_ok and llm_ok and embeddings_ok) else "degraded",
         version="1.0.0",
         qdrant_connected=qdrant_connected,
         redis=redis_status,
-        llm="configured" if llm_ok else "unconfigured",
-        llm_unconfigured=llm_problems,
+        llm="unconfigured" if llm_problems else "rejected" if rejected else "configured",
+        llm_unconfigured=llm_problems + rejected,
+        embeddings="configured" if embeddings_ok else "rejected",
     )
 
 
@@ -478,126 +511,119 @@ async def process_query(
         sessions, auth.tenant, request.session_id, request.user_id
     )
 
-    try:
-        profile_store = get_profile_store()
+    profile_store = get_profile_store()
 
-        # Server-side profile is authoritative, the client copy seeds it
-        if request.user_id:
-            try:
-                server_profile = await profile_store.get(auth.tenant, request.user_id)
-                if server_profile:
-                    request.user_profile = server_profile
-                elif request.user_profile:
-                    request.user_profile = await profile_store.sync_client_profile(
-                        auth.tenant, request.user_id, request.user_profile
-                    )
-            except Exception as e:
-                logger.warning(f"Profile resolution failed for {request.user_id}: {e}")
-
-        summary = None
-        history = None
-        if session is not None:
-            history = session["messages"]
-            summary = session.get("summary") or None
-        elif request.session_id is None and request.conversation_history:
-            history = [
-                {"role": m.role, "content": m.content}
-                for m in request.conversation_history[-settings.chat_window_messages:]
-            ]
-
-        # Process through orchestrator with async. 
-        # The span ties the genui.llm.* client spans to this query,
-        # the counters are the SRE's view on chat LLM spend and failures.
-        ops = get_ops_metrics()
-        started = time.perf_counter()
+    # Server-side profile is authoritative, the client copy seeds it
+    if request.user_id:
         try:
-            with span("genui.query", tenant=auth.tenant):
-                result: OrchestratorResult = await orchestrator.process(
-                    query=request.query,
-                    user_profile=request.user_profile,
-                    conversation_history=history,
-                    behavior_data=request.behavior_data,
-                    tenant=auth.tenant,
-                    conversation_summary=summary,
+            server_profile = await profile_store.get(auth.tenant, request.user_id)
+            if server_profile:
+                request.user_profile = server_profile
+            elif request.user_profile:
+                request.user_profile = await profile_store.sync_client_profile(
+                    auth.tenant, request.user_id, request.user_profile
                 )
-        except Exception:
-            ops.observe_generation(auth.tenant, "query", outcome="error")
-            raise
-        ops.observe_generation(auth.tenant, "query", time.perf_counter() - started)
+        except Exception as e:
+            logger.warning(f"Profile resolution failed for {request.user_id}: {e}")
 
-        # Format response for frontend
-        frontend_response = result.to_frontend_response()
+    summary = None
+    history = None
+    if session is not None:
+        history = session["messages"]
+        summary = session.get("summary") or None
+    elif request.session_id is None and request.conversation_history:
+        history = [
+            {"role": m.role, "content": m.content}
+            for m in request.conversation_history[-settings.chat_window_messages:]
+        ]
 
-        # Persist agent-derived profile updates server-side
-        profile_updates = frontend_response.get("profile_updates", {})
-        if request.user_id and profile_updates.get("updates"):
-            try:
-                await profile_store.apply_updates(
-                    auth.tenant, request.user_id, profile_updates["updates"]
-                )
-            except Exception as e:
-                logger.warning(f"Profile update persistence failed: {e}")
+    # The span ties the genui.llm.* client spans to this query
+    ops = get_ops_metrics()
+    started = time.perf_counter()
+    try:
+        with span("genui.query", tenant=auth.tenant):
+            result: OrchestratorResult = await orchestrator.process(
+                query=request.query,
+                user_profile=request.user_profile,
+                conversation_history=history,
+                behavior_data=request.behavior_data,
+                tenant=auth.tenant,
+                conversation_summary=summary,
+            )
+    except Exception:
+        ops.observe_generation(auth.tenant, "query", outcome="error")
+        raise
+    ops.observe_generation(
+        auth.tenant, "query", time.perf_counter() - started,
+        outcome="degraded" if getattr(result, "degraded", False) else "ok",
+    )
 
-        session_meta = {"resumed": session is not None, "stored": False, "unsummarized": 0}
-        if reachable:
-            try:
-                session_meta["unsummarized"] = await _remember_exchange(
-                    sessions, auth, session_id, session, request.user_id,
-                    request.query, frontend_response["text"],
-                )
-                session_meta["stored"] = True
-            except StoreUnavailable as e:
-                logger.warning(f"Chat session not saved: {e}")
+    frontend_response = result.to_frontend_response()
 
-        # The question is free text a visitor may fill with anything, special categories included: the line records what was answered, never what was asked.
-        get_audit_logger().log(
-            "query",
-            tenant=auth.tenant,
-            user_id=request.user_id,
-            key=auth.key_fingerprint,
-            confidence=frontend_response["meta"].get("confidence"),
-            component_count=len(frontend_response["components"]),
-            profile_updates_applied=len(profile_updates.get("updates", [])),
-            session=fingerprint(session_id),
-            context_messages=len(history or []),
-            summary_used=summary is not None,
-        )
-        
-        # Build meta info with optional behavior data
-        meta_data = frontend_response["meta"]
-        behavior_meta = None
-        if "behavior" in meta_data and meta_data["behavior"]:
-            behavior_meta = BehaviorMeta(**meta_data["behavior"])
-        
-        # Safely extract profile_updates, ensuring should_update is always a boolean
-        raw_profile_updates = frontend_response.get("profile_updates", {})
-        profile_updates = ProfileUpdateInstruction(
-            should_update=bool(raw_profile_updates.get("should_update", False)),
-            updates=raw_profile_updates.get("updates", [])
-        )
-        
-        return QueryResponse(
-            session_id=session_id,
-            text=frontend_response["text"],
-            components=[ComponentData(**c) for c in frontend_response["components"]],
-            sources=frontend_response["sources"],
-            suggested_actions=frontend_response["suggested_actions"],
-            profile_updates=profile_updates,
-            meta=MetaInfo(
-                confidence=meta_data["confidence"],
-                interaction_type=meta_data["interaction_type"],
-                topics=meta_data["topics"],
-                sentiment=meta_data["sentiment"],
-                behavior=behavior_meta,
-                sanitization=meta_data.get("sanitization"),
-                disclosure=meta_data.get("disclosure"),
-                session=session_meta,
-            ),
-        )
-        
-    except Exception as e:
-        logger.error(f"Query processing failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    profile_updates = frontend_response.get("profile_updates", {})
+    if request.user_id and profile_updates.get("updates"):
+        try:
+            await profile_store.apply_updates(
+                auth.tenant, request.user_id, profile_updates["updates"]
+            )
+        except Exception as e:
+            logger.warning(f"Profile update persistence failed: {e}")
+
+    session_meta = {"resumed": session is not None, "stored": False, "unsummarized": 0}
+    if reachable:
+        try:
+            session_meta["unsummarized"] = await _remember_exchange(
+                sessions, auth, session_id, session, request.user_id,
+                request.query, frontend_response["text"],
+            )
+            session_meta["stored"] = True
+        except StoreUnavailable as e:
+            logger.warning(f"Chat session not saved: {e}")
+
+    # The question is free text a visitor may fill with anything, special categories included: the line records what was answered, never what was asked.
+    get_audit_logger().log(
+        "query",
+        tenant=auth.tenant,
+        user_id=request.user_id,
+        key=auth.key_fingerprint,
+        confidence=frontend_response["meta"].get("confidence"),
+        component_count=len(frontend_response["components"]),
+        profile_updates_applied=len(profile_updates.get("updates", [])),
+        session=fingerprint(session_id),
+        context_messages=len(history or []),
+        summary_used=summary is not None,
+    )
+    
+    meta_data = frontend_response["meta"]
+    behavior_meta = None
+    if "behavior" in meta_data and meta_data["behavior"]:
+        behavior_meta = BehaviorMeta(**meta_data["behavior"])
+    
+    raw_profile_updates = frontend_response.get("profile_updates", {})
+    profile_updates = ProfileUpdateInstruction(
+        should_update=bool(raw_profile_updates.get("should_update", False)),
+        updates=raw_profile_updates.get("updates", [])
+    )
+    
+    return QueryResponse(
+        session_id=session_id,
+        text=frontend_response["text"],
+        components=[ComponentData(**c) for c in frontend_response["components"]],
+        sources=frontend_response["sources"],
+        suggested_actions=frontend_response["suggested_actions"],
+        profile_updates=profile_updates,
+        meta=MetaInfo(
+            confidence=meta_data["confidence"],
+            interaction_type=meta_data["interaction_type"],
+            topics=meta_data["topics"],
+            sentiment=meta_data["sentiment"],
+            behavior=behavior_meta,
+            sanitization=meta_data.get("sanitization"),
+            disclosure=meta_data.get("disclosure"),
+            session=session_meta,
+            retrieval=meta_data.get("retrieval"),
+        ),
+    )
 
 
 async def _open_session(store, tenant: str, requested: Optional[str], user_id: Optional[str]):
@@ -848,9 +874,9 @@ async def _chunk_and_index(
 
         try:
             indexed += await asyncio.to_thread(store.index_chunks, batch, tenant)
-        except Exception as e:
-            failure = f"indexing failed after {indexed} of {len(pending)} chunks: {e}"
-            logger.error("Ingest of %s: %s", source_name, failure)
+        except Exception:
+            failure = _with_request_id(f"indexing failed after {indexed} of {len(pending)} chunks")
+            logger.error("Ingest of %s: %s", source_name, failure, exc_info=True)
             break
         entered = sum(
             estimate_tokens(chunk.content)
@@ -875,9 +901,9 @@ async def _chunk_and_index(
             report["chunks_payload_updated"] = await asyncio.to_thread(
                 store.refresh_payloads, unchanged, stored, tenant
             )
-        except Exception as e:
-            failure = f"metadata update failed: {e}"
-            logger.error("Ingest of %s: %s", source_name, failure)
+        except Exception:
+            failure = _with_request_id("metadata update failed")
+            logger.error("Ingest of %s: %s", source_name, failure, exc_info=True)
 
     # The old version goes only once every chunk of the new one is stored:
     # until then it is what answers for the chunks that did not make it.
@@ -892,9 +918,9 @@ async def _chunk_and_index(
                 store.prune_removed_chunks,
                 source_name, [chunk.point_id for chunk in chunks], tenant,
             )
-        except Exception as e:
-            failure = f"removing the previous version failed: {e}"
-            logger.error("Ingest of %s: %s", source_name, failure)
+        except Exception:
+            failure = _with_request_id("removing the previous version failed")
+            logger.error("Ingest of %s: %s", source_name, failure, exc_info=True)
             report["chunks_pruned"] = 0
             report["previous_version_served"] = True
             report["error"] = failure
@@ -915,6 +941,11 @@ async def _chunk_and_index(
         report["chunks_left_behind"] = counts["chunks_plain"]
 
     return {**report, "status": status, "chunks_indexed": indexed}
+
+
+def _with_request_id(text: str) -> str:
+    rid = request_id()
+    return f"{text} (request id {rid})" if rid else text
 
 
 async def _corpus_tokens(store, tenant: str) -> int:
@@ -951,51 +982,43 @@ async def upload_document(
     The document will be chunked semantically and indexed in Qdrant.
     Processing happens in the background.
     """
-    try:
-        source_name = request.metadata.get("title", "uploaded_document")
+    source_name = request.metadata.get("title", "uploaded_document")
 
-        # What it would cost, before anything is spent
-        if request.dry_run:
-            return await _chunk_and_index(
-                request.content, request.metadata, source_name, auth.tenant,
-                dry_run=True,
-            )
+    if request.dry_run:
+        return await _chunk_and_index(
+            request.content, request.metadata, source_name, auth.tenant,
+            dry_run=True,
+        )
 
-        # Process synchronously for small documents, async for large
-        content_length = len(request.content)
+    content_length = len(request.content)
 
-        if content_length < 10000:
-            report = await _chunk_and_index(
-                request.content, request.metadata, source_name, auth.tenant
-            )
+    if content_length < 10000:
+        report = await _chunk_and_index(
+            request.content, request.metadata, source_name, auth.tenant
+        )
 
-            get_audit_logger().log(
-                "document_upload",
-                tenant=auth.tenant,
-                key=auth.key_fingerprint,
-                source=source_name,
-                chunks_indexed=report["chunks_indexed"],
-                contextualized=report.get("chunks_contextualized", 0),
-            )
+        get_audit_logger().log(
+            "document_upload",
+            tenant=auth.tenant,
+            key=auth.key_fingerprint,
+            source=source_name,
+            chunks_indexed=report["chunks_indexed"],
+            contextualized=report.get("chunks_contextualized", 0),
+        )
 
-            return report
-        else:
-            # Schedule for background processing
-            background_tasks.add_task(
-                _process_document_background,
-                request.content,
-                request.metadata,
-                auth.tenant,
-            )
+        return report
+    else:
+        background_tasks.add_task(
+            _process_document_background,
+            request.content,
+            request.metadata,
+            auth.tenant,
+        )
 
-            return {
-                "status": "processing",
-                "message": "Document queued for background processing",
-            }
-
-    except Exception as e:
-        logger.error(f"Document upload failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return {
+            "status": "processing",
+            "message": "Document queued for background processing",
+        }
 
 
 @app.post("/api/v1/documents/upload")
@@ -1027,44 +1050,39 @@ async def upload_document_file(
     except ImportError as e:
         raise HTTPException(status_code=501, detail=str(e))
 
-    try:
-        metadata: Dict[str, Any] = {"title": source_name}
-        if url:
-            metadata["url"] = url
-        if file.filename:
-            metadata["file_type"] = file.filename.rsplit(".", 1)[-1].lower()
+    metadata: Dict[str, Any] = {"title": source_name}
+    if url:
+        metadata["url"] = url
+    if file.filename:
+        metadata["file_type"] = file.filename.rsplit(".", 1)[-1].lower()
 
-        report = await _chunk_and_index(
-            text, metadata, source_name, auth.tenant,
-            dry_run=dry_run, ingest_id=ingest_id,
-        )
+    report = await _chunk_and_index(
+        text, metadata, source_name, auth.tenant,
+        dry_run=dry_run, ingest_id=ingest_id,
+    )
 
-        if dry_run:
-            return {**report, "source": source_name, "extractor": extractor,
-                    "extracted_chars": len(text)}
+    if dry_run:
+        return {**report, "source": source_name, "extractor": extractor,
+                "extracted_chars": len(text)}
 
-        get_audit_logger().log(
-            "document_upload",
-            tenant=auth.tenant,
-            key=auth.key_fingerprint,
-            source=source_name,
-            file_name=file.filename,
-            extractor=extractor,
-            extracted_chars=len(text),
-            chunks_indexed=report["chunks_indexed"],
-            contextualized=report.get("chunks_contextualized", 0),
-        )
+    get_audit_logger().log(
+        "document_upload",
+        tenant=auth.tenant,
+        key=auth.key_fingerprint,
+        source=source_name,
+        file_name=file.filename,
+        extractor=extractor,
+        extracted_chars=len(text),
+        chunks_indexed=report["chunks_indexed"],
+        contextualized=report.get("chunks_contextualized", 0),
+    )
 
-        return {
-            **report,
-            "source": source_name,
-            "extractor": extractor,
-            "extracted_chars": len(text),
-        }
-
-    except Exception as e:
-        logger.error(f"File upload failed for {source_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        **report,
+        "source": source_name,
+        "extractor": extractor,
+        "extracted_chars": len(text),
+    }
 
 
 _READ_BLOCK = 1024 * 1024
@@ -1110,7 +1128,7 @@ async def _process_document_background(
         )
 
     except Exception as e:
-        logger.error(f"Background document processing failed: {e}")
+        logger.error(f"Background document processing failed: {e}", exc_info=True)
 
 
 @app.get("/api/v1/documents/ingest/{ingest_id}")
@@ -1143,36 +1161,45 @@ async def cancel_ingest(ingest_id: str, auth: AuthContext = Depends(require_admi
     return {"cancelled": found, "ingest_id": ingest_id}
 
 
+@app.exception_handler(ResponseHandlingException)
+async def qdrant_unreachable_handler(request: Request, exc: ResponseHandlingException):
+    logger.warning("Qdrant did not answer", exc_info=exc)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": f"The knowledge base did not answer: nothing was read or changed. Retry in {RETRY_AFTER_SECONDS}s.",
+            "request_id": request_id(),
+        },
+        headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
+    )
+
+
 @app.get("/api/v1/documents")
 async def list_documents(auth: AuthContext = Depends(require_admin)):
     """
     List the documents in the tenant's knowledge base, with chunk counts
     and the state of the corpus they form.
     """
-    try:
-        store = await asyncio.to_thread(get_vector_store)
-        documents = await asyncio.to_thread(store.list_documents, auth.tenant)
-        counts = await asyncio.to_thread(store.chunk_counts, auth.tenant)
-        corpus_tokens = await _corpus_tokens(store, auth.tenant)
+    store = await asyncio.to_thread(get_vector_store)
+    documents = await asyncio.to_thread(store.list_documents, auth.tenant)
+    counts = await asyncio.to_thread(store.chunk_counts, auth.tenant)
+    corpus_tokens = await _corpus_tokens(store, auth.tenant)
 
-        return {
-            "tenant": auth.tenant,
-            "documents": documents,
-            "count": len(documents),
-            "corpus": {
-                **counts,
-                "tokens": corpus_tokens,
-                "threshold_tokens": settings.contextual_indexing_threshold_tokens,
-                "contextual_indexing": contextual_indexing_enabled(
-                    auth.tenant, corpus_tokens
-                ),
-                "budget_per_hour": settings.llm_budget_per_hour or None,
-                "max_upload_bytes": extractors.max_file_size_bytes(),
-            },
-        }
-    except Exception as e:
-        logger.error(f"Document listing failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "tenant": auth.tenant,
+        "documents": documents,
+        "count": len(documents),
+        "corpus": {
+            **counts,
+            "tokens": corpus_tokens,
+            "threshold_tokens": settings.contextual_indexing_threshold_tokens,
+            "contextual_indexing": contextual_indexing_enabled(
+                auth.tenant, corpus_tokens
+            ),
+            "budget_per_hour": settings.llm_budget_per_hour or None,
+            "max_upload_bytes": extractors.max_file_size_bytes(),
+        },
+    }
 
 
 class BackfillRequest(BaseModel):
@@ -1208,75 +1235,72 @@ async def backfill_context(
     already done, and it updates points in place so an interrupted run
     resumed later neither duplicates nor skips.
     """
+    store = await asyncio.to_thread(get_vector_store)
+    plain = await asyncio.to_thread(
+        store.plain_points, auth.tenant, request.max_chunks
+    )
+    counts = await asyncio.to_thread(store.chunk_counts, auth.tenant)
+
+    report: Dict[str, Any] = {
+        "tenant": auth.tenant,
+        "chunks_plain": counts["chunks_plain"],
+        "chunks_in_this_run": len(plain),
+        "context_calls": len(plain),
+        "prompt_cache": prompt_cache_mode(),
+    }
+
+    if request.dry_run:
+        return {**report, "status": "estimated", "chunks_contextualized": 0}
+
+    if not plain:
+        return {**report, "status": "completed", "chunks_contextualized": 0}
+
+    if not await ingest_status.begin(
+        request.ingest_id, len(plain), "backfill", auth.tenant
+    ):
+        return {**report, "status": "cancelled", "chunks_contextualized": 0,
+                "chunks_plain_remaining": counts["chunks_plain"]}
     try:
-        store = await asyncio.to_thread(get_vector_store)
-        plain = await asyncio.to_thread(
-            store.plain_points, auth.tenant, request.max_chunks
-        )
-        counts = await asyncio.to_thread(store.chunk_counts, auth.tenant)
-
-        report: Dict[str, Any] = {
-            "tenant": auth.tenant,
-            "chunks_plain": counts["chunks_plain"],
-            "chunks_in_this_run": len(plain),
-            "context_calls": len(plain),
-            "prompt_cache": prompt_cache_mode(),
-        }
-
-        if request.dry_run:
-            return {**report, "status": "estimated", "chunks_contextualized": 0}
-
-        if not plain:
-            return {**report, "status": "completed", "chunks_contextualized": 0}
-
-        if not await ingest_status.begin(
-            request.ingest_id, len(plain), "backfill", auth.tenant
-        ):
-            return {**report, "status": "cancelled", "chunks_contextualized": 0,
-                    "chunks_plain_remaining": counts["chunks_plain"]}
         done, stopped_on_budget = await _backfill_documents(
             store, plain, auth.tenant, request.ingest_id
         )
-        stopped = await ingest_status.cancelled(request.ingest_id)
-        await ingest_status.finish(
-            request.ingest_id, "cancelled" if stopped else "done"
-        )
-        after = await asyncio.to_thread(store.chunk_counts, auth.tenant)
-
-        if not done and stopped_on_budget:
-            raise HTTPException(
-                status_code=429,
-                detail=f"The hourly cap (LLM_BUDGET_PER_HOUR="
-                       f"{settings.llm_budget_per_hour}) has nothing left for "
-                       f"this run. Nothing was indexed. Run it again when the "
-                       f"window resets: it picks up where it stopped.",
-            )
-
-        get_audit_logger().log(
-            "context_backfill",
-            tenant=auth.tenant,
-            key=auth.key_fingerprint,
-            chunks_contextualized=done,
-            chunks_plain=after["chunks_plain"],
-        )
-
-        return {
-            **report,
-            "status": (
-                "completed" if after["chunks_plain"] == 0
-                else "cancelled" if stopped
-                else "partial"
-            ),
-            "chunks_contextualized": done,
-            "chunks_plain_remaining": after["chunks_plain"],
-            **({"budget_exceeded": True} if stopped_on_budget else {}),
-        }
-
-    except HTTPException:
+    except Exception:
+        await ingest_status.finish(request.ingest_id, "failed")
         raise
-    except Exception as e:
-        logger.error(f"Backfill failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    stopped = await ingest_status.cancelled(request.ingest_id)
+    await ingest_status.finish(
+        request.ingest_id, "cancelled" if stopped else "done"
+    )
+    after = await asyncio.to_thread(store.chunk_counts, auth.tenant)
+
+    if not done and stopped_on_budget:
+        raise HTTPException(
+            status_code=429,
+            detail=f"The hourly cap (LLM_BUDGET_PER_HOUR="
+                   f"{settings.llm_budget_per_hour}) has nothing left for "
+                   f"this run. Nothing was indexed. Run it again when the "
+                   f"window resets: it picks up where it stopped.",
+        )
+
+    get_audit_logger().log(
+        "context_backfill",
+        tenant=auth.tenant,
+        key=auth.key_fingerprint,
+        chunks_contextualized=done,
+        chunks_plain=after["chunks_plain"],
+    )
+
+    return {
+        **report,
+        "status": (
+            "completed" if after["chunks_plain"] == 0
+            else "cancelled" if stopped
+            else "partial"
+        ),
+        "chunks_contextualized": done,
+        "chunks_plain_remaining": after["chunks_plain"],
+        **({"budget_exceeded": True} if stopped_on_budget else {}),
+    }
 
 
 async def _backfill_documents(
@@ -1361,31 +1385,27 @@ async def search_documents(
     similarity scores) that a zone render would see for this query.
     Useful for content debugging: "why does the AI show X?".
     """
-    try:
-        # Search itself is asynchronous end to end; only building the store (first use, or a retry after Qdrant was down) can block
-        vector_store = await asyncio.to_thread(get_vector_store)
-        results = await vector_store.search_async(
-            query=request.query,
-            top_k=request.top_k,
-            score_threshold=0.0,  # preview shows everything; real scores are the point
-            tenant=auth.tenant,
-        )
-        return {
-            "query": request.query,
-            "results": [
-                {
-                    "content": r.content,
-                    "score": round(r.score, 4),
-                    "source_document": r.metadata.get("source_document"),
-                    "url": r.metadata.get("url"),
-                    "contextualized": bool(r.metadata.get("contextualized")),
-                }
-                for r in results
-            ],
-        }
-    except Exception as e:
-        logger.error(f"Document search failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    # Search itself is asynchronous end to end; only building the store (first use, or a retry after Qdrant was down) can block
+    vector_store = await asyncio.to_thread(get_vector_store)
+    results = await vector_store.search_async(
+        query=request.query,
+        top_k=request.top_k,
+        score_threshold=0.0,  # preview shows everything; real scores are the point
+        tenant=auth.tenant,
+    )
+    return {
+        "query": request.query,
+        "results": [
+            {
+                "content": r.content,
+                "score": round(r.score, 4),
+                "source_document": r.metadata.get("source_document"),
+                "url": r.metadata.get("url"),
+                "contextualized": bool(r.metadata.get("contextualized")),
+            }
+            for r in results
+        ],
+    }
 
 
 @app.delete("/api/v1/documents/{source_name}")
@@ -1396,29 +1416,21 @@ async def delete_document(
     """
     Delete a document from the tenant's knowledge base by source name.
     """
-    try:
-        store = await asyncio.to_thread(get_vector_store)
-        removed_tokens = await asyncio.to_thread(
-            store.delete_by_source, source_name, auth.tenant
-        )
+    store = await asyncio.to_thread(get_vector_store)
+    removed_tokens = await asyncio.to_thread(
+        store.delete_by_source, source_name, auth.tenant
+    )
 
-        if removed_tokens >= 0:
-            if removed_tokens:
-                await get_corpus_size().add(auth.tenant, -removed_tokens)
+    if removed_tokens:
+        await get_corpus_size().add(auth.tenant, -removed_tokens)
 
-            get_audit_logger().log(
-                "document_delete",
-                tenant=auth.tenant,
-                key=auth.key_fingerprint,
-                source=source_name,
-            )
-            return {"status": "deleted", "source": source_name}
-        else:
-            raise HTTPException(status_code=500, detail="Deletion failed")
-
-    except Exception as e:
-        logger.error(f"Document deletion failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    get_audit_logger().log(
+        "document_delete",
+        tenant=auth.tenant,
+        key=auth.key_fingerprint,
+        source=source_name,
+    )
+    return {"status": "deleted", "source": source_name}
 
 
 @app.get("/api/v1/documents/stats")
@@ -1426,18 +1438,13 @@ def get_document_stats(auth: AuthContext = Depends(require_admin)):
     """
     Get statistics about the document knowledge base (tenant-aware).
     """
-    try:
-        stats = get_vector_store().get_collection_stats(tenant=auth.tenant)
+    stats = get_vector_store().get_collection_stats(tenant=auth.tenant)
 
-        return {
-            "status": "ok",
-            "tenant": auth.tenant,
-            "stats": stats,
-        }
-
-    except Exception as e:
-        logger.error(f"Failed to get document stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "status": "ok",
+        "tenant": auth.tenant,
+        "stats": stats,
+    }
 
 
 # Profile management endpoints

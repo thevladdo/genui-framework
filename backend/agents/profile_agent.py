@@ -192,7 +192,7 @@ User: "Can you explain this more simply? The technical jargon is confusing."
             )
             
         except Exception as e:
-            logger.error(f"Profile analysis failed: {e}")
+            logger.error(f"Profile analysis failed: {e}", exc_info=True)
             return ProfileAnalysisResult(
                 has_profile_info=False,
                 updates=[],
