@@ -452,6 +452,7 @@ def _payload_from_result(result) -> Dict[str, Any]:
             "dropped_components": result.dropped_components,
             "removed_numbers": result.removed_numbers,
             "policy_violations": result.policy_violations,
+            "pinned_dropped": getattr(result, "pinned_dropped", []),
         },
     }
     if getattr(result, "disclosure", None):

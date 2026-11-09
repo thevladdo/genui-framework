@@ -373,6 +373,7 @@ export const useZone = (options: UseZoneOptions): UseZoneReturn => {
                 removedNumbers: data.meta.sanitization.removed_numbers ?? [],
                 policyViolations:
                   data.meta.sanitization.policy_violations ?? [],
+                pinnedDropped: data.meta.sanitization.pinned_dropped ?? [],
               }
             : undefined,
           disclosure: parseDisclosure(data.meta?.disclosure),

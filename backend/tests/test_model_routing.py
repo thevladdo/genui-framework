@@ -214,6 +214,40 @@ class TestFactory(MetricsTestCase):
             create_llm_client(Role.ZONE, _settings(llm_zone="nope:model"))
 
 
+class _StrictSDK(_FakeSDK):
+    """Like the real SDK, the client refuses to be built without an api_key."""
+
+    def __init__(self):
+        super().__init__()
+        sdk = self
+
+        class Client:
+            def __init__(self, **kwargs):
+                if kwargs.get("api_key") is None:
+                    raise RuntimeError("The api_key client option must be set")
+                sdk.built.append(kwargs)
+
+        self.Client = Client
+
+
+class TestKeylessEndpoint(unittest.TestCase):
+    def test_a_keyless_compatible_endpoint_builds_the_chat_client(self):
+        settings = _settings(openai_api_key=None, openai_base_url="http://vllm:8000/v1")
+        with _StrictSDK() as sdk:
+            client = create_llm_client(Role.CHAT, settings)
+        self.assertEqual(type(client._primary).__name__, "OpenAIChatClient")
+        self.assertEqual(sdk.built[0]["base_url"], "http://vllm:8000/v1")
+        self.assertTrue(sdk.built[0]["api_key"])
+
+    def test_without_base_url_the_key_stays_required(self):
+        from llm.openai_client import OpenAIChatClient, OpenAIResponsesClient
+
+        with _StrictSDK():
+            for api in (OpenAIChatClient, OpenAIResponsesClient):
+                with self.assertRaises(RuntimeError):
+                    api(api_key=None, model="m")
+
+
 # (c) a role on a provider without a key: not configured, and the message names the role
 
 class TestConfigured(unittest.TestCase):

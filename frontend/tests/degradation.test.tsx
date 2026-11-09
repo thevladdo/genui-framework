@@ -96,6 +96,6 @@ test('single tab renders the panel without a tab bar', async () => {
     />,
   );
   expect(container.querySelector('[role="tablist"]')).toBeNull();
-  expect(container.querySelector('[role="tabpanel"]')).not.toBeNull();
+  expect(container.querySelector('.genui-tabpanel')?.textContent).toContain('T');
   act(() => root.unmount());
 });

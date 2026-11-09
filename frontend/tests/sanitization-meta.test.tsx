@@ -30,6 +30,7 @@ const renderPayload = {
       dropped_components: [],
       removed_numbers: ['5M'],
       policy_violations: ['guaranteed returns'],
+      pinned_dropped: ['https://shop.example/extra'],
     },
   },
   rendered_at: '2026-07-18T00:00:00Z',
@@ -59,6 +60,7 @@ test('useZone exposes meta.sanitization camelCase', async () => {
     droppedComponents: [],
     removedNumbers: ['5M'],
     policyViolations: ['guaranteed returns'],
+    pinnedDropped: ['https://shop.example/extra'],
   });
 
   act(() => root.unmount());

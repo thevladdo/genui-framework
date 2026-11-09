@@ -8,6 +8,18 @@ The entire history lives below, newest first.
 
 ## [Unreleased]
 
+### Pins, keyless chat, accessibility
+
+When a pin was missing and the bento was already full, the pin was appended and the cards were then cut from the tail. That could cut a pin the model had placed and keep a generated card. `pinned_content_included` still listed every pin, because it was computed before the cut. A fallback for a zone whose type isn't bento rendered nothing and declared every pin included. And a self-hosted OpenAI-compatible endpoint with no key passed `/ready` and served embeddings, but the chat failed on the first generation: the SDK refuses to build a client without a key.
+
+- **Pins are declared from the final output.** When appended pins push the bento over `max_items`, only generated cards are cut. Pins always stay, so more pins than `max_items` means more cards than `max_items`, as before. The fallback for a zone whose type isn't bento declares no pin and lists them in the new `meta.sanitization.pinned_dropped`, exposed by `useZone` as `pinnedDropped`.
+- **One tab is not a tab panel.** With a single tab the list of tabs isn't rendered, and the panel no longer claims `role="tabpanel"` with a label pointing at a tab that doesn't exist.
+- **Keyless chat.** With `OPENAI_BASE_URL` set and no key, the chat client sends the same placeholder key as the embedder. Without a base URL the key is still required and the error is still loud.
+- **A disabled link can't be followed.** It was an `<a href aria-disabled>`, and a click or Enter still opened it. It now renders as a disabled `<button>` with the same label and style.
+- **Tabs always select a tab that exists.** When the list shrank below the selected index, no tab was selected, none could be reached with Tab, and the panel pointed at a tab that wasn't there. The index is clamped once and used for selection, focus, arrow keys and the panel label.
+- **The light text-only bento CTA is readable.** Its label was accent on an accent background. It now uses `--genui-text-on-accent`.
+
+
 ### Errors and logs
 
 Nine endpoints answered a failure with `detail: str(e)`. Two of them, the zone render and the chat, take the client key that sits in every page, so anyone could trigger a failure and read the provider URL, the Qdrant host or a function name. The stream's `error` event and `batch-render` did the same. Nothing tied the response a user got to the log line, the span or the audit line that explained it. Logs were text, and most `except` blocks logged the message without the stack. `genui_llm_generations_total` counted `ok` for a zone that fell back to pinned content and for a chat that answered "I couldn't process your request right now", so an alert built on it stayed quiet while the chat failed on every question.

@@ -26,7 +26,7 @@ class OpenAIChatClient(LLMChatClient):
 
     def __init__(
         self,
-        api_key: str,
+        api_key: Optional[str],
         model: str,
         base_url: Optional[str] = None,
         provider_name: str = "openai",
@@ -37,6 +37,9 @@ class OpenAIChatClient(LLMChatClient):
 
         self.model = model
         self.provider_name = provider_name
+        # A self-hosted endpoint (vLLM, Ollama) takes no key, but the SDK refuses to build a client without one
+        if not api_key and base_url:
+            api_key = "sk-no-key-required"
         client_kwargs: Dict[str, Any] = {"api_key": api_key, "base_url": base_url}
         if timeout is not None:
             client_kwargs["timeout"] = timeout

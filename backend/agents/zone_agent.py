@@ -98,6 +98,7 @@ class ZoneRenderResult:
     dropped_components: List[str] = field(default_factory=list)
     removed_numbers: List[str] = field(default_factory=list)
     policy_violations: List[str] = field(default_factory=list)
+    pinned_dropped: List[str] = field(default_factory=list)
     # Banned terms this render was checked against, so a cache hit only rescans for terms added after it
     policy_terms: List[str] = field(default_factory=list)
     # Marking of this content: whether a model wrote it, when, and with
@@ -120,6 +121,7 @@ class ZoneRenderResult:
             "dropped_components": self.dropped_components,
             "removed_numbers": self.removed_numbers,
             "policy_violations": self.policy_violations,
+            "pinned_dropped": self.pinned_dropped,
             "policy_terms": self.policy_terms,
             "disclosure": self.disclosure,
         }
@@ -147,15 +149,44 @@ def _collect_shown(node: Any, links: Set[str], titles: Set[str]) -> None:
             titles.add(value.lower())
 
 
+def _pin_id(item: Dict[str, Any]) -> str:
+    return item.get("url") or item.get("id") or item.get("title", "")
+
+
+def _shown_in(components: List[Dict[str, Any]], pins: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    links: Set[str] = set()
+    titles: Set[str] = set()
+    for component in components:
+        _collect_shown(component.get("data", {}), links, titles)
+    shown = []
+    for item in pins:
+        url = item.get("url")
+        title = (item.get("title") or "").strip().lower()
+        if (url and normalize_url(str(url)) in links) or (title and title in titles):
+            shown.append(item)
+    return shown
+
+
+def _fit(cards: List[Dict[str, Any]], pins: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    cards = list(cards)
+    for i in range(len(cards) - 1, -1, -1):
+        if len(cards) <= limit:
+            break
+        if not _shown_in([{"data": cards[i]}], pins):
+            del cards[i]
+    return cards
+
+
 def enforce_pinned(
     components: List[Dict[str, Any]],
     pinned_content: List[Dict[str, Any]],
     max_items: int,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
     """
-    Guarantee every pinned item appears in the output.
+    Append the pinned items the output lacks, then report which pins the final output shows.
 
     Presence is computed from the actual components (by URL or title); missing items are appended as cards to the first bento component (or a new one when none exists).
+    Generated cards are then cut down to max_items; pins always stay, so more pins than max_items means more cards than max_items.
 
     Presence is read from the whole component tree, not from bento and buttons only: a pinned link the model used as a hero CTA, a pricing plan's button or a content_grid item is on the page, and appending a card for it would show the visitor the same link twice.
 
@@ -165,22 +196,8 @@ def enforce_pinned(
     if not pinned_content:
         return components, []
 
-    links: Set[str] = set()
-    titles: Set[str] = set()
-    for component in components:
-        _collect_shown(component.get("data", {}), links, titles)
-
-    included: List[str] = []
-    missing: List[Dict[str, Any]] = []
-    for item in pinned_content:
-        identifier = item.get("url") or item.get("id") or item.get("title", "")
-        url = item.get("url")
-        title = (item.get("title") or "").strip().lower()
-        if (url and normalize_url(str(url)) in links) or (title and title in titles):
-            included.append(identifier)
-        elif not _is_material(item):
-            missing.append(item)
-
+    shown = _shown_in(components, pinned_content)
+    missing = [item for item in pinned_content if item not in shown and not _is_material(item)]
     if missing:
         extra_cards = []
         for item in missing:
@@ -191,28 +208,23 @@ def enforce_pinned(
             if item.get("url"):
                 card["link"] = item["url"]
             extra_cards.append(card)
-            included.append(item.get("url") or item.get("id") or item.get("title", ""))
 
         target = next(
             (c for c in components if c.get("type") == "bento"), None
         )
         if target is not None:
-            cards = target["data"].get("cards", [])
-            # Pinned content wins over generated content within max_items
-            overflow = len(cards) + len(extra_cards) - max(max_items, len(extra_cards))
-            if overflow > 0:
-                cards = cards[:-overflow]
-            target["data"]["cards"] = cards + extra_cards
+            target["data"]["cards"] = _fit(
+                target["data"].get("cards", []) + extra_cards, pinned_content, max_items
+            )
         else:
+            cards = _fit(extra_cards, pinned_content, max_items)
             components.append({
                 "type": "bento",
-                "data": {
-                    "cards": extra_cards,
-                    "columns": min(max(len(extra_cards), 1), 3),
-                },
+                "data": {"cards": cards, "columns": min(max(len(cards), 1), 3)},
             })
+        shown = _shown_in(components, pinned_content)
 
-    return components, included
+    return components, [_pin_id(item) for item in pinned_content if item in shown]
 
 
 class GuardChain:
@@ -920,36 +932,18 @@ CRITICAL RULES:
         marking operator content as AI-generated is a false statement in
         the direction the marking exists to prevent.
         """
-        cards = []
-        pinned_ids = []
-
-        for item in request.pinned_content or []:
-            if _is_material(item):
-                continue
-            card = {
-                "title": item.get("title", "Untitled"),
-                "description": item.get("description", ""),
-                "link": item.get("url"),
-            }
-            cards.append(card)
-            pinned_ids.append(item.get("url") or item.get("id") or item.get("title"))
-
-        component_type = request.preferred_component_type or "bento"
-
-        if component_type == "bento" and cards:
-            components = [{
-                "type": "bento",
-                "data": {
-                    "cards": cards,
-                    "columns": min(len(cards), 3),
-                },
-            }]
+        pinned = request.pinned_content or []
+        pinned_dropped: List[str] = []
+        if (request.preferred_component_type or "bento") == "bento":
+            components, pinned_ids = enforce_pinned([], pinned, request.max_items)
         else:
-            components = []
+            components, pinned_ids = [], []
+            pinned_dropped = [_pin_id(item) for item in pinned if not _is_material(item)]
 
         return ZoneRenderResult(
             components=components,
             pinned_content_included=pinned_ids,
+            pinned_dropped=pinned_dropped,
             personalization_applied=False,
             confidence=0.3,
             reasoning="Fallback render with only pinned content due to processing error",

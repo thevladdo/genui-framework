@@ -601,6 +601,72 @@ _QUERY_ENVELOPE = {
 }
 
 
+def _cards(components):
+    return [
+        card["title"]
+        for component in components
+        if component["type"] == "bento"
+        for card in component["data"]["cards"]
+    ]
+
+
+@unittest.skipUnless(HAVE_APP_DEPS, "requires app deps (backend venv)")
+class TestPinnedFit(unittest.TestCase):
+    """Pins are declared from the final output, and max_items cuts generated cards only: pins always stay."""
+
+    PINS = [
+        {"title": "A", "url": "https://ex.com/a"},
+        {"title": "B", "url": "https://ex.com/b"},
+    ]
+
+    def _bento(self):
+        return [{"type": "bento", "data": {"cards": [
+            {"title": "Free", "link": "https://ex.com/free"},
+            {"title": "A", "link": "https://ex.com/a"},
+        ]}}]
+
+    def test_limit_two_drops_the_free_card_not_a_pin(self):
+        from agents.zone_agent import enforce_pinned
+
+        components, included = enforce_pinned(self._bento(), self.PINS, max_items=2)
+        self.assertEqual(_cards(components), ["A", "B"])
+        self.assertEqual(included, ["https://ex.com/a", "https://ex.com/b"])
+
+    def test_more_pins_than_the_limit_all_stay(self):
+        from agents.zone_agent import enforce_pinned
+
+        components, included = enforce_pinned(self._bento(), self.PINS, max_items=1)
+        self.assertEqual(_cards(components), ["A", "B"])
+        self.assertEqual(included, ["https://ex.com/a", "https://ex.com/b"])
+
+    def test_a_new_bento_holds_every_pin(self):
+        from agents.zone_agent import enforce_pinned
+
+        hero = [{"type": "hero_banner", "data": {"title": "Welcome"}}]
+        components, included = enforce_pinned(hero, self.PINS, max_items=1)
+        self.assertEqual(_cards(components), ["A", "B"])
+        self.assertEqual(included, ["https://ex.com/a", "https://ex.com/b"])
+
+    def test_pins_left_off_by_a_non_bento_fallback_reach_the_payload_report(self):
+        agent = ZoneAgent(vector_store=_EmptyStore(), llm_client=_FakeLLM({}))
+        request = _redundant_request()
+        request.pinned_content = self.PINS
+        request.preferred_component_type = "hero_banner"
+        payload = _payload_from_result(agent._fallback_render(request))
+        self.assertEqual(payload["pinned_content_included"], [])
+        self.assertEqual(payload["meta"]["sanitization"]["pinned_dropped"], ["https://ex.com/a", "https://ex.com/b"])
+
+    def test_non_bento_fallback_declares_no_pin(self):
+        agent = ZoneAgent(vector_store=_EmptyStore(), llm_client=_FakeLLM({}))
+        request = _redundant_request()
+        request.pinned_content = self.PINS
+        request.preferred_component_type = "hero_banner"
+        result = agent._fallback_render(request)
+        self.assertEqual(result.components, [])
+        self.assertEqual(result.pinned_content_included, [])
+        self.assertEqual(result.pinned_dropped, ["https://ex.com/a", "https://ex.com/b"])
+
+
 @unittest.skipUnless(HAVE_APP_DEPS, "requires app deps (backend venv)")
 class TestQueryChain(unittest.TestCase):
     def setUp(self):

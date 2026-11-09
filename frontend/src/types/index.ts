@@ -509,6 +509,8 @@ export interface SanitizationReport {
   removedNumbers: string[];
   /** Banned terms (per-tenant content policy) that were dropped/redacted */
   policyViolations: string[];
+  /** Zones only: pins the fallback left off the page, for a zone whose type is not bento */
+  pinnedDropped?: string[];
 }
 
 export interface ResponseMeta {

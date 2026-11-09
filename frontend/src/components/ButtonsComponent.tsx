@@ -94,14 +94,14 @@ const SingleButton: React.FC<SingleButtonProps> = ({ button }) => {
     </>
   );
 
-  if (url && !onClick) {
+  // An anchor follows its href whatever aria-disabled says, so a disabled link renders as a disabled button
+  if (url && !onClick && !disabled) {
     return (
       <a
         href={url}
         className={classes}
         target="_blank"
         rel="noopener noreferrer"
-        aria-disabled={disabled}
         style={Object.keys(customStyle).length > 0 ? customStyle : undefined}
       >
         {content}

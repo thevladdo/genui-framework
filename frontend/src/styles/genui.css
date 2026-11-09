@@ -1902,7 +1902,7 @@ a.genui-contentgrid__card:hover {
 }
 
 [data-theme='light'] .genui-bento-card--text-only .genui-bento-card__action {
-  color: var(--genui-accent-color);
+  color: var(--genui-text-on-accent);
 }
 
 /* --- Skeleton loaders --- */

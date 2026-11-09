@@ -25,11 +25,14 @@ export const TabsFeature: React.FC<TabsFeatureProps> = ({ data, className = '' }
 
   if (!Array.isArray(tabs) || tabs.length === 0) return null;
 
+  // The tab list can shrink under a kept index
+  const current = Math.min(active, tabs.length - 1);
+
   const onTablistKeyDown = (e: React.KeyboardEvent) => {
     const last = tabs.length - 1;
     let next: number | null = null;
-    if (e.key === 'ArrowRight') next = active === last ? 0 : active + 1;
-    else if (e.key === 'ArrowLeft') next = active === 0 ? last : active - 1;
+    if (e.key === 'ArrowRight') next = current === last ? 0 : current + 1;
+    else if (e.key === 'ArrowLeft') next = current === 0 ? last : current - 1;
     else if (e.key === 'Home') next = 0;
     else if (e.key === 'End') next = last;
     if (next === null) return;
@@ -38,7 +41,7 @@ export const TabsFeature: React.FC<TabsFeatureProps> = ({ data, className = '' }
     tabRefs.current[next]?.focus();
   };
 
-  const tab = tabs[Math.min(active, tabs.length - 1)];
+  const tab = tabs[current];
   const content = tab.content ?? { layout: 'text-only' as const, title: tab.label };
   const imageUrl = content.layout === 'with-image' ? sanitizeUrl(content.imageUrl) : undefined;
   const buttonUrl = sanitizeUrl(content.button?.url);
@@ -64,9 +67,9 @@ export const TabsFeature: React.FC<TabsFeatureProps> = ({ data, className = '' }
               type="button"
               role="tab"
               id={`${baseId}-tab-${i}`}
-              aria-selected={i === active}
+              aria-selected={i === current}
               aria-controls={`${baseId}-panel`}
-              tabIndex={i === active ? 0 : -1}
+              tabIndex={i === current ? 0 : -1}
               ref={(el) => {
                 tabRefs.current[i] = el;
               }}
@@ -81,10 +84,10 @@ export const TabsFeature: React.FC<TabsFeatureProps> = ({ data, className = '' }
       )}
 
       <div
-        role="tabpanel"
+        role={tabs.length > 1 ? 'tabpanel' : undefined}
         id={`${baseId}-panel`}
-        aria-labelledby={`${baseId}-tab-${active}`}
-        tabIndex={0}
+        aria-labelledby={tabs.length > 1 ? `${baseId}-tab-${current}` : undefined}
+        tabIndex={tabs.length > 1 ? 0 : undefined}
         className={`genui-tabpanel ${textOnly ? 'genui-tabpanel--text-only' : ''}`.trim()}
       >
         <div className="genui-tabpanel__body">
